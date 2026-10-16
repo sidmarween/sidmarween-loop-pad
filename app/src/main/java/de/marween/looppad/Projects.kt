@@ -43,6 +43,7 @@ object Projects {
         j.put("masterLen", Engine.masterFrames())
         j.put("bpm", Engine.fixedBpm.toDouble())
         j.put("fxType", Engine.fxType)
+        j.put("fxTarget", Engine.fxTarget)
         val kn = JSONArray()
         for (v in Engine.knobs) kn.put(v.toDouble())
         j.put("knobs", kn)
@@ -53,6 +54,9 @@ object Projects {
             val o = JSONObject()
             o.put("oneShot", sv.oneShot)
             o.put("muted", sv.muted)
+            o.put("slices", sv.slices)
+            o.put("bars", sv.bars.toDouble())
+            o.put("semi", sv.semi)
             val d = sv.data
             if (d != null) {
                 val f = "pad_$p.wav"
@@ -84,7 +88,10 @@ object Projects {
                 val o = pa.getJSONObject(p)
                 val f = o.optString("file", "")
                 val data = if (f.isNotEmpty() && File(dir, f).exists()) AudioFiles.decodeFile(File(dir, f), rate, 60) else null
-                Engine.PadSave(data, o.optBoolean("oneShot", false), o.optBoolean("muted", false))
+                Engine.PadSave(
+                    data, o.optBoolean("oneShot", false), o.optBoolean("muted", false),
+                    o.optInt("slices", 0), o.optDouble("bars", 1.0).toFloat(), o.optInt("semi", 0)
+                )
             } else {
                 Engine.PadSave(null, false, false)
             }
@@ -101,6 +108,7 @@ object Projects {
         val kn = j.optJSONArray("knobs")
         if (kn != null) for (k in 0 until min(4, kn.length())) Engine.knobs[k] = kn.getDouble(k).toFloat()
         Engine.metronome = j.optBoolean("metronome", false)
+        Engine.fxTarget = j.optInt("fxTarget", -1)
     }
 
     fun delete(dir: File) {

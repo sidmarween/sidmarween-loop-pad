@@ -45,6 +45,7 @@ class PadView(context: Context) : View(context) {
     private val clearBtn = RectF()
     private val knobRects = Array(4) { RectF() }
     private val moreRects = Array(Engine.PADS) { RectF() }
+    private val keyRects = Array(Engine.PADS) { RectF() }
     var onPadMenu: ((Int) -> Unit)? = null
     private val fxBtn = RectF()
     private val xyRect = RectF()
@@ -268,6 +269,7 @@ class PadView(context: Context) : View(context) {
             if (i >= VISIBLE_PADS) {
                 padRects[i].setEmpty()
                 moreRects[i].setEmpty()
+                keyRects[i].setEmpty()
                 continue
             }
             val row = i / 4
@@ -275,7 +277,8 @@ class PadView(context: Context) : View(context) {
             val x = left + col * (cell + colGap)
             val y = gridTop + row * (cell + mb + rowGap)
             padRects[i].set(x, y, x + cell, y + cell)
-            moreRects[i].set(x + cell * 0.22f, y + cell + dp(3f), x + cell * 0.78f, y + cell + mb - dp(1f))
+            moreRects[i].set(x + cell * 0.06f, y + cell + dp(3f), x + cell * 0.47f, y + cell + mb - dp(1f))
+            keyRects[i].set(x + cell * 0.53f, y + cell + dp(3f), x + cell * 0.94f, y + cell + mb - dp(1f))
             val path = Path()
             path.addRoundRect(padRects[i], radius, radius, Path.Direction.CW)
             padMeasures[i].setPath(path, true)
@@ -406,11 +409,14 @@ class PadView(context: Context) : View(context) {
         for (i in 0 until VISIBLE_PADS) {
             drawPad(canvas, i, dt)
             drawMore(canvas, i)
+            drawKeyButton(canvas, i)
         }
         drawSequencer(canvas)
         drawShocks(canvas, dt)
         drawParticles(canvas, dt)
         drawFooter(canvas)
+        if (kbPad >= 0) drawKeyboard(canvas)
+        if (edPad >= 0) drawEditor(canvas, dt)
         message?.let { drawMessage(canvas, it) }
 
         postInvalidateOnAnimation()
@@ -528,7 +534,7 @@ class PadView(context: Context) : View(context) {
         // Zeile 1: Nummer + Name
         textPaint.textSize = dp(9f)
         textPaint.color = alpha(txt, 0.7f)
-        val num = String.format(Locale.GERMANY, "FX %02d/%d %s", type + 1, Fx.COUNT, if (touching) "●" else "○")
+        val num = String.format(Locale.GERMANY, "FX %02d/%d %s %s", type + 1, Fx.COUNT, if (touching) "●" else "○", fxTargetLabel())
         canvas.drawText(num, r.left + pad, r.top + dp(13f), textPaint)
         textPaint.textAlign = Paint.Align.RIGHT
         textPaint.textSize = dp(10f)
@@ -1427,6 +1433,11 @@ class PadView(context: Context) : View(context) {
 
     @SuppressLint("ClickableViewAccessibility")
     override fun onTouchEvent(e: MotionEvent): Boolean {
+        if (edPad >= 0) {
+            editorTouch(e)
+            return true
+        }
+        if (kbPad >= 0 && keyboardTouch(e)) return true
         when (e.actionMasked) {
             MotionEvent.ACTION_DOWN, MotionEvent.ACTION_POINTER_DOWN -> {
                 val idx = e.actionIndex
@@ -1436,6 +1447,14 @@ class PadView(context: Context) : View(context) {
                 if (message != null) {
                     onMessageTap?.invoke()
                     return true
+                }
+                for (i in 0 until VISIBLE_PADS) {
+                    val kr = keyRects[i]
+                    if (x >= kr.left - dp(4f) && x <= kr.right + dp(4f) && y >= kr.top - dp(4f) && y <= kr.bottom + dp(4f)) {
+                        performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+                        if (Engine.hasLoop(i)) openKeyboard(i) else burst(kr.centerX(), kr.centerY(), Color.GRAY, 6, 100f)
+                        return true
+                    }
                 }
                 if (designBtn.contains(x, y)) {
                     performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
@@ -1801,7 +1820,7 @@ class PadView(context: Context) : View(context) {
         textPaint.textAlign = Paint.Align.LEFT
         textPaint.textSize = dp(9f)
         textPaint.color = alpha(txt, 0.7f)
-        canvas.drawText(String.format(Locale.GERMANY, "FX %02d/%d %s", type + 1, Fx.COUNT, if (touching) "●" else "○"), r.left + pad, r.top + dp(14f), textPaint)
+        canvas.drawText(String.format(Locale.GERMANY, "FX %02d/%d %s %s", type + 1, Fx.COUNT, if (touching) "●" else "○", fxTargetLabel()), r.left + pad, r.top + dp(14f), textPaint)
         textPaint.textAlign = Paint.Align.RIGHT
         textPaint.textSize = dp(10f)
         textPaint.color = if (theme == COMIC) COMIC_MAGENTA else R_ORANGE
@@ -2564,7 +2583,7 @@ class PadView(context: Context) : View(context) {
         textPaint.textAlign = Paint.Align.LEFT
         textPaint.textSize = dp(9f)
         textPaint.color = alpha(txt, 0.65f)
-        canvas.drawText(String.format(Locale.GERMANY, "FX %02d/%d %s", type + 1, Fx.COUNT, if (touching) "●" else "○"), r.left + pad, r.top + dp(14f), textPaint)
+        canvas.drawText(String.format(Locale.GERMANY, "FX %02d/%d %s %s", type + 1, Fx.COUNT, if (touching) "●" else "○", fxTargetLabel()), r.left + pad, r.top + dp(14f), textPaint)
         textPaint.textAlign = Paint.Align.RIGHT
         textPaint.textSize = dp(10f)
         textPaint.color = sk.accent
@@ -3119,6 +3138,572 @@ class PadView(context: Context) : View(context) {
         canvas.drawText(if (sel >= 0) "Pad ${sel + 1}: Schritte tippen" else "⚡-Pad antippen", ix, recBtn.top + dp(27f), textPaint)
         canvas.drawText("STOP halten = leeren", ix, recBtn.top + dp(40f), textPaint)
         textPaint.textAlign = Paint.Align.CENTER
+    }
+
+
+    // ================================================================ Effekt-Ziel
+
+    private fun fxTargetLabel(): String = if (Engine.fxTarget >= 0) "→P${Engine.fxTarget + 1}" else "→ALLE"
+
+    // ================================================================ Tastatur
+
+    private var kbPad = -1
+    private var kbOctave = 0
+    private var kbTake = false
+    private val kbRect = RectF()
+    private val kbKeysRect = RectF()
+    private val kbOctDown = RectF()
+    private val kbOctUp = RectF()
+    private val kbTakeBtn = RectF()
+    private val kbClose = RectF()
+    private val kbPointers = HashMap<Int, Int>()   // Pointer -> Halbton
+    private val kbVoices = HashMap<Int, Int>()     // Pointer -> Stimme
+    private val kbHeld = HashSet<Int>()
+    private var kbLastSemi = 0
+
+    fun openKeyboard(p: Int) {
+        kbPad = p
+        kbTake = false
+        kbLastSemi = Engine.padSemi[p]
+        val top = xyRect.bottom + dp(8f)
+        kbRect.set(dp(8f), top, width - dp(8f), height - insetBottom - dp(8f))
+        val hh = dp(40f)
+        kbClose.set(kbRect.right - dp(8f) - hh, kbRect.top + dp(8f), kbRect.right - dp(8f), kbRect.top + dp(8f) + hh)
+        kbOctUp.set(kbClose.left - dp(8f) - hh, kbClose.top, kbClose.left - dp(8f), kbClose.bottom)
+        kbOctDown.set(kbOctUp.left - dp(6f) - hh, kbClose.top, kbOctUp.left - dp(6f), kbClose.bottom)
+        kbTakeBtn.set(kbRect.left + dp(8f), kbRect.bottom - dp(8f) - dp(34f), kbRect.left + dp(8f) + dp(170f), kbRect.bottom - dp(8f))
+        kbKeysRect.set(kbRect.left + dp(8f), kbClose.bottom + dp(10f), kbRect.right - dp(8f), kbTakeBtn.top - dp(10f))
+    }
+
+    private fun closeKeyboard() {
+        for (v in kbVoices.values) Engine.noteOff(v)
+        kbVoices.clear()
+        kbPointers.clear()
+        kbHeld.clear()
+        kbPad = -1
+    }
+
+    private val whiteOffsets = intArrayOf(0, 2, 4, 5, 7, 9, 11)
+    private val blackOffsets = intArrayOf(1, 3, -1, 6, 8, 10, -1)
+    private val noteNames = arrayOf("C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "H")
+
+    /** Halbton (relativ zum Original) unter einem Punkt, oder null. */
+    private fun keyAt(x: Float, y: Float): Int? {
+        val r = kbKeysRect
+        if (!r.contains(x, y)) return null
+        val whites = 14
+        val kw = r.width() / whites
+        val base = -12 + kbOctave * 12
+        val wi = ((x - r.left) / kw).toInt().coerceIn(0, whites - 1)
+        if (y < r.top + r.height() * 0.6f) {
+            // Schwarze Taste?
+            val fx = (x - r.left) / kw
+            val left = fx.toInt()
+            val frac = fx - left
+            val oct = left / 7
+            if (frac > 0.62f) {
+                val b = blackOffsets[left % 7]
+                if (b >= 0) return base + oct * 12 + b
+            }
+            if (frac < 0.38f && left > 0) {
+                val b = blackOffsets[(left - 1) % 7]
+                if (b >= 0) return base + ((left - 1) / 7) * 12 + b
+            }
+        }
+        return base + (wi / 7) * 12 + whiteOffsets[wi % 7]
+    }
+
+    private fun kbNoteOn(pid: Int, semi: Int) {
+        kbPointers[pid] = semi
+        kbVoices[pid] = Engine.noteOn(kbPad, semi)
+        kbLastSemi = semi
+        if (kbTake) Engine.setPadPitch(kbPad, semi)
+        recountHeld()
+    }
+
+    private fun kbNoteOff(pid: Int) {
+        kbVoices.remove(pid)?.let { Engine.noteOff(it) }
+        kbPointers.remove(pid)
+        recountHeld()
+    }
+
+    private fun recountHeld() {
+        kbHeld.clear()
+        kbHeld.addAll(kbPointers.values)
+    }
+
+    /** true, wenn das Ereignis von der Tastatur verarbeitet wurde. */
+    private fun keyboardTouch(e: MotionEvent): Boolean {
+        when (e.actionMasked) {
+            MotionEvent.ACTION_DOWN, MotionEvent.ACTION_POINTER_DOWN -> {
+                val idx = e.actionIndex
+                val id = e.getPointerId(idx)
+                val x = e.getX(idx)
+                val y = e.getY(idx)
+                if (!kbRect.contains(x, y)) return false
+                when {
+                    kbClose.contains(x, y) -> closeKeyboard()
+                    kbOctDown.contains(x, y) -> kbOctave = (kbOctave - 1).coerceAtLeast(-2)
+                    kbOctUp.contains(x, y) -> kbOctave = (kbOctave + 1).coerceAtMost(2)
+                    kbTakeBtn.contains(x, y) -> {
+                        kbTake = !kbTake
+                        if (kbTake) Engine.setPadPitch(kbPad, kbLastSemi)
+                    }
+                    else -> {
+                        val k = keyAt(x, y)
+                        if (k != null) {
+                            kbNoteOn(id, k)
+                            performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+                        }
+                    }
+                }
+                return true
+            }
+            MotionEvent.ACTION_MOVE -> {
+                for (pi in 0 until e.pointerCount) {
+                    val id = e.getPointerId(pi)
+                    val cur = kbPointers[id] ?: continue
+                    val k = keyAt(e.getX(pi), e.getY(pi))
+                    if (k != null && k != cur) {
+                        kbNoteOff(id)
+                        kbNoteOn(id, k)
+                    }
+                }
+                return false
+            }
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_POINTER_UP -> {
+                val id = e.getPointerId(e.actionIndex)
+                if (kbPointers.containsKey(id)) {
+                    kbNoteOff(id)
+                    return true
+                }
+                return false
+            }
+            MotionEvent.ACTION_CANCEL -> {
+                for (id in ArrayList(kbPointers.keys)) kbNoteOff(id)
+                return false
+            }
+        }
+        return false
+    }
+
+    private fun overlayColors(): IntArray {
+        // Panel, Text, Akzent
+        return when {
+            skinned -> intArrayOf(skin.btnFill, skin.btnText, skin.accent)
+            light -> if (theme == COMIC) intArrayOf(Color.WHITE, Color.BLACK, COMIC_MAGENTA) else intArrayOf(R_BG, R_INK, R_ORANGE)
+            theme == NEON -> intArrayOf(Color.rgb(14, 12, 24), Color.WHITE, neon(time * 40f))
+            else -> intArrayOf(Color.rgb(20, 21, 26), Color.WHITE, ORANGE)
+        }
+    }
+
+    private fun smallBtn(canvas: Canvas, r: RectF, label: String, active: Boolean, cols: IntArray) {
+        val rr = dp(8f)
+        fillPaint.shader = null
+        fillPaint.color = if (active) cols[2] else blend(cols[0], cols[1], 0.08f)
+        canvas.drawRoundRect(r, rr, rr, fillPaint)
+        strokePaint.strokeWidth = dp(1.4f)
+        strokePaint.color = alpha(cols[1], 0.5f)
+        canvas.drawRoundRect(r, rr, rr, strokePaint)
+        textPaint.textSize = dp(12f)
+        textPaint.color = if (active) Color.WHITE else cols[1]
+        canvas.drawText(label, r.centerX(), r.centerY() + dp(4.5f), textPaint)
+    }
+
+    private fun drawKeyboard(canvas: Canvas) {
+        val cols = overlayColors()
+        val r = kbRect
+        val rr = dp(14f)
+        softShadowAny(canvas, r, rr)
+        fillPaint.shader = null
+        fillPaint.color = cols[0]
+        canvas.drawRoundRect(r, rr, rr, fillPaint)
+        strokePaint.strokeWidth = dp(2f)
+        strokePaint.color = cols[2]
+        canvas.drawRoundRect(r, rr, rr, strokePaint)
+        // Kopf
+        textPaint.textAlign = Paint.Align.LEFT
+        textPaint.textSize = dp(15f)
+        textPaint.color = cols[1]
+        canvas.drawText("🎹 Pad ${kbPad + 1}", r.left + dp(14f), kbClose.centerY() - dp(2f), textPaint)
+        textPaint.textSize = dp(10f)
+        textPaint.color = alpha(cols[1], 0.7f)
+        val ps = Engine.padSemi[kbPad]
+        canvas.drawText("Tonhöhe Pad: ${if (ps > 0) "+" else ""}$ps · Oktave ${if (kbOctave > 0) "+" else ""}$kbOctave", r.left + dp(14f), kbClose.centerY() + dp(13f), textPaint)
+        textPaint.textAlign = Paint.Align.CENTER
+        smallBtn(canvas, kbOctDown, "−", false, cols)
+        smallBtn(canvas, kbOctUp, "+", false, cols)
+        smallBtn(canvas, kbClose, "✕", false, cols)
+        smallBtn(canvas, kbTakeBtn, if (kbTake) "📌 Ton fürs Pad: AN" else "📌 Ton fürs Pad: AUS", kbTake, cols)
+        textPaint.textAlign = Paint.Align.LEFT
+        textPaint.textSize = dp(9.5f)
+        textPaint.color = alpha(cols[1], 0.6f)
+        canvas.drawText("Mehrere Finger = Akkord", kbTakeBtn.right + dp(10f), kbTakeBtn.centerY() + dp(3f), textPaint)
+        textPaint.textAlign = Paint.Align.CENTER
+
+        // Tasten
+        val k = kbKeysRect
+        val whites = 14
+        val kw = k.width() / whites
+        val base = -12 + kbOctave * 12
+        for (wi in 0 until whites) {
+            val semi = base + (wi / 7) * 12 + whiteOffsets[wi % 7]
+            tmpRect.set(k.left + wi * kw + dp(1f), k.top, k.left + (wi + 1) * kw - dp(1f), k.bottom)
+            fillPaint.color = if (kbHeld.contains(semi)) cols[2] else Color.rgb(248, 246, 240)
+            canvas.drawRoundRect(tmpRect, dp(5f), dp(5f), fillPaint)
+            strokePaint.strokeWidth = dp(1f)
+            strokePaint.color = Color.argb(90, 0, 0, 0)
+            canvas.drawRoundRect(tmpRect, dp(5f), dp(5f), strokePaint)
+            if (wi % 7 == 0) {
+                textPaint.textSize = dp(10f)
+                textPaint.color = if (kbHeld.contains(semi)) Color.WHITE else Color.rgb(90, 90, 90)
+                val octNum = 4 + (semi + 120) / 12 - 10
+                canvas.drawText("C$octNum", tmpRect.centerX(), tmpRect.bottom - dp(8f), textPaint)
+            }
+            if (semi == Engine.padSemi[kbPad]) {
+                dotPaint.color = cols[2]
+                canvas.drawCircle(tmpRect.centerX(), tmpRect.bottom - dp(24f), dp(3f), dotPaint)
+            }
+        }
+        for (wi in 0 until whites) {
+            val b = blackOffsets[wi % 7]
+            if (b < 0 || wi == whites - 1) continue
+            val semi = base + (wi / 7) * 12 + b
+            val cx = k.left + (wi + 1) * kw
+            tmpRect.set(cx - kw * 0.32f, k.top, cx + kw * 0.32f, k.top + k.height() * 0.6f)
+            fillPaint.color = if (kbHeld.contains(semi)) cols[2] else Color.rgb(28, 28, 32)
+            canvas.drawRoundRect(tmpRect, dp(4f), dp(4f), fillPaint)
+        }
+        // aktueller Ton
+        if (kbHeld.isNotEmpty()) {
+            val names = kbHeld.sorted().joinToString(" ") { sm -> noteNames[Math.floorMod(sm, 12)] + (4 + Math.floorDiv(sm, 12)) }
+            textPaint.textSize = dp(12f)
+            textPaint.color = cols[2]
+            canvas.drawText(names, r.centerX(), kbClose.bottom + dp(2f), textPaint)
+        }
+    }
+
+    private fun softShadowAny(canvas: Canvas, r: RectF, rr: Float) {
+        fillPaint.shader = null
+        for (q in 1..4) {
+            fillPaint.color = Color.argb(22, 0, 0, 0)
+            val o = dp(q * 2f)
+            tmpRect.set(r.left - o * 0.5f, r.top - o * 0.2f, r.right + o * 0.5f, r.bottom + o * 1.2f)
+            canvas.drawRoundRect(tmpRect, rr + o, rr + o, fillPaint)
+        }
+    }
+
+    private fun drawKeyButton(canvas: Canvas, i: Int) {
+        val r = keyRects[i]
+        if (r.width() <= 0f) return
+        val cols = overlayColors()
+        val has = Engine.hasLoop(i)
+        val rr = r.height() / 2f
+        fillPaint.shader = null
+        fillPaint.color = if (kbPad == i) cols[2] else blend(cols[0], cols[1], 0.06f)
+        canvas.drawRoundRect(r, rr, rr, fillPaint)
+        strokePaint.strokeWidth = dp(1f)
+        strokePaint.color = alpha(cols[1], if (has) 0.6f else 0.2f)
+        canvas.drawRoundRect(r, rr, rr, strokePaint)
+        // Mini-Klaviatur
+        val kw = min(r.width() * 0.5f, dp(22f))
+        val kh = r.height() * 0.56f
+        val left = r.centerX() - kw / 2f
+        val top = r.centerY() - kh / 2f
+        fillPaint.color = alpha(Color.WHITE, if (has) 0.95f else 0.35f)
+        canvas.drawRect(left, top, left + kw, top + kh, fillPaint)
+        strokePaint.color = alpha(Color.BLACK, if (has) 0.7f else 0.3f)
+        strokePaint.strokeWidth = dp(0.8f)
+        canvas.drawRect(left, top, left + kw, top + kh, strokePaint)
+        for (q in 1..3) canvas.drawLine(left + kw * q / 4f, top, left + kw * q / 4f, top + kh, strokePaint)
+        fillPaint.color = alpha(Color.BLACK, if (has) 0.85f else 0.35f)
+        for (q in intArrayOf(1, 2)) {
+            val bx = left + kw * q / 4f
+            canvas.drawRect(bx - kw * 0.07f, top, bx + kw * 0.07f, top + kh * 0.58f, fillPaint)
+        }
+    }
+
+    // ================================================================ Wave-Editor
+
+    private var edPad = -1
+    private var edData = FloatArray(0)
+    private var edStart = 0
+    private var edEnd = 0
+    private var edSlices = 1
+    private var edBars = 1f
+    private var edMsg = ""
+    private var edMsgT = 0f
+    private val edRect = RectF()
+    private val edWave = RectF()
+    private val edKnobSlices = RectF()
+    private val edKnobBars = RectF()
+    private val edBtnPlay = RectF()
+    private val edBtnCut = RectF()
+    private val edBtnSlice = RectF()
+    private val edBtnPads = RectF()
+    private val edBtnClose = RectF()
+    private var edPeaks = FloatArray(0)
+    private var edDrag = 0          // 1 = Start, 2 = Ende, 3 = Slices-Regler, 4 = Takte-Regler
+    private var edDragY = 0f
+    private var edDragVal = 0f
+    private var edPreview = -1
+    private val barOptions = floatArrayOf(0.25f, 0.5f, 1f, 2f, 4f, 8f)
+
+    fun openEditor(p: Int) {
+        val d = Engine.loopData(p) ?: return
+        closeKeyboard()
+        edPad = p
+        edData = d
+        edStart = 0
+        edEnd = d.size
+        edSlices = max(1, Engine.padSlices(p))
+        edBars = if (Engine.padSlices(p) > 1) Engine.padBars(p) else Engine.suggestBars(d.size)
+        edMsg = ""
+        layoutEditor()
+        computePeaks()
+    }
+
+    private fun layoutEditor() {
+        val m = dp(10f)
+        edRect.set(m, insetTop + m, width - m, height - insetBottom - m)
+        val hh = dp(40f)
+        edBtnClose.set(edRect.right - dp(10f) - hh, edRect.top + dp(10f), edRect.right - dp(10f), edRect.top + dp(10f) + hh)
+        edWave.set(edRect.left + dp(12f), edBtnClose.bottom + dp(14f), edRect.right - dp(12f), edBtnClose.bottom + dp(14f) + edRect.height() * 0.38f)
+        val ks = dp(96f)
+        val ky = edWave.bottom + dp(52f)
+        edKnobSlices.set(edRect.centerX() - ks - dp(20f), ky, edRect.centerX() - dp(20f), ky + ks)
+        edKnobBars.set(edRect.centerX() + dp(20f), ky, edRect.centerX() + dp(20f) + ks, ky + ks)
+        val by = edKnobSlices.bottom + dp(36f)
+        val bw = (edRect.width() - dp(24f) - dp(10f)) / 2f
+        val bh = dp(46f)
+        edBtnPlay.set(edRect.left + dp(12f), by, edRect.left + dp(12f) + bw, by + bh)
+        edBtnCut.set(edBtnPlay.right + dp(10f), by, edBtnPlay.right + dp(10f) + bw, by + bh)
+        edBtnSlice.set(edBtnPlay.left, by + bh + dp(10f), edBtnPlay.right, by + 2 * bh + dp(10f))
+        edBtnPads.set(edBtnCut.left, by + bh + dp(10f), edBtnCut.right, by + 2 * bh + dp(10f))
+    }
+
+    private fun computePeaks() {
+        val cols = max(1, edWave.width().toInt() / 2)
+        edPeaks = FloatArray(cols)
+        val d = edData
+        if (d.isEmpty()) return
+        val per = max(1, d.size / cols)
+        for (c in 0 until cols) {
+            val a = (c.toLong() * d.size / cols).toInt()
+            var mx = 0f
+            var i = a
+            val e = min(d.size, a + per)
+            while (i < e) {
+                val v = abs(d[i])
+                if (v > mx) mx = v
+                i += max(1, per / 64)
+            }
+            edPeaks[c] = mx
+        }
+        var norm = 0f
+        for (v in edPeaks) if (v > norm) norm = v
+        if (norm > 0f) for (c in edPeaks.indices) edPeaks[c] = edPeaks[c] / norm
+    }
+
+    private fun xToFrame(x: Float): Int =
+        (((x - edWave.left) / edWave.width()).coerceIn(0f, 1f) * edData.size).toInt()
+
+    private fun frameToX(f: Int): Float =
+        edWave.left + edWave.width() * (if (edData.isEmpty()) 0f else f.toFloat() / edData.size)
+
+    private fun edToast(m: String) {
+        edMsg = m
+        edMsgT = 2.5f
+    }
+
+    private fun editorTouch(e: MotionEvent) {
+        val idx = e.actionIndex
+        when (e.actionMasked) {
+            MotionEvent.ACTION_DOWN, MotionEvent.ACTION_POINTER_DOWN -> {
+                val x = e.getX(idx)
+                val y = e.getY(idx)
+                when {
+                    edBtnClose.contains(x, y) -> {
+                        if (edPreview >= 0) Engine.noteOff(edPreview)
+                        edPad = -1
+                    }
+                    edWave.contains(x, y) || (y > edWave.bottom && y < edWave.bottom + dp(30f) && x >= edWave.left && x <= edWave.right) -> {
+                        val sx = frameToX(edStart)
+                        val ex = frameToX(edEnd)
+                        edDrag = if (abs(x - sx) <= abs(x - ex)) 1 else 2
+                        moveMarker(x)
+                    }
+                    edKnobSlices.contains(x, y) -> { edDrag = 3; edDragY = y; edDragVal = edSlices.toFloat() }
+                    edKnobBars.contains(x, y) -> { edDrag = 4; edDragY = y; edDragVal = barOptions.indexOfFirst { it == edBars }.coerceAtLeast(0).toFloat() }
+                    edBtnPlay.contains(x, y) -> {
+                        if (edPreview >= 0) Engine.noteOff(edPreview)
+                        if (edEnd - edStart > 2) edPreview = Engine.preview(edData.copyOfRange(edStart, edEnd))
+                    }
+                    edBtnCut.contains(x, y) -> {
+                        Engine.applyEdit(edPad, edStart, edEnd, 1, edBars)
+                        reloadEditor("Zugeschnitten")
+                    }
+                    edBtnSlice.contains(x, y) -> {
+                        if (Engine.isOneShot(edPad)) {
+                            edToast("Slicen geht bei ∞ LOOP-Pads")
+                        } else if (edSlices < 2) {
+                            edToast("Mit dem SLICES-Regler mind. 2 wählen")
+                        } else {
+                            Engine.applyEdit(edPad, edStart, edEnd, edSlices, edBars)
+                            reloadEditor("$edSlices Slices – folgt jetzt dem Tempo")
+                        }
+                    }
+                    edBtnPads.contains(x, y) -> {
+                        val n = max(2, edSlices)
+                        val c = Engine.distributeSlices(edPad, edStart, edEnd, n, VISIBLE_PADS)
+                        edToast(if (c > 0) "$c Slices als ⚡ auf freie Pads gelegt" else "Keine freien Pads")
+                    }
+                }
+                performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+            }
+            MotionEvent.ACTION_MOVE -> {
+                val x = e.getX(0)
+                val y = e.getY(0)
+                when (edDrag) {
+                    1, 2 -> moveMarker(x)
+                    3 -> edSlices = (edDragVal + (edDragY - y) / dp(12f)).toInt().coerceIn(1, 32)
+                    4 -> edBars = barOptions[(edDragVal + (edDragY - y) / dp(30f)).toInt().coerceIn(0, barOptions.size - 1)]
+                }
+            }
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_POINTER_UP, MotionEvent.ACTION_CANCEL -> {
+                if (edDrag == 1 || edDrag == 2) edBars = Engine.suggestBars(edEnd - edStart)
+                edDrag = 0
+            }
+        }
+    }
+
+    private fun moveMarker(x: Float) {
+        val f = xToFrame(x)
+        val minLen = Engine.sampleRate / 50
+        if (edDrag == 1) edStart = f.coerceIn(0, max(0, edEnd - minLen))
+        else if (edDrag == 2) edEnd = f.coerceIn(min(edData.size, edStart + minLen), edData.size)
+    }
+
+    private fun reloadEditor(msg: String) {
+        val d = Engine.loopData(edPad)
+        if (d != null) {
+            edData = d
+            edStart = 0
+            edEnd = d.size
+            computePeaks()
+        }
+        edToast(msg)
+    }
+
+    private fun drawEditor(canvas: Canvas, dt: Float) {
+        if (edRect.width() <= 0f) layoutEditor()
+        val cols = overlayColors()
+        val acc = cols[2]
+        fillPaint.shader = null
+        fillPaint.color = Color.argb(150, 0, 0, 0)
+        canvas.drawRect(0f, 0f, width.toFloat(), height.toFloat(), fillPaint)
+        val rr = dp(16f)
+        fillPaint.color = cols[0]
+        canvas.drawRoundRect(edRect, rr, rr, fillPaint)
+        strokePaint.strokeWidth = dp(2f)
+        strokePaint.color = acc
+        canvas.drawRoundRect(edRect, rr, rr, strokePaint)
+        textPaint.textAlign = Paint.Align.LEFT
+        textPaint.textSize = dp(16f)
+        textPaint.color = cols[1]
+        canvas.drawText("〰 Wave-Editor · Pad ${edPad + 1}", edRect.left + dp(16f), edBtnClose.centerY() + dp(5f), textPaint)
+        textPaint.textAlign = Paint.Align.CENTER
+        smallBtn(canvas, edBtnClose, "✕", false, cols)
+
+        // Wellenform
+        val w = edWave
+        fillPaint.color = Color.rgb(16, 17, 22)
+        canvas.drawRoundRect(w, dp(8f), dp(8f), fillPaint)
+        val sx = frameToX(edStart)
+        val ex = frameToX(edEnd)
+        val mid = w.centerY()
+        val n = edPeaks.size
+        strokePaint.strokeWidth = dp(1.6f)
+        for (c in 0 until n) {
+            val x = w.left + w.width() * c / n
+            val hgt = edPeaks[c] * w.height() * 0.46f
+            strokePaint.color = if (x in sx..ex) acc else Color.argb(90, 200, 200, 210)
+            canvas.drawLine(x, mid - hgt, x, mid + hgt, strokePaint)
+        }
+        // Slice-Linien
+        if (edSlices > 1) {
+            strokePaint.strokeWidth = dp(1.2f)
+            strokePaint.color = Color.argb(200, 255, 255, 255)
+            for (k in 1 until edSlices) {
+                val x = sx + (ex - sx) * k / edSlices
+                canvas.drawLine(x, w.top + dp(4f), x, w.bottom - dp(4f), strokePaint)
+            }
+        }
+        // Marker
+        for ((x, lab) in arrayOf(sx to "S", ex to "E")) {
+            strokePaint.strokeWidth = dp(2.5f)
+            strokePaint.color = Color.WHITE
+            canvas.drawLine(x, w.top, x, w.bottom, strokePaint)
+            val tri = Path()
+            tri.moveTo(x, w.bottom)
+            tri.lineTo(x - dp(12f), w.bottom + dp(22f))
+            tri.lineTo(x + dp(12f), w.bottom + dp(22f))
+            tri.close()
+            fillPaint.color = acc
+            canvas.drawPath(tri, fillPaint)
+            textPaint.textSize = dp(10f)
+            textPaint.color = Color.WHITE
+            canvas.drawText(lab, x, w.bottom + dp(19f), textPaint)
+        }
+        val secs = (edEnd - edStart).toFloat() / Engine.sampleRate
+        textPaint.textSize = dp(11f)
+        textPaint.color = alpha(cols[1], 0.8f)
+        canvas.drawText(String.format(Locale.GERMANY, "Auswahl %.2fs · Marker an Wellenform ziehen", secs), edRect.centerX(), w.bottom + dp(42f), textPaint)
+
+        // Regler
+        editorKnob(canvas, edKnobSlices, (edSlices - 1) / 31f, "SLICES", if (edSlices <= 1) "AUS" else "$edSlices", cols)
+        val bl = when (edBars) { 0.25f -> "¼"; 0.5f -> "½"; else -> edBars.toInt().toString() }
+        editorKnob(canvas, edKnobBars, barOptions.indexOfFirst { it == edBars }.coerceAtLeast(0) / 5f, "TAKTE", bl, cols)
+
+        smallBtn(canvas, edBtnPlay, "▶ Hören", false, cols)
+        smallBtn(canvas, edBtnCut, "✂ Zuschneiden", false, cols)
+        smallBtn(canvas, edBtnSlice, "🔪 Slicen (Tempo)", false, cols)
+        smallBtn(canvas, edBtnPads, "⇢ Slices auf Pads", false, cols)
+
+        textPaint.textSize = dp(10f)
+        textPaint.color = alpha(cols[1], 0.65f)
+        val ty = edBtnPads.bottom + dp(22f)
+        canvas.drawText("Slicen: Stücke starten auf ihrem Rasterplatz – der Loop", edRect.centerX(), ty, textPaint)
+        canvas.drawText("passt sich jedem Tempo an, ohne die Tonhöhe zu ändern.", edRect.centerX(), ty + dp(14f), textPaint)
+        if (edMsgT > 0f) {
+            edMsgT -= dt
+            textPaint.textSize = dp(13f)
+            textPaint.color = acc
+            canvas.drawText(edMsg, edRect.centerX(), ty + dp(40f), textPaint)
+        }
+    }
+
+    private fun editorKnob(canvas: Canvas, r: RectF, v: Float, label: String, value: String, cols: IntArray) {
+        val cx = r.centerX()
+        val cy = r.centerY()
+        val rad = r.width() * 0.4f
+        tmpRect.set(cx - rad, cy - rad, cx + rad, cy + rad)
+        strokePaint.strokeCap = Paint.Cap.ROUND
+        strokePaint.strokeWidth = dp(6f)
+        strokePaint.color = alpha(cols[1], 0.15f)
+        canvas.drawArc(tmpRect, 135f, 270f, false, strokePaint)
+        strokePaint.color = cols[2]
+        canvas.drawArc(tmpRect, 135f, 270f * v.coerceIn(0f, 1f), false, strokePaint)
+        strokePaint.strokeCap = Paint.Cap.BUTT
+        fillPaint.shader = null
+        fillPaint.color = blend(cols[0], cols[1], 0.1f)
+        canvas.drawCircle(cx, cy, rad * 0.7f, fillPaint)
+        textPaint.textSize = dp(18f)
+        textPaint.color = cols[1]
+        canvas.drawText(value, cx, cy + dp(6f), textPaint)
+        textPaint.textSize = dp(10f)
+        textPaint.color = alpha(cols[1], 0.75f)
+        canvas.drawText(label, cx, r.bottom + dp(14f), textPaint)
     }
 
     companion object {

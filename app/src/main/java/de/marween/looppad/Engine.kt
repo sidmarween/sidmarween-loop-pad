@@ -14,6 +14,7 @@ import java.util.concurrent.atomic.AtomicReferenceArray
 import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
+import kotlin.math.pow
 import kotlin.math.tanh
 
 /** Ein fertiger Loop. [start] ist der Ausgabe-Frame, an dem Position 0 erklingt. */
@@ -23,6 +24,13 @@ class Loop(val data: FloatArray) {
     /** ONE SHOT: spielt nur einmal nach Anschlag, ab [shotStart] (Ausgabe-Frame). */
     @Volatile var oneShot: Boolean = false
     @Volatile var shotStart: Long = Long.MIN_VALUE
+    /** Tonhöhe (Halbtöne) für ONE SHOTS, als Abspielrate. */
+    @Volatile var semi: Int = 0
+    @Volatile var rate: Double = 1.0
+    /** Slice-Grenzen (n+1 Werte) – gesetzt, wenn der Loop in Slices zerlegt wurde und dem Tempo folgt. */
+    @Volatile var slices: IntArray? = null
+    /** Länge in Takten (bei Slices), passt sich dem Master-Tempo an. */
+    @Volatile var bars: Float = 1f
 }
 
 /** Eine laufende Aufnahme (neu oder Overdub) auf einem Pad. */
@@ -155,11 +163,17 @@ object Engine {
     /** Wird nach jeder neuen Mikrofon-Aufnahme aufgerufen (Pad, Samples, Samplerate). */
     var onRecorded: ((Int, FloatArray, Int) -> Unit)? = null
 
-    class PadSave(val data: FloatArray?, val oneShot: Boolean, val muted: Boolean)
+    class PadSave(
+        val data: FloatArray?, val oneShot: Boolean, val muted: Boolean,
+        val slices: Int = 0, val bars: Float = 1f, val semi: Int = 0
+    )
 
     fun snapshotPads(): Array<PadSave> = Array(PADS) { p ->
         val l = loops.get(p)
-        PadSave(l?.data?.copyOf(), l?.oneShot ?: padOneShot[p], l?.muted ?: false)
+        PadSave(
+            l?.data?.copyOf(), l?.oneShot ?: padOneShot[p], l?.muted ?: false,
+            l?.slices?.let { it.size - 1 } ?: 0, l?.bars ?: 1f, l?.semi ?: padSemi[p]
+        )
     }
 
     fun masterFrames(): Long = masterLen
@@ -192,6 +206,13 @@ object Engine {
             l.oneShot = sv.oneShot
             l.muted = sv.muted
             l.start = masterStart
+            padSemi[p] = sv.semi
+            l.semi = sv.semi
+            l.rate = 2.0.pow(sv.semi / 12.0)
+            if (sv.slices > 1 && !sv.oneShot) {
+                l.slices = IntArray(sv.slices + 1) { (it.toLong() * d.size / sv.slices).toInt() }
+                l.bars = sv.bars
+            }
             loops.set(p, l)
         }
         if (pattern != null) {
@@ -229,6 +250,199 @@ object Engine {
         if (!any) return null
         for (i in out.indices) out[i] = softClip(out[i])
         return out
+    }
+
+    // ---------------------------------------------------------------- Effekt-Ziel
+
+    /** -1 = Effekt auf den ganzen Song, sonst nur auf dieses Pad. */
+    @Volatile var fxTarget = -1
+
+    // ---------------------------------------------------------------- Tastatur (Stimmen)
+
+    private class Voice {
+        var data: FloatArray = FloatArray(0)
+        var pos = 0.0
+        var rate = 1.0
+        var loop = false
+        var gain = 1f
+        var releasing = false
+        var active = false
+        var pad = -1
+        var id = 0
+    }
+
+    private val voices = Array(16) { Voice() }
+    private val voiceLock = Any()
+    private var voiceIds = 0
+
+    private fun startVoice(data: FloatArray, pad: Int, rate: Double, loop: Boolean): Int {
+        if (data.size < 2) return -1
+        synchronized(voiceLock) {
+            var v = voices.firstOrNull { !it.active }
+            if (v == null) v = voices.minByOrNull { it.id }!!
+            v.data = data
+            v.pos = 0.0
+            v.rate = rate
+            v.loop = loop
+            v.gain = 1f
+            v.releasing = false
+            v.pad = pad
+            v.id = ++voiceIds
+            v.active = true
+            return v.id
+        }
+    }
+
+    /** Spielt das Sample eines Pads in einer Tonhöhe (Halbtöne relativ zum Original). */
+    fun noteOn(p: Int, semi: Int): Int {
+        val l = loops.get(p) ?: return -1
+        return startVoice(l.data, p, 2.0.pow(semi / 12.0), !l.oneShot)
+    }
+
+    fun noteOff(id: Int) {
+        synchronized(voiceLock) {
+            for (v in voices) if (v.active && v.id == id) v.releasing = true
+        }
+    }
+
+    fun allNotesOff() {
+        synchronized(voiceLock) {
+            for (v in voices) if (v.active) v.releasing = true
+        }
+    }
+
+    /** Vorhören eines Ausschnitts (Wave-Editor). */
+    fun preview(data: FloatArray): Int = startVoice(data, -1, 1.0, false)
+
+    private fun renderVoices(out: FloatArray, bus: FloatArray, tgt: Int, block: Int) {
+        synchronized(voiceLock) {
+            val relStep = 1f / (0.12f * sampleRate)
+            for (v in voices) {
+                if (!v.active) continue
+                val d = v.data
+                val len = d.size
+                val dst = if (v.pad >= 0 && v.pad == tgt) bus else out
+                var peak = 0f
+                for (i in 0 until block) {
+                    var i0 = v.pos.toInt()
+                    if (i0 >= len - 1) {
+                        if (v.loop) {
+                            v.pos -= (len - 1).toDouble()
+                            i0 = v.pos.toInt().coerceIn(0, len - 2)
+                        } else {
+                            v.active = false
+                            break
+                        }
+                    }
+                    val fr = (v.pos - i0).toFloat()
+                    val sm = (d[i0] + (d[i0 + 1] - d[i0]) * fr) * v.gain
+                    dst[i] += sm
+                    val a = abs(sm)
+                    if (a > peak) peak = a
+                    if (v.releasing) {
+                        v.gain -= relStep
+                        if (v.gain <= 0f) {
+                            v.active = false
+                            break
+                        }
+                    }
+                    v.pos += v.rate
+                }
+                if (v.pad in 0 until PADS) levels[v.pad] = max(levels[v.pad], peak)
+            }
+        }
+    }
+
+    /** Feste Tonhöhe eines Pads (wirkt auf ONE SHOTS, auch im Sequenzer). */
+    val padSemi = IntArray(PADS)
+
+    fun setPadPitch(p: Int, semi: Int) {
+        padSemi[p] = semi
+        val l = loops.get(p) ?: return
+        l.semi = semi
+        l.rate = 2.0.pow(semi / 12.0)
+    }
+
+    // ---------------------------------------------------------------- Wave-Editor
+
+    /** Schlägt die passende Länge in Takten (¼ … 8) für eine Länge in Frames vor. */
+    fun suggestBars(frames: Int): Float {
+        val m = masterLen
+        if (m <= 0L) return 1f
+        val opts = floatArrayOf(0.25f, 0.5f, 1f, 2f, 4f, 8f)
+        var best = 1f
+        var err = Double.MAX_VALUE
+        for (o in opts) {
+            val e = abs(kotlin.math.ln(frames.toDouble() / (m * o)))
+            if (e < err) {
+                err = e
+                best = o
+            }
+        }
+        return best
+    }
+
+    fun padSlices(p: Int): Int = loops.get(p)?.slices?.let { it.size - 1 } ?: 0
+    fun padBars(p: Int): Float = loops.get(p)?.bars ?: 1f
+    fun hasTempo(): Boolean = masterLen > 0L
+
+    /** Schneidet einen Pad-Inhalt zu und zerlegt ihn optional in Slices, die dem Tempo folgen. */
+    fun applyEdit(p: Int, start: Int, end: Int, slices: Int, bars: Float) {
+        val l = loops.get(p) ?: return
+        val s0 = start.coerceIn(0, max(0, l.data.size - 2))
+        val e0 = end.coerceIn(s0 + 2, l.data.size)
+        val data = l.data.copyOfRange(s0, e0)
+        if (l.oneShot || slices <= 1) {
+            padOneShot[p] = l.oneShot
+            val semi = l.semi
+            importLoop(p, data)
+            if (l.oneShot) setPadPitch(p, semi)
+            return
+        }
+        val len = data.size
+        val fade = min(len / 4, sampleRate * FADE_MS / 1000)
+        for (i in 0 until fade) {
+            val g = i.toFloat() / fade
+            data[i] *= g
+            data[len - 1 - i] *= g
+        }
+        val loop = Loop(data)
+        loop.slices = IntArray(slices + 1) { (it.toLong() * len / slices).toInt() }
+        if (masterLen <= 0L) {
+            masterLen = len.toLong()
+            masterStart = written
+            loop.bars = 1f
+        } else {
+            loop.bars = bars
+        }
+        val tl = max(1L, (masterLen * loop.bars).toLong())
+        val heard = outClock.frameAt(System.nanoTime(), sampleRate)
+        loop.start = masterStart + Math.floorDiv(heard - masterStart, tl) * tl
+        loop.muted = l.muted
+        takes.set(p, null)
+        loops.set(p, loop)
+    }
+
+    /** Verteilt die Slices eines Ausschnitts als ONE SHOTS auf freie Pads. Gibt die Anzahl zurück. */
+    fun distributeSlices(p: Int, start: Int, end: Int, n: Int, maxPad: Int): Int {
+        val l = loops.get(p) ?: return 0
+        val s0 = start.coerceIn(0, max(0, l.data.size - 2))
+        val e0 = end.coerceIn(s0 + 2, l.data.size)
+        val len = e0 - s0
+        var q = 0
+        var count = 0
+        for (k in 0 until n) {
+            while (q < maxPad && (q == p || loops.get(q) != null)) q++
+            if (q >= maxPad) break
+            val a = s0 + (k.toLong() * len / n).toInt()
+            val b = s0 + ((k + 1).toLong() * len / n).toInt()
+            if (b - a < 2) continue
+            padOneShot[q] = true
+            importLoop(q, l.data.copyOfRange(a, b))
+            count++
+            q++
+        }
+        return count
     }
 
     // ---------------------------------------------------------------- Analyse (Spektrum-Anzeigen)
@@ -687,6 +901,7 @@ object Engine {
             masterStart = loop.start
             masterLen = len.toLong()
         }
+        padSemi[p] = 0
         loops.set(p, loop)
         // Mikrofon-Aufnahme automatisch sichern (läuft außerhalb des Audio-Threads weiter)
         onRecorded?.invoke(p, data.copyOf(), sampleRate)
@@ -740,36 +955,45 @@ object Engine {
     private fun mixLoop(t: AudioTrack, block: Int) {
         Process.setThreadPriority(Process.THREAD_PRIORITY_URGENT_AUDIO)
         val out = FloatArray(block)
+        val bus = FloatArray(block)
         val micBuf = FloatArray(block)
         micCursor = -1L
         val ts = AudioTimestamp()
         while (running) {
             java.util.Arrays.fill(out, 0f)
+            java.util.Arrays.fill(bus, 0f)
             val w = written
             runSequencer(w, block)
+            val tgt = fxTarget
+            val mlen = masterLen
             for (p in 0 until PADS) {
                 val loop = loops.get(p)
                 if (loop == null) {
                     levels[p] *= 0.9f
                     continue
                 }
+                val dst = if (p == tgt) bus else out
                 val d = loop.data
                 val len = d.size
                 if (loop.oneShot) {
                     val ss = loop.shotStart
                     var peak = 0f
-                    if (ss != Long.MIN_VALUE) {
+                    if (ss != Long.MIN_VALUE && len > 1) {
+                        val rate = loop.rate
                         val rel = w - ss
-                        if (rel + block > 0 && rel < len) {
+                        val total = (len / rate).toLong()
+                        if (rel + block > 0 && rel < total) {
                             var i = if (rel < 0) (-rel).toInt() else 0
-                            var idx = if (rel < 0) 0 else rel.toInt()
-                            while (i < block && idx < len) {
-                                val v = d[idx]
+                            while (i < block) {
+                                val sp = (rel + i) * rate
+                                val i0 = sp.toInt()
+                                if (i0 >= len - 1) break
+                                val fr = (sp - i0).toFloat()
+                                val v = d[i0] + (d[i0 + 1] - d[i0]) * fr
                                 val a = abs(v)
                                 if (a > peak) peak = a
-                                out[i] += v
+                                dst[i] += v
                                 i++
-                                idx++
                             }
                         }
                     }
@@ -779,7 +1003,31 @@ object Engine {
                 val rel = w - loop.start
                 val mute = loop.muted
                 var peak = 0f
-                if (rel + block > 0 && len > 0) {
+                val sl = loop.slices
+                if (sl != null && mlen > 0L && len > 0) {
+                    // Slices: jeder Slice startet auf seinem Rasterplatz im aktuellen Tempo
+                    val n = sl.size - 1
+                    val tl = max(1L, (mlen * loop.bars).toLong())
+                    val fadeN = 96
+                    for (i in 0 until block) {
+                        val r = rel + i
+                        if (r < 0) continue
+                        val pos = Math.floorMod(r, tl)
+                        val k = ((pos * n) / tl).toInt().coerceIn(0, n - 1)
+                        val slotStart = (k.toLong() * tl) / n
+                        val slotEnd = ((k + 1).toLong() * tl) / n
+                        val off = pos - slotStart
+                        val sLen = (sl[k + 1] - sl[k]).toLong()
+                        if (off >= sLen) continue
+                        var v = d[sl[k] + off.toInt()]
+                        if (off < fadeN) v *= off / fadeN.toFloat()
+                        val endRem = min(sLen - off, slotEnd - pos)
+                        if (endRem < fadeN) v *= endRem / fadeN.toFloat()
+                        val a = abs(v)
+                        if (a > peak) peak = a
+                        if (!mute) dst[i] += v
+                    }
+                } else if (rel + block > 0 && len > 0) {
                     var i: Int
                     var idx: Int
                     if (rel < 0) {
@@ -793,7 +1041,7 @@ object Engine {
                         val v = d[idx]
                         val a = abs(v)
                         if (a > peak) peak = a
-                        if (!mute) out[i] += v
+                        if (!mute) dst[i] += v
                         idx++
                         if (idx == len) idx = 0
                         i++
@@ -801,13 +1049,15 @@ object Engine {
                 }
                 levels[p] = max(if (mute) peak * 0.25f else peak, levels[p] * 0.88f)
             }
+            renderVoices(out, bus, tgt, block)
             val f = fx
             if (f != null) {
                 f.process(
-                    out, block, w, fxType, fxX, fxY, fxTouch,
+                    if (tgt >= 0) bus else out, block, w, fxType, fxX, fxY, fxTouch,
                     knobs[0], knobs[1], knobs[2], masterLen, masterStart, fillMic(micBuf, block)
                 )
             }
+            if (tgt >= 0) for (i in 0 until block) out[i] += bus[i]
             val vol = knobs[3] * 1.25f
             var mpeak = 0f
             for (i in 0 until block) {
@@ -958,6 +1208,7 @@ object Engine {
     /** Setzt eine importierte Datei als Loop ein – synchron zum Takt, falls es schon einen gibt. */
     fun importLoop(p: Int, src: FloatArray) {
         if (src.isEmpty()) return
+        padSemi[p] = 0
         if (padOneShot[p]) {
             val fade = min(src.size / 4, sampleRate * FADE_MS / 1000)
             for (i in 0 until fade) src[src.size - 1 - i] *= i.toFloat() / fade

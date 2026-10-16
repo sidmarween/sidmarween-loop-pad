@@ -156,6 +156,19 @@ class MainActivity : Activity() {
         labels.add("Audio importieren (WAV / MP3)")
         actions.add { pickImport() }
         if (has) {
+            labels.add("〰 Wave-Editor (schneiden, Slices)")
+            actions.add { pads.openEditor(p) }
+            labels.add("🎹 Tastatur")
+            actions.add { pads.openKeyboard(p) }
+        }
+        if (Engine.fxTarget == p) {
+            labels.add("🎛 Effekt wieder auf den ganzen Song")
+            actions.add { Engine.fxTarget = -1; toast("Effekt wirkt auf den ganzen Song") }
+        } else {
+            labels.add("🎛 Effekt nur auf dieses Pad")
+            actions.add { Engine.fxTarget = p; toast("Effekt wirkt nur auf Pad ${p + 1}") }
+        }
+        if (has) {
             labels.add("Als WAV exportieren")
             actions.add { pickExport(p) }
             labels.add("Löschen")
@@ -562,11 +575,26 @@ class MainActivity : Activity() {
 
     private fun showFxList() {
         AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
-            .setTitle("Effekt wählen")
+            .setTitle(if (Engine.fxTarget >= 0) "Effekt wählen · nur Pad ${Engine.fxTarget + 1}" else "Effekt wählen · ganzer Song")
             .setSingleChoiceItems(Fx.NAMES, Engine.fxType) { d, which ->
                 Engine.selectFx(which)
                 pads.fxChosen()
                 d.dismiss()
+            }
+            .setNeutralButton(if (Engine.fxTarget >= 0) "Auf ganzen Song" else "Nur auf ein Pad …") { _, _ ->
+                if (Engine.fxTarget >= 0) {
+                    Engine.fxTarget = -1
+                    toast("Effekt wirkt auf den ganzen Song")
+                } else {
+                    val names = Array(PadView.VISIBLE_PADS) { "Pad ${it + 1}" + if (Engine.hasLoop(it)) "" else " (leer)" }
+                    AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
+                        .setTitle("Effekt nur auf …")
+                        .setItems(names) { _, p ->
+                            Engine.fxTarget = p
+                            toast("Effekt wirkt nur auf Pad ${p + 1}")
+                        }
+                        .show()
+                }
             }
             .setNegativeButton("Abbrechen", null)
             .show()

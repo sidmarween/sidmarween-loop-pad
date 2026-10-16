@@ -27,6 +27,18 @@ Das **Display** in der Kopfzeile zeigt den aktuellen Effekt, die X/Y-Werte und d
 
 Im Display rechts auf **BPM / TEMPO ▸** tippen: Tempo 60–200 BPM (Regler, −/+, **Tap-Tempo**), **Metronom** an/aus, oder **Automatisch** (erster Loop bestimmt das Tempo). Ein festes Tempo gilt für neue Aufnahmen (werden auf Takte gerundet), Sequenzer, Delay/Stutter und Metronom.
 
+## Effekt-Ziel
+
+Der Effekt wirkt auf den **ganzen Song** oder **nur auf ein Pad**: im •••-Menü des Pads „Effekt nur auf dieses Pad“ oder in der Effektliste (Display links antippen) „Nur auf ein Pad …“. Das Display zeigt das Ziel (→ALLE / →P3).
+
+## 🎹 Tastatur
+
+Der kleine Klavier-Knopf unter jedem Pad blendet eine Tastatur (2 Oktaven, Oktave −/+) ein: das Sample wird höher/tiefer gespielt, mehrere Finger = Akkord. Mit „📌 Ton fürs Pad“ wird der gespielte Ton zur festen Tonhöhe des Pads (gilt für ⚡-Antippen und den Sequenzer).
+
+## 〰 Wave-Editor
+
+Im •••-Menü: Start-/Endpunkt an der Wellenform ziehen, **Zuschneiden**, mit dem **SLICES**-Regler in Stücke teilen und **Slicen (Tempo)** – die Slices starten auf ihren Rasterplätzen, der Loop folgt so jedem Master-Tempo ohne Tonhöhenänderung (Länge über den **TAKTE**-Regler). **Slices auf Pads** legt die Stücke als ⚡-One-Shots auf freie Pads.
+
 ## Sequenzer
 
 Statt der unteren Pad-Reihe: 16-Schritt-Sequenzer, synchron zum Takt (ohne Takt: 120 BPM).
