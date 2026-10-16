@@ -117,7 +117,7 @@ object Engine {
     }
 
     fun seqClear() {
-        for (row in seq) java.util.Arrays.fill(row, false)
+        for (row in seq) java.util.Arrays.fill(row, 0f)
     }
 
     fun seqHas(p: Int, step: Int): Boolean = seq[p][step] > 0f
