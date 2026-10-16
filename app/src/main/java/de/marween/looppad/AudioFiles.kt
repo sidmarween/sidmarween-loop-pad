@@ -230,6 +230,36 @@ object AudioFiles {
 
     // ------------------------------------------------------------------ Export
 
+    /** Schreibt bereits gewandelte 16-Bit-Samples (mono) als WAV. */
+    fun writeWav(out: OutputStream, data: ShortArray, rate: Int) {
+        val dataBytes = data.size * 2
+        val header = ByteBuffer.allocate(44).order(ByteOrder.LITTLE_ENDIAN)
+        header.put("RIFF".toByteArray(Charsets.US_ASCII))
+        header.putInt(36 + dataBytes)
+        header.put("WAVE".toByteArray(Charsets.US_ASCII))
+        header.put("fmt ".toByteArray(Charsets.US_ASCII))
+        header.putInt(16)
+        header.putShort(1.toShort())
+        header.putShort(1.toShort())
+        header.putInt(rate)
+        header.putInt(rate * 2)
+        header.putShort(2.toShort())
+        header.putShort(16.toShort())
+        header.put("data".toByteArray(Charsets.US_ASCII))
+        header.putInt(dataBytes)
+        out.write(header.array())
+        val body = ByteBuffer.allocate(64 * 1024).order(ByteOrder.LITTLE_ENDIAN)
+        for (v in data) {
+            if (body.remaining() < 2) {
+                out.write(body.array(), 0, body.position())
+                body.clear()
+            }
+            body.putShort(v)
+        }
+        out.write(body.array(), 0, body.position())
+        out.flush()
+    }
+
     /** Schreibt mono 16-Bit-WAV. */
     fun writeWav(out: OutputStream, data: FloatArray, rate: Int) {
         val dataBytes = data.size * 2

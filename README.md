@@ -16,7 +16,9 @@ Das **Display** in der Kopfzeile zeigt den aktuellen Effekt, die X/Y-Werte und d
 ## Sequenzer
 
 Statt der unteren Pad-Reihe: 16-Schritt-Sequenzer, synchron zum Takt (ohne Takt: 120 BPM).
-- **● REC** – Aufnahme an (startet auch die Wiedergabe). Angetippte ⚡-One-Shot-Pads landen auf dem nächsten Schritt.
+- **● REC** – Auswahl:
+  - **Pattern aufnehmen** – startet die Wiedergabe; angetippte ⚡-One-Shot-Pads landen auf dem nächsten Schritt.
+  - **Song aufnehmen** – nimmt alles auf, was du hörst (Loops, One-Shots, Sequenzer, Effekte), bis 15 Minuten. REC oder STOP beendet die Aufnahme, danach als WAV speichern.
 - **▶ PLAY** – Pattern abspielen · **■ STOP** – anhalten · **STOP halten** – Pattern leeren
 - **Schritte antippen** – Schritt für das zuletzt gespielte ⚡-Pad an/aus
 

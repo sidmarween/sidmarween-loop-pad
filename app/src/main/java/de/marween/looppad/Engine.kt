@@ -150,6 +150,59 @@ object Engine {
         }
     }
 
+    // ---------------------------------------------------------------- Song-Aufnahme (Master-Ausgang)
+    const val SONG_MAX_MINUTES = 15
+    @Volatile var songRecording = false
+        private set
+    private val songLock = Any()
+    private val songChunks = ArrayList<ShortArray>()
+    private var songFrames = 0L
+
+    fun songStart() {
+        synchronized(songLock) {
+            songChunks.clear()
+            songFrames = 0L
+        }
+        songRecording = true
+    }
+
+    /** Beendet die Song-Aufnahme und liefert sie als 16-Bit-Samples (mono). */
+    fun songStop(): ShortArray? {
+        if (!songRecording) return null
+        songRecording = false
+        synchronized(songLock) {
+            if (songFrames <= 0L) return null
+            val out = ShortArray(songFrames.toInt())
+            var pos = 0
+            val chunk = sampleRate
+            for (c in songChunks) {
+                val n = min(chunk, out.size - pos)
+                if (n <= 0) break
+                System.arraycopy(c, 0, out, pos, n)
+                pos += n
+            }
+            songChunks.clear()
+            songFrames = 0L
+            return out
+        }
+    }
+
+    fun songSeconds(): Float = synchronized(songLock) { songFrames.toFloat() / sampleRate }
+
+    private fun songAppend(buf: FloatArray, n: Int) {
+        synchronized(songLock) {
+            val max = sampleRate.toLong() * 60L * SONG_MAX_MINUTES
+            val chunk = sampleRate
+            for (i in 0 until n) {
+                if (songFrames >= max) break
+                val ci = (songFrames / chunk).toInt()
+                if (ci >= songChunks.size) songChunks.add(ShortArray(chunk))
+                songChunks[ci][(songFrames % chunk).toInt()] = (buf[i].coerceIn(-1f, 1f) * 32767f).toInt().toShort()
+                songFrames++
+            }
+        }
+    }
+
     /** Modus je Pad: true = ONE SHOT, false = LOOP. */
     val padOneShot = BooleanArray(PADS)
 
@@ -600,6 +653,7 @@ object Engine {
                 if (a > mpeak) mpeak = a
             }
             outputLevel = max(mpeak, outputLevel * 0.9f)
+            if (songRecording) songAppend(out, block)
 
             var off = 0
             while (off < block && running) {

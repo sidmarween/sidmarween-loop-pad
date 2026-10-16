@@ -38,6 +38,8 @@ class MainActivity : Activity() {
         pads.onPadMenu = { p -> showPadMenu(p) }
         pads.onFxList = { showFxList() }
         pads.onDesignMenu = { showDesigns() }
+        pads.onRecMenu = { showRecMenu() }
+        pads.onSongStopped = { finishSong() }
         pads.theme = getSharedPreferences("marvpad", MODE_PRIVATE).getInt("design", PadView.GLOW)
         setContentView(pads)
         hideSystemBars()
@@ -168,6 +170,58 @@ class MainActivity : Activity() {
             .show()
     }
 
+    // ---------------------------------------------------------------- Aufnahme: Pattern oder Song
+
+    private var pendingSong: ShortArray? = null
+    private var pendingSongRate = 48000
+
+    private fun showRecMenu() {
+        AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
+            .setTitle("Aufnehmen")
+            .setItems(arrayOf(
+                "● Pattern aufnehmen  (16 Schritte, ⚡-Pads)",
+                "● Song aufnehmen  (alles, was du hörst)"
+            )) { _, which ->
+                if (which == 0) {
+                    Engine.seqToggleRec()
+                } else {
+                    Engine.songStart()
+                    toast("Song-Aufnahme läuft – REC oder STOP beendet sie")
+                }
+            }
+            .setNegativeButton("Abbrechen", null)
+            .show()
+    }
+
+    private fun finishSong() {
+        val rate = Engine.sampleRate
+        val data = Engine.songStop() ?: return
+        pendingSong = data
+        pendingSongRate = rate
+        val secs = data.size / rate
+        AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
+            .setTitle(String.format(Locale.GERMANY, "Song aufgenommen (%d:%02d)", secs / 60, secs % 60))
+            .setMessage("Als WAV-Datei speichern?")
+            .setPositiveButton("Speichern") { _, _ -> pickSongExport() }
+            .setNegativeButton("Verwerfen") { _, _ -> pendingSong = null }
+            .setCancelable(false)
+            .show()
+    }
+
+    private fun pickSongExport() {
+        val stamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.GERMANY).format(Date())
+        val i = Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = "audio/wav"
+            putExtra(Intent.EXTRA_TITLE, "MarvPAD_Song_$stamp.wav")
+        }
+        try {
+            startActivityForResult(i, REQ_SONG)
+        } catch (e: Exception) {
+            toast("Kein Dateimanager gefunden")
+        }
+    }
+
     private fun showDesigns() {
         AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
             .setTitle("Design wählen")
@@ -246,6 +300,21 @@ class MainActivity : Activity() {
                     }
                 }.start()
             }
+            REQ_SONG -> {
+                val d = pendingSong ?: return
+                pendingSong = null
+                val rate = pendingSongRate
+                toast("Speichere Song …")
+                Thread {
+                    try {
+                        contentResolver.openOutputStream(uri)?.use { AudioFiles.writeWav(it, d, rate) }
+                            ?: throw IllegalStateException("Datei nicht schreibbar")
+                        runOnUiThread { toast("Song gespeichert") }
+                    } catch (e: Exception) {
+                        runOnUiThread { toast("Speichern fehlgeschlagen: ${e.message ?: e}") }
+                    }
+                }.start()
+            }
             REQ_EXPORT -> {
                 val d = exportData ?: return
                 exportData = null
@@ -269,5 +338,6 @@ class MainActivity : Activity() {
         private const val REQ_MIC = 7
         private const val REQ_IMPORT = 8
         private const val REQ_EXPORT = 9
+        private const val REQ_SONG = 10
     }
 }

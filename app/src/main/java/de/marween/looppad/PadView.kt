@@ -81,6 +81,8 @@ class PadView(context: Context) : View(context) {
     private val stopBtn = RectF()
     private var stopDownMs = 0L
     private var stopPointer = -1
+    var onRecMenu: (() -> Unit)? = null
+    var onSongStopped: (() -> Unit)? = null
     private val displayRect = RectF()
     var onDesignMenu: (() -> Unit)? = null
 
@@ -851,12 +853,12 @@ class PadView(context: Context) : View(context) {
         val blink = 0.5f + 0.5f * sin(time * 8f)
         val red = Color.rgb(255, 45, 70)
         val green = Color.rgb(60, 230, 120)
-        transportButton(canvas, recBtn, Engine.seqRecording, red, blink)
+        transportButton(canvas, recBtn, Engine.seqRecording || Engine.songRecording, red, blink)
         transportButton(canvas, playBtn, Engine.seqPlaying, if (neonMode) green else ORANGE, 1f)
         transportButton(canvas, stopBtn, false, Color.WHITE, 0f)
         // Symbole
         val ic = min(recBtn.height(), recBtn.width()) * 0.22f
-        dotPaint.color = if (Engine.seqRecording) Color.WHITE else red
+        dotPaint.color = if (Engine.seqRecording || Engine.songRecording) Color.WHITE else red
         canvas.drawCircle(recBtn.centerX(), recBtn.centerY(), ic, dotPaint)
         val tri = Path()
         tri.moveTo(playBtn.centerX() - ic * 0.8f, playBtn.centerY() - ic)
@@ -874,7 +876,11 @@ class PadView(context: Context) : View(context) {
         textPaint.textSize = dp(11f)
         textPaint.color = acc
         val head = when {
-            Engine.seqRecording -> "● REC"
+            Engine.songRecording -> {
+                val t = Engine.songSeconds().toInt()
+                String.format(Locale.GERMANY, "● SONG %d:%02d", t / 60, t % 60)
+            }
+            Engine.seqRecording -> "● REC PATTERN"
             Engine.seqPlaying -> "▶ SEQ"
             else -> "SEQUENZER"
         }
@@ -1411,7 +1417,11 @@ class PadView(context: Context) : View(context) {
                 if (seqRect.contains(x, y)) {
                     when {
                         recBtn.contains(x, y) -> {
-                            Engine.seqToggleRec()
+                            when {
+                                Engine.songRecording -> onSongStopped?.invoke()
+                                Engine.seqRecording -> Engine.seqToggleRec()
+                                else -> onRecMenu?.invoke()
+                            }
                             burst(x, y, Color.rgb(255, 45, 70), 18, 220f)
                         }
                         playBtn.contains(x, y) -> {
@@ -1420,6 +1430,7 @@ class PadView(context: Context) : View(context) {
                         }
                         stopBtn.contains(x, y) -> {
                             Engine.seqStop()
+                            if (Engine.songRecording) onSongStopped?.invoke()
                             stopPointer = id
                             stopDownMs = SystemClock.uptimeMillis()
                         }
