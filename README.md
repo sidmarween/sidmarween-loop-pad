@@ -10,8 +10,12 @@ Android-App für Musiker: 16 Neon-Pads, XY-Effektfläche und Drehregler im Kaoss
 
 ## Designs & Display
 
-Oben rechts der **Farbpunkte-Knopf**: Design wählen – NEON (Regenbogen), GLOW (Orange glühend), STUDIO (Grau & Orange), HUD (Tech-Linien). Die Wahl wird gespeichert.
-Das **Display** in der Kopfzeile zeigt den aktuellen Effekt, die X/Y-Werte und den Takt. Antippen öffnet die Effektliste.
+Oben rechts der **Farbpunkte-Knopf**: Design wählen – NEON (Regenbogen), GLOW (Orange glühend), STUDIO (Grau & Orange), HUD (Tech-Linien), RETRO (Grau/Grün/Orange mit Spektrum-Anzeigen für Ausgang und Mikrofon), COMIC (Pop-Art). Die Wahl wird gespeichert.
+Das **Display** in der Kopfzeile zeigt den aktuellen Effekt, die X/Y-Werte und den Takt. Links antippen öffnet die Effektliste, rechts das Tempo.
+
+## Master-Tempo
+
+Im Display rechts auf **BPM / TEMPO ▸** tippen: Tempo 60–200 BPM (Regler, −/+, **Tap-Tempo**), **Metronom** an/aus, oder **Automatisch** (erster Loop bestimmt das Tempo). Ein festes Tempo gilt für neue Aufnahmen (werden auf Takte gerundet), Sequenzer, Delay/Stutter und Metronom.
 
 ## Sequenzer
 

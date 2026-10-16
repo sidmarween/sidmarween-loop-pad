@@ -14,7 +14,15 @@ import android.view.View
 import android.view.WindowInsets
 import android.view.WindowInsetsController
 import android.view.WindowManager
+import android.widget.Button
+import android.widget.CheckBox
+import android.widget.LinearLayout
+import android.widget.SeekBar
+import android.widget.TextView
 import android.widget.Toast
+import android.view.Gravity
+import android.graphics.Color
+import android.graphics.Typeface
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -38,6 +46,7 @@ class MainActivity : Activity() {
         pads.onPadMenu = { p -> showPadMenu(p) }
         pads.onFxList = { showFxList() }
         pads.onDesignMenu = { showDesigns() }
+        pads.onTempo = { showTempo() }
         pads.onRecMenu = { showRecMenu() }
         pads.onSongStopped = { finishSong() }
         pads.theme = getSharedPreferences("marvpad", MODE_PRIVATE).getInt("design", PadView.GLOW)
@@ -220,6 +229,87 @@ class MainActivity : Activity() {
         } catch (e: Exception) {
             toast("Kein Dateimanager gefunden")
         }
+    }
+
+    // ---------------------------------------------------------------- Master-Tempo
+
+    private val tapTimes = ArrayList<Long>()
+
+    private fun showTempo() {
+        val d = resources.displayMetrics.density
+        val pad = (20 * d).toInt()
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(pad, pad / 2, pad, 0)
+        }
+        val start = if (Engine.currentBpm() > 0f) Engine.currentBpm() else 120f
+        var bpm = start.coerceIn(60f, 200f)
+        val big = TextView(this).apply {
+            textSize = 40f
+            gravity = Gravity.CENTER
+            setTextColor(Color.rgb(255, 120, 30))
+            typeface = Typeface.create(Typeface.MONOSPACE, Typeface.BOLD)
+        }
+        val info = TextView(this).apply {
+            textSize = 12f
+            gravity = Gravity.CENTER
+            setTextColor(Color.rgb(180, 180, 180))
+            text = if (Engine.fixedBpm > 0f) "Festes Tempo · 4/4" else "Automatisch: erster Loop bestimmt das Tempo"
+        }
+        val bar = SeekBar(this).apply { max = 140 }
+        fun show() {
+            big.text = String.format(Locale.GERMANY, "%.0f BPM", bpm)
+            if (bar.progress != (bpm - 60f).toInt()) bar.progress = (bpm - 60f).toInt()
+        }
+        fun setTempo(v: Float) {
+            bpm = v.coerceIn(60f, 200f)
+            Engine.setBpm(bpm)
+            info.text = "Festes Tempo · 4/4 – gilt für neue Aufnahmen, Sequenzer und Metronom"
+            show()
+        }
+        bar.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(sb: SeekBar?, progress: Int, fromUser: Boolean) {
+                if (fromUser) setTempo(60f + progress)
+            }
+            override fun onStartTrackingTouch(sb: SeekBar?) {}
+            override fun onStopTrackingTouch(sb: SeekBar?) {}
+        })
+        val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER }
+        fun btn(label: String, onClick: () -> Unit) = Button(this).apply {
+            text = label
+            setOnClickListener { onClick() }
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+        }
+        row.addView(btn("−") { setTempo(bpm - 1f) })
+        row.addView(btn("TAP") {
+            val now = System.currentTimeMillis()
+            if (tapTimes.isNotEmpty() && now - tapTimes.last() > 2000) tapTimes.clear()
+            tapTimes.add(now)
+            while (tapTimes.size > 6) tapTimes.removeAt(0)
+            if (tapTimes.size >= 2) {
+                val avg = (tapTimes.last() - tapTimes.first()).toFloat() / (tapTimes.size - 1)
+                setTempo(60000f / avg)
+            }
+        })
+        row.addView(btn("+") { setTempo(bpm + 1f) })
+        val metro = CheckBox(this).apply {
+            text = "Metronom"
+            isChecked = Engine.metronome
+            setTextColor(Color.WHITE)
+            setOnCheckedChangeListener { _, c -> Engine.metronome = c }
+        }
+        box.addView(big)
+        box.addView(info)
+        box.addView(bar)
+        box.addView(row)
+        box.addView(metro)
+        show()
+        AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
+            .setTitle("Master-Tempo")
+            .setView(box)
+            .setPositiveButton("Fertig", null)
+            .setNeutralButton("Automatisch") { _, _ -> Engine.setAutoTempo() }
+            .show()
     }
 
     private fun showDesigns() {

@@ -150,6 +150,30 @@ object Engine {
         }
     }
 
+    // ---------------------------------------------------------------- Analyse (Spektrum-Anzeigen)
+    private const val SCOPE = 4096
+    private val scope = FloatArray(SCOPE)
+    @Volatile private var scopeW = 0
+
+    /** Die letzten dst.size Samples des Master-Ausgangs. */
+    fun copyOutput(dst: FloatArray) {
+        val w = scopeW
+        val n = dst.size
+        for (i in 0 until n) dst[i] = scope[(w - n + i) and (SCOPE - 1)]
+    }
+
+    /** Die letzten dst.size Samples vom Mikrofon. */
+    fun copyInput(dst: FloatArray) {
+        val c = captured
+        val n = dst.size
+        val rs = ringSize
+        if (ring.size < rs) return
+        for (i in 0 until n) {
+            val f = c - n + i
+            dst[i] = if (f >= 0) ring[(f % rs).toInt()] else 0f
+        }
+    }
+
     // ---------------------------------------------------------------- Song-Aufnahme (Master-Ausgang)
     const val SONG_MAX_MINUTES = 15
     @Volatile var songRecording = false
@@ -232,6 +256,63 @@ object Engine {
 
     /** Taktraster: der erste Loop legt Länge und Phase fest, alle anderen rasten darauf ein. */
     @Volatile private var masterLen = 0L
+
+    // ---------------------------------------------------------------- Master-Tempo
+    /** Fest eingestelltes Tempo in BPM (4/4, ein Takt = Raster), 0 = automatisch durch den ersten Loop. */
+    @Volatile var fixedBpm = 0f
+        private set
+    @Volatile var metronome = false
+
+    fun setBpm(bpm: Float) {
+        val b = bpm.coerceIn(40f, 240f)
+        fixedBpm = b
+        if (masterLen <= 0L) masterStart = written
+        masterLen = (sampleRate * 240.0 / b).toLong()
+    }
+
+    fun setAutoTempo() {
+        fixedBpm = 0f
+        if (!anyLooping()) masterLen = 0L
+    }
+
+    /** Aktuelles Tempo in BPM (4 Schläge pro Takt), 0 wenn noch keins festgelegt ist. */
+    fun currentBpm(): Float {
+        val m = masterLen
+        return if (m > 0L) (sampleRate * 240.0 / m).toFloat() else 0f
+    }
+
+    private fun releaseMaster() {
+        if (fixedBpm <= 0f) masterLen = 0L
+    }
+
+    private var clickStart = Long.MIN_VALUE
+    private var clickHigh = false
+
+    /** Metronom-Klick auf jeden Schlag (nicht in der Song-Aufnahme). */
+    private fun addClicks(out: FloatArray, w: Long, block: Int) {
+        val bar = masterLen
+        if (bar <= 0L) return
+        val ms = masterStart
+        var n = -Math.floorDiv(-(w - ms) * 4, bar)
+        while (true) {
+            val f = ms + Math.floorDiv(n * bar, 4L)
+            if (f >= w + block) break
+            if (f >= w) {
+                clickStart = f
+                clickHigh = Math.floorMod(n, 4L) == 0L
+            }
+            n++
+        }
+        if (clickStart == Long.MIN_VALUE) return
+        val dur = sampleRate / 25
+        val freq = if (clickHigh) 1600.0 else 1000.0
+        for (i in 0 until block) {
+            val t = w + i - clickStart
+            if (t < 0 || t >= dur) continue
+            val env = kotlin.math.exp(-t / (0.012 * sampleRate))
+            out[i] += (kotlin.math.sin(2.0 * Math.PI * freq * t / sampleRate) * env * 0.35).toFloat()
+        }
+    }
     @Volatile private var masterStart = 0L
     private var lastWritten = 0L
 
@@ -654,7 +735,14 @@ object Engine {
             }
             outputLevel = max(mpeak, outputLevel * 0.9f)
             if (songRecording) songAppend(out, block)
+            var sp = scopeW
+            for (i in 0 until block) {
+                scope[sp and (SCOPE - 1)] = out[i]
+                sp++
+            }
+            scopeW = sp
 
+            if (metronome) addClicks(out, w, block)
             var off = 0
             while (off < block && running) {
                 val r = try { t.write(out, off, block - off, AudioTrack.WRITE_BLOCKING) } catch (ignored: Exception) { -1 }
@@ -740,7 +828,7 @@ object Engine {
             l.oneShot = true
             l.muted = false
             l.shotStart = Long.MIN_VALUE
-            if (!anyLooping()) masterLen = 0L
+            if (!anyLooping()) releaseMaster()
         } else if (l.oneShot) {
             importLoop(p, l.data.copyOf())
         }
@@ -794,7 +882,7 @@ object Engine {
             shot.oneShot = true
             takes.set(p, null)
             loops.set(p, shot)
-            if (!anyLooping()) masterLen = 0L
+            if (!anyLooping()) releaseMaster()
             return
         }
         val m = masterLen
@@ -859,7 +947,7 @@ object Engine {
             val l = loops.get(i)
             if ((l != null && !l.oneShot) || takes.get(i) != null) any = true
         }
-        if (!any) masterLen = 0L
+        if (!any) releaseMaster()
     }
 
     /** Position im Takt des Taktgebers 0..1, oder -1 wenn es noch keinen gibt. */
