@@ -23,6 +23,7 @@ import android.view.MotionEvent
 import android.view.View
 import android.view.WindowInsets
 import java.util.Locale
+import kotlin.math.abs
 import kotlin.math.cos
 import kotlin.math.max
 import kotlin.math.min
