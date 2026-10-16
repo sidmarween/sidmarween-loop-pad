@@ -92,26 +92,57 @@ private class Band {
 class Fx(private val sr: Int) {
 
     companion object {
-        const val FILTER = 0
-        const val DELAY = 1
-        const val STUTTER = 2
-        const val FLANGER = 3
-        const val CHORUS = 4
-        const val REVERB = 5
-        const val HALL = 6
-        const val VOCODER = 7
-        const val DISTORTION = 8
-        const val CRUSH = 9
-        const val COUNT = 10
+        const val LOWPASS = 0
+        const val HIGHPASS = 1
+        const val BANDPASS = 2
+        const val NOTCH = 3
+        const val BELL = 4
+        const val PEAK = 5
+        const val COMB = 6
+        const val DELAY = 7
+        const val STUTTER = 8
+        const val FLANGER = 9
+        const val CHORUS = 10
+        const val REVERB = 11
+        const val HALL = 12
+        const val VOCODER = 13
+        const val DISTORTION = 14
+        const val CRUSH = 15
+        const val COUNT = 16
 
-        val NAMES = arrayOf("FILTER", "DELAY", "STUTTER", "FLANGER", "CHORUS", "REVERB", "HALL", "VOCODER", "DISTORT", "CRUSH")
-        val X_LABELS = arrayOf("CUTOFF", "ZEIT", "LÄNGE", "SPEED", "SPEED", "GRÖSSE", "LÄNGE", "TONHÖHE", "DRIVE", "RATE")
-        val Y_LABELS = arrayOf("RESONANZ", "FEEDBACK", "GATE", "TIEFE", "TIEFE", "DÄMPFUNG", "HELLIGKEIT", "FORMANT", "TON", "BITS")
-        val P1_LABELS = arrayOf("MODUS", "TON", "PITCH", "FEEDBK", "STIMMEN", "PRE", "PRE", "AKKORD", "TYP", "DRIVE")
-        val P2_LABELS = arrayOf("DRIVE", "WOBBLE", "TON", "BASIS", "BASIS", "LOWCUT", "LOWCUT", "MIC", "LEVEL", "TON")
-        val P1_DEFAULT = floatArrayOf(0f, 0.6f, 0.5f, 0.5f, 0.6f, 0.15f, 0.4f, 0.3f, 0.2f, 0.2f)
-        val P2_DEFAULT = floatArrayOf(0f, 0.2f, 1f, 0.3f, 0.4f, 0.2f, 0.3f, 0f, 0.6f, 1f)
-        val HUES = floatArrayOf(190f, 280f, 50f, 130f, 160f, 230f, 250f, 310f, 15f, 0f)
+        val NAMES = arrayOf(
+            "LOWPASS", "HIGHPASS", "BANDPASS", "NOTCH", "BELL", "PEAK", "COMB",
+            "DELAY", "STUTTER", "FLANGER", "CHORUS", "REVERB", "HALL", "VOCODER", "DISTORT", "CRUSH"
+        )
+        val X_LABELS = arrayOf(
+            "CUTOFF", "CUTOFF", "FREQUENZ", "FREQUENZ", "FREQUENZ", "FREQUENZ", "TONHÖHE",
+            "ZEIT", "LÄNGE", "SPEED", "SPEED", "GRÖSSE", "LÄNGE", "TONHÖHE", "DRIVE", "RATE"
+        )
+        val Y_LABELS = arrayOf(
+            "RESONANZ", "RESONANZ", "SCHÄRFE", "SCHÄRFE", "GAIN ±", "RESONANZ", "FEEDBACK ±",
+            "FEEDBACK", "GATE", "TIEFE", "TIEFE", "DÄMPFUNG", "HELLIGKEIT", "FORMANT", "TON", "BITS"
+        )
+        val P1_LABELS = arrayOf(
+            "STEIL", "STEIL", "STEIL", "STEIL", "BREITE", "DRY", "MODUS",
+            "TON", "PITCH", "FEEDBK", "STIMMEN", "PRE", "PRE", "AKKORD", "TYP", "DRIVE"
+        )
+        val P2_LABELS = arrayOf(
+            "DRIVE", "DRIVE", "DRIVE", "DRIVE", "STUFEN", "DRIVE", "TON",
+            "WOBBLE", "TON", "BASIS", "BASIS", "LOWCUT", "LOWCUT", "MIC", "LEVEL", "TON"
+        )
+        val P1_DEFAULT = floatArrayOf(0.3f, 0.3f, 0f, 0.3f, 0.4f, 0.6f, 0.25f, 0.6f, 0.5f, 0.5f, 0.6f, 0.15f, 0.4f, 0.3f, 0.2f, 0.2f)
+        val P2_DEFAULT = floatArrayOf(0f, 0f, 0f, 0f, 0f, 0f, 0.7f, 0.2f, 1f, 0.3f, 0.4f, 0.2f, 0.3f, 0f, 0.6f, 1f)
+        val HUES = floatArrayOf(190f, 175f, 205f, 165f, 30f, 55f, 100f, 280f, 50f, 130f, 160f, 230f, 250f, 310f, 15f, 0f)
+
+        /** Anzeige für Regler mit Stufen, sonst null. */
+        fun stepLabel(type: Int, knob: Int, v: Float): String? = when {
+            knob == 1 && type <= NOTCH -> "${12 * stages(v)} dB"
+            knob == 2 && type == BELL -> "${stages(v)}×"
+            knob == 1 && type == COMB -> if (v < 0.5f) "FB" else "FF"
+            else -> null
+        }
+
+        fun stages(v: Float): Int = 1 + min(3, (v * 4f).toInt())
     }
 
     private var engage = 0f
@@ -124,9 +155,20 @@ class Fx(private val sr: Int) {
     private val histSize = sr * 8
     private val hist = FloatArray(histSize)
 
-    // FILTER
-    private var ic1 = 0f
-    private var ic2 = 0f
+    // LP/HP/BP/NOTCH/PEAK (SVF-Kaskade, bis 4 Stufen)
+    private val sic1 = FloatArray(4)
+    private val sic2 = FloatArray(4)
+
+    // BELL (bis 3 Stufen Biquad)
+    private val bz1 = FloatArray(3)
+    private val bz2 = FloatArray(3)
+
+    // COMB
+    private val cbSize = sr / 20 + 4
+    private val cb = FloatArray(cbSize)
+    private var cbW = 0
+    private var cbDelay = sr / 200f
+    private var cbLp = 0f
 
     // DELAY
     private val dlSize = sr * 4
@@ -174,7 +216,9 @@ class Fx(private val sr: Int) {
     private var dsHp = 0f
 
     private fun reset() {
-        ic1 = 0f; ic2 = 0f
+        java.util.Arrays.fill(sic1, 0f); java.util.Arrays.fill(sic2, 0f)
+        java.util.Arrays.fill(bz1, 0f); java.util.Arrays.fill(bz2, 0f)
+        java.util.Arrays.fill(cb, 0f); cbLp = 0f
         java.util.Arrays.fill(dl, 0f); dlLp = 0f
         gateEnv = 0f; rpLp = 0f
         holdCount = 0f; held = 0f; crLp = 0f
@@ -225,7 +269,10 @@ class Fx(private val sr: Int) {
         }
 
         when (type) {
-            FILTER -> filter(buf, n, target, eRate, mix, p1, p2)
+            LOWPASS, HIGHPASS, BANDPASS, NOTCH -> svf(buf, n, target, eRate, mix, p1, p2, type)
+            BELL -> bell(buf, n, target, eRate, mix, p1, p2)
+            PEAK -> peak(buf, n, target, eRate, mix, p1, p2)
+            COMB -> comb(buf, n, target, eRate, mix, p1, p2)
             DELAY -> delay(buf, n, target, eRate, mix, p1, p2, bar)
             STUTTER -> stutter(buf, n, frame0, target, eRate, mix, p1, p2, bar)
             FLANGER -> flanger(buf, n, target, eRate, mix, p1, p2)
@@ -242,30 +289,126 @@ class Fx(private val sr: Int) {
         if (engage < target) engage = min(target, engage + rate) else if (engage > target) engage = max(target, engage - rate)
     }
 
-    // ------------------------------------------------------------------ FILTER
+    // ------------------------------------------------------------------ FILTER: LP / HP / BP / NOTCH
 
-    private fun filter(buf: FloatArray, n: Int, target: Float, eRate: Float, mix: Float, mode: Float, drive: Float) {
-        val fc = min(40f * (18000f / 40f).pow(sx), 0.45f * sr)
-        val g = tan(PI * fc / sr).toFloat()
-        val k = 2f - 1.93f * sy
-        val a1 = 1f / (1f + g * (g + k))
-        val a2 = g * a1
-        val a3 = g * a2
+    private fun cutoff(): Float = min(40f * (18000f / 40f).pow(sx), 0.45f * sr)
+
+    private fun svf(buf: FloatArray, n: Int, target: Float, eRate: Float, mix: Float, steep: Float, drive: Float, kind: Int) {
+        val st = stages(steep)
+        val g = tan(PI * cutoff() / sr).toFloat()
+        val kRes = 2f - 1.93f * sy
+        // LP/HP: nur die letzte Stufe resonant, die anderen Butterworth. BP/Notch: Schärfe auf allen Stufen.
+        val kBut = if (kind == LOWPASS || kind == HIGHPASS) 1.414f else kRes
+        val rA1 = 1f / (1f + g * (g + kRes)); val rA2 = g * rA1; val rA3 = g * rA2
+        val bA1 = 1f / (1f + g * (g + kBut)); val bA2 = g * bA1; val bA3 = g * bA2
+        val gain = 1f + drive * 7f
+        val norm = 1f / tanh(gain)
+        for (i in 0 until n) {
+            stepEngage(target, eRate)
+            val dry = buf[i]
+            var v = if (drive < 0.01f) dry else tanh(dry * gain) * norm
+            for (s in 0 until st) {
+                val last = s == st - 1
+                val k = if (last) kRes else kBut
+                val a1 = if (last) rA1 else bA1
+                val a2 = if (last) rA2 else bA2
+                val a3 = if (last) rA3 else bA3
+                val v0 = v
+                val v3 = v0 - sic2[s]
+                val v1 = a1 * sic1[s] + a2 * v3
+                val v2 = sic2[s] + a2 * sic1[s] + a3 * v3
+                sic1[s] = 2f * v1 - sic1[s]
+                sic2[s] = 2f * v2 - sic2[s]
+                v = when (kind) {
+                    LOWPASS -> v2
+                    HIGHPASS -> v0 - k * v1 - v2
+                    BANDPASS -> k * v1
+                    else -> v0 - k * v1
+                }
+            }
+            buf[i] = dry + (v - dry) * engage * mix
+        }
+    }
+
+    // ------------------------------------------------------------------ FILTER: BELL (Peaking-EQ)
+
+    private fun bell(buf: FloatArray, n: Int, target: Float, eRate: Float, mix: Float, width: Float, steps: Float) {
+        val st = min(3, stages(steps))
+        val f = cutoff()
+        val gainDb = (sy * 2f - 1f) * 18f
+        val q = 0.3f * (12f / 0.3f).pow(1f - width)
+        val aa = 10.0.pow(gainDb / 40.0)
+        val w0 = 2.0 * PI * f / sr
+        val alpha = sin(w0) / (2.0 * q)
+        val cw = kotlin.math.cos(w0)
+        val a0 = 1.0 + alpha / aa
+        val b0 = ((1.0 + alpha * aa) / a0).toFloat()
+        val b1 = (-2.0 * cw / a0).toFloat()
+        val b2 = ((1.0 - alpha * aa) / a0).toFloat()
+        val a1 = (-2.0 * cw / a0).toFloat()
+        val a2 = ((1.0 - alpha / aa) / a0).toFloat()
+        for (i in 0 until n) {
+            stepEngage(target, eRate)
+            val dry = buf[i]
+            var v = dry
+            for (s in 0 until st) {
+                val y = b0 * v + bz1[s]
+                bz1[s] = b1 * v - a1 * y + bz2[s]
+                bz2[s] = b2 * v - a2 * y
+                v = y
+            }
+            buf[i] = dry + (v - dry) * engage * mix
+        }
+    }
+
+    // ------------------------------------------------------------------ FILTER: PEAK (Resonanzspitze)
+
+    private fun peak(buf: FloatArray, n: Int, target: Float, eRate: Float, mix: Float, dryAmt: Float, drive: Float) {
+        val g = tan(PI * cutoff() / sr).toFloat()
+        val k = 1f / (0.7f + sy * 35f)
+        val a1 = 1f / (1f + g * (g + k)); val a2 = g * a1; val a3 = g * a2
+        val boost = 1.5f + 4f * sy
         val gain = 1f + drive * 7f
         val norm = 1f / tanh(gain)
         for (i in 0 until n) {
             stepEngage(target, eRate)
             val dry = buf[i]
             val v0 = if (drive < 0.01f) dry else tanh(dry * gain) * norm
-            val v3 = v0 - ic2
-            val v1 = a1 * ic1 + a2 * v3
-            val v2 = ic2 + a2 * ic1 + a3 * v3
-            ic1 = 2f * v1 - ic1
-            ic2 = 2f * v2 - ic2
-            val lp = v2
-            val bp = v1
-            val hp = v0 - k * v1 - v2
-            val wet = if (mode < 0.5f) lp + (bp - lp) * mode * 2f else bp + (hp - bp) * (mode - 0.5f) * 2f
+            val v3 = v0 - sic2[0]
+            val v1 = a1 * sic1[0] + a2 * v3
+            val v2 = sic2[0] + a2 * sic1[0] + a3 * v3
+            sic1[0] = 2f * v1 - sic1[0]
+            sic2[0] = 2f * v2 - sic2[0]
+            val wet = v0 * dryAmt + k * v1 * boost
+            buf[i] = dry + (wet - dry) * engage * mix
+        }
+    }
+
+    // ------------------------------------------------------------------ FILTER: COMB
+
+    private fun comb(buf: FloatArray, n: Int, target: Float, eRate: Float, mix: Float, mode: Float, tone: Float) {
+        val freq = 30f * (3000f / 30f).pow(sx)
+        val d = min(cbSize - 3f, sr / freq)
+        val fb = (sy * 2f - 1f) * 0.97f
+        val feedForward = mode >= 0.5f
+        val lpA = onePole(800f * (20000f / 800f).pow(tone))
+        for (i in 0 until n) {
+            stepEngage(target, eRate)
+            cbDelay += (d - cbDelay) * 0.002f
+            val delayed = readInterp(cb, cbSize, cbW - cbDelay)
+            cbLp += (delayed - cbLp) * lpA
+            val dry = buf[i]
+            val wet: Float
+            if (feedForward) {
+                cb[cbW] = dry
+                wet = (dry + fb * cbLp) * 0.6f
+            } else {
+                val y = dry + fb * cbLp
+                cb[cbW] = y
+                wet = y * 0.5f
+            }
+            cbW++
+            if (cbW == cbSize) cbW = 0
             buf[i] = dry + (wet - dry) * engage * mix
         }
     }

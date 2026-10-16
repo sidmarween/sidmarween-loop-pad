@@ -53,6 +53,22 @@ class PadView(context: Context) : View(context) {
     private var xyDispY = 0.5f
     private var xyGlow = 0f
     private var fxFlash = 0f
+    private var fxPointer = -1
+    private var fxDownMs = 0L
+    private var fxDownX = 0f
+    var onFxList: (() -> Unit)? = null
+    private val fxLongPress = Runnable {
+        if (fxPointer >= 0) {
+            fxPointer = -1
+            performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+            onFxList?.invoke()
+        }
+    }
+
+    fun fxChosen() {
+        fxFlash = 1f
+        burst(fxBtn.centerX(), fxBtn.centerY(), neon(Fx.HUES[Engine.fxType]), 30, 300f)
+    }
     private val muteBtn = RectF()
     private var insetTop = 0f
     private var insetBottom = 0f
@@ -564,10 +580,11 @@ class PadView(context: Context) : View(context) {
             textPaint.textSize = dp(10f)
             textPaint.color = alpha(Color.WHITE, if (active) 1f else 0.7f)
             canvas.drawText(knobLabel(k), cx, r.bottom - dp(2f), textPaint)
-            if (active) {
-                textPaint.textSize = dp(11f)
+            val step = Fx.stepLabel(Engine.fxType, k, v)
+            if (active || step != null) {
+                textPaint.textSize = dp(if (step != null && step.length > 3) 9f else 11f)
                 textPaint.color = Color.WHITE
-                canvas.drawText("${(v * 100).toInt()}", cx, cy + dp(4f), textPaint)
+                canvas.drawText(step ?: "${(v * 100).toInt()}", cx, cy + dp(4f), textPaint)
             }
         }
     }
@@ -742,10 +759,10 @@ class PadView(context: Context) : View(context) {
                     return true
                 }
                 if (fxBtn.contains(x, y)) {
-                    Engine.selectFx(Engine.fxType + if (x < fxBtn.centerX()) -1 else 1)
-                    fxFlash = 1f
-                    performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
-                    burst(x, y, neon(Fx.HUES[Engine.fxType]), 26, 280f)
+                    fxPointer = id
+                    fxDownMs = SystemClock.uptimeMillis()
+                    fxDownX = x
+                    postDelayed(fxLongPress, 450L)
                     return true
                 }
                 for (k in 0 until 4) {
@@ -808,6 +825,17 @@ class PadView(context: Context) : View(context) {
             MotionEvent.ACTION_UP, MotionEvent.ACTION_POINTER_UP -> {
                 val idx = e.actionIndex
                 val upId = e.getPointerId(idx)
+                if (upId == fxPointer) {
+                    fxPointer = -1
+                    removeCallbacks(fxLongPress)
+                    if (SystemClock.uptimeMillis() - fxDownMs < 450L) {
+                        Engine.selectFx(Engine.fxType + if (fxDownX < fxBtn.centerX()) -1 else 1)
+                        fxFlash = 1f
+                        performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+                        burst(fxDownX, fxBtn.centerY(), neon(Fx.HUES[Engine.fxType]), 26, 280f)
+                    }
+                    return true
+                }
                 if (upId == xyPointer) {
                     xyPointer = -1
                     Engine.fxTouch = false
@@ -822,6 +850,8 @@ class PadView(context: Context) : View(context) {
                 release(p, e.getX(idx), e.getY(idx))
             }
             MotionEvent.ACTION_CANCEL -> {
+                fxPointer = -1
+                removeCallbacks(fxLongPress)
                 xyPointer = -1
                 Engine.fxTouch = false
                 pointerKnob.clear()

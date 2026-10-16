@@ -36,6 +36,7 @@ class MainActivity : Activity() {
         pads = PadView(this)
         pads.onMessageTap = { onMessageTapped() }
         pads.onPadMenu = { p -> showPadMenu(p) }
+        pads.onFxList = { showFxList() }
         setContentView(pads)
         hideSystemBars()
     }
@@ -134,6 +135,18 @@ class MainActivity : Activity() {
                     1 -> pickExport(p)
                     2 -> Engine.clear(p)
                 }
+            }
+            .setNegativeButton("Abbrechen", null)
+            .show()
+    }
+
+    private fun showFxList() {
+        AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
+            .setTitle("Effekt wählen")
+            .setSingleChoiceItems(Fx.NAMES, Engine.fxType) { d, which ->
+                Engine.selectFx(which)
+                pads.fxChosen()
+                d.dismiss()
             }
             .setNegativeButton("Abbrechen", null)
             .show()
