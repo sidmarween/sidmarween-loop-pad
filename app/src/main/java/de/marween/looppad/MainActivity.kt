@@ -2,6 +2,7 @@ package de.marween.looppad
 
 import android.Manifest
 import android.app.Activity
+import android.app.AlertDialog
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.media.AudioManager
@@ -13,6 +14,10 @@ import android.view.View
 import android.view.WindowInsets
 import android.view.WindowInsetsController
 import android.view.WindowManager
+import android.widget.Toast
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 class MainActivity : Activity() {
 
@@ -30,6 +35,7 @@ class MainActivity : Activity() {
         volumeControlStream = AudioManager.STREAM_MUSIC
         pads = PadView(this)
         pads.onMessageTap = { onMessageTapped() }
+        pads.onPadMenu = { p -> showPadMenu(p) }
         setContentView(pads)
         hideSystemBars()
     }
@@ -106,7 +112,109 @@ class MainActivity : Activity() {
         }
     }
 
+    // ---------------------------------------------------------------- Import / Export
+
+    private var menuPad = -1
+    private var exportData: FloatArray? = null
+    private var exportRate = 48000
+
+    private fun showPadMenu(p: Int) {
+        menuPad = p
+        val has = Engine.hasLoop(p)
+        val items = if (has) {
+            arrayOf("Audio importieren (WAV / MP3)", "Loop exportieren (WAV)", "Loop löschen")
+        } else {
+            arrayOf("Audio importieren (WAV / MP3)")
+        }
+        AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
+            .setTitle("Pad ${p + 1}")
+            .setItems(items) { _, which ->
+                when (which) {
+                    0 -> pickImport()
+                    1 -> pickExport(p)
+                    2 -> Engine.clear(p)
+                }
+            }
+            .setNegativeButton("Abbrechen", null)
+            .show()
+    }
+
+    private fun pickImport() {
+        val i = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = "audio/*"
+            putExtra(
+                Intent.EXTRA_MIME_TYPES,
+                arrayOf("audio/wav", "audio/x-wav", "audio/wave", "audio/vnd.wave", "audio/mpeg", "audio/mp3", "audio/*")
+            )
+        }
+        try {
+            startActivityForResult(i, REQ_IMPORT)
+        } catch (e: Exception) {
+            toast("Kein Dateimanager gefunden")
+        }
+    }
+
+    private fun pickExport(p: Int) {
+        val data = Engine.loopData(p) ?: return
+        exportData = data
+        exportRate = Engine.sampleRate
+        val stamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.GERMANY).format(Date())
+        val i = Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = "audio/wav"
+            putExtra(Intent.EXTRA_TITLE, "MarvPAD_Pad${p + 1}_$stamp.wav")
+        }
+        try {
+            startActivityForResult(i, REQ_EXPORT)
+        } catch (e: Exception) {
+            toast("Kein Dateimanager gefunden")
+        }
+    }
+
+    @Deprecated("Activity-Result-API wird hier bewusst nicht genutzt (keine AndroidX-Abhängigkeit)")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        val uri = data?.data
+        if (resultCode != RESULT_OK || uri == null) return
+        val pad = menuPad
+        when (requestCode) {
+            REQ_IMPORT -> {
+                if (pad < 0) return
+                toast("Importiere …")
+                val rate = Engine.sampleRate
+                Thread {
+                    try {
+                        val samples = AudioFiles.decode(this, uri, rate, Engine.MAX_SECONDS)
+                        Engine.importLoop(pad, samples)
+                        runOnUiThread { toast("Pad ${pad + 1}: Import fertig") }
+                    } catch (e: Exception) {
+                        runOnUiThread { toast("Import fehlgeschlagen: ${e.message ?: e}") }
+                    }
+                }.start()
+            }
+            REQ_EXPORT -> {
+                val d = exportData ?: return
+                exportData = null
+                val rate = exportRate
+                Thread {
+                    try {
+                        contentResolver.openOutputStream(uri)?.use { AudioFiles.writeWav(it, d, rate) }
+                            ?: throw IllegalStateException("Datei nicht schreibbar")
+                        runOnUiThread { toast("Loop exportiert") }
+                    } catch (e: Exception) {
+                        runOnUiThread { toast("Export fehlgeschlagen: ${e.message ?: e}") }
+                    }
+                }.start()
+            }
+        }
+    }
+
+    private fun toast(msg: String) = Toast.makeText(this, msg, Toast.LENGTH_SHORT).show()
+
     companion object {
         private const val REQ_MIC = 7
+        private const val REQ_IMPORT = 8
+        private const val REQ_EXPORT = 9
     }
 }

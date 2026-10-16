@@ -8,6 +8,13 @@ Android-App für Musiker: 16 Neon-Pads, XY-Effektfläche und Drehregler im Kaoss
 - **CLEAR**, dann Pad antippen – Loop löschen.
 - **ALLE STUMM / ALLE AN** – alles auf einmal.
 
+## Import / Export
+
+Unter jedem Pad sitzt ein kleiner **•••**-Knopf:
+- **Audio importieren** – WAV oder MP3 aufs Pad laden. Gibt es schon einen Takt, wird die Datei auf die passende Rasterlänge gebracht und läuft synchron.
+- **Loop exportieren** – speichert den Loop als WAV (mono, 16 Bit).
+- **Loop löschen**
+
 ## Effekte
 
 Über den Pads liegt die **XY-Fläche**: Finger drauf = Effekt an, X- und Y-Achse modulieren ihn.

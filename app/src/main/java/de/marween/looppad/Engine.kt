@@ -564,6 +564,41 @@ object Engine {
 
     fun hasLoop(p: Int) = loops.get(p) != null
 
+    /** Kopie der Loop-Samples für den Export. */
+    fun loopData(p: Int): FloatArray? = loops.get(p)?.data?.copyOf()
+
+    /** Setzt eine importierte Datei als Loop ein – synchron zum Takt, falls es schon einen gibt. */
+    fun importLoop(p: Int, src: FloatArray) {
+        if (src.isEmpty()) return
+        val m = masterLen
+        val data: FloatArray
+        val start: Long
+        if (m > 0L) {
+            val len = quantizeLen(src.size.toLong()).toInt()
+            data = src.copyOf(len)
+            val heard = outClock.frameAt(System.nanoTime(), sampleRate)
+            start = masterStart + Math.floorDiv(heard - masterStart, len.toLong()) * len
+        } else {
+            data = src
+            start = written
+        }
+        val len = data.size
+        val fade = min(len / 4, sampleRate * FADE_MS / 1000)
+        for (i in 0 until fade) {
+            val g = i.toFloat() / fade
+            data[i] *= g
+            data[len - 1 - i] *= g
+        }
+        val loop = Loop(data)
+        loop.start = start
+        takes.set(p, null)
+        if (m <= 0L) {
+            masterStart = start
+            masterLen = len.toLong()
+        }
+        loops.set(p, loop)
+    }
+
     fun toggleMute(p: Int) {
         loops.get(p)?.let { it.muted = !it.muted }
     }

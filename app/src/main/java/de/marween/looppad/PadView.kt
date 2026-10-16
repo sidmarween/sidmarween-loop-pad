@@ -40,6 +40,8 @@ class PadView(context: Context) : View(context) {
     private val padLengths = FloatArray(Engine.PADS)
     private val clearBtn = RectF()
     private val knobRects = Array(4) { RectF() }
+    private val moreRects = Array(Engine.PADS) { RectF() }
+    var onPadMenu: ((Int) -> Unit)? = null
     private val fxBtn = RectF()
     private val xyRect = RectF()
     private var knobSize = 0f
@@ -159,28 +161,33 @@ class PadView(context: Context) : View(context) {
         }
         fxBtn.set(w - margin - fxW, contentTop + dp(4f), w - margin, contentTop + kh - dp(4f))
 
-        // Pads und XY-Fläche teilen sich den Rest
-        var grid = min(inner, avail * 0.52f)
-        var xyH = avail - kh - grid - 2 * gap
+        // Pads (mit •••-Knopf darunter) und XY-Fläche teilen sich den Rest
+        val colGap = dp(10f)
+        val rowGap = dp(4f)
+        val mb = dp(20f)
+        var cell = min((inner - 3 * colGap) / 4f, (avail * 0.58f - 3 * rowGap - 4 * mb) / 4f)
+        var gridH = 4 * cell + 4 * mb + 3 * rowGap
+        var xyH = avail - kh - gridH - 2 * gap
         val minXy = dp(120f)
         if (xyH < minXy) {
-            grid -= (minXy - xyH)
+            cell -= (minXy - xyH) / 4f
+            gridH = 4 * cell + 4 * mb + 3 * rowGap
             xyH = minXy
         }
         val xyTop = contentTop + kh + gap
         xyRect.set(margin, xyTop, w - margin, xyTop + xyH)
 
         val gridTop = xyRect.bottom + gap
-        val left = (w - grid) / 2f
-        val pgap = dp(10f)
-        val cell = (grid - 3 * pgap) / 4f
+        val gridW = 4 * cell + 3 * colGap
+        val left = (w - gridW) / 2f
         radius = cell * 0.18f
         for (i in 0 until Engine.PADS) {
             val row = i / 4
             val col = i % 4
-            val x = left + col * (cell + pgap)
-            val y = gridTop + row * (cell + pgap)
+            val x = left + col * (cell + colGap)
+            val y = gridTop + row * (cell + mb + rowGap)
             padRects[i].set(x, y, x + cell, y + cell)
+            moreRects[i].set(x + cell * 0.22f, y + cell + dp(3f), x + cell * 0.78f, y + cell + mb - dp(1f))
             val path = Path()
             path.addRoundRect(padRects[i], radius, radius, Path.Direction.CW)
             padMeasures[i].setPath(path, true)
@@ -224,7 +231,10 @@ class PadView(context: Context) : View(context) {
         drawKnobs(canvas)
         drawFxButton(canvas, dt)
         drawXy(canvas, dt)
-        for (i in 0 until Engine.PADS) drawPad(canvas, i, dt)
+        for (i in 0 until Engine.PADS) {
+            drawPad(canvas, i, dt)
+            drawMore(canvas, i)
+        }
         drawShocks(canvas, dt)
         drawParticles(canvas, dt)
         drawFooter(canvas)
@@ -425,6 +435,23 @@ class PadView(context: Context) : View(context) {
             textPaint.color = alpha(Color.WHITE, if (st == Engine.PadState.MUTED) 0.45f else 0.9f)
             canvas.drawText(label, r.centerX(), r.bottom - r.height() * 0.12f, textPaint)
         }
+    }
+
+    private fun drawMore(canvas: Canvas, i: Int) {
+        val r = moreRects[i]
+        if (r.width() <= 0f) return
+        val has = Engine.hasLoop(i)
+        val c = if (has) BRAND_ORANGE else Color.WHITE
+        val rr = r.height() / 2f
+        fillPaint.shader = null
+        fillPaint.color = alpha(c, if (has) 0.16f else 0.05f)
+        canvas.drawRoundRect(r, rr, rr, fillPaint)
+        strokePaint.strokeWidth = dp(1f)
+        strokePaint.color = alpha(c, if (has) 0.8f else 0.25f)
+        canvas.drawRoundRect(r, rr, rr, strokePaint)
+        dotPaint.color = alpha(c, if (has) 1f else 0.5f)
+        val d = dp(5f)
+        for (k in -1..1) canvas.drawCircle(r.centerX() + k * d, r.centerY(), dp(1.6f), dotPaint)
     }
 
     private fun drawShocks(canvas: Canvas, dt: Float) {
@@ -737,6 +764,15 @@ class PadView(context: Context) : View(context) {
                         burst(x, y, neon(Fx.HUES[Engine.fxType]), 20, 240f)
                     }
                     return true
+                }
+                for (i in 0 until Engine.PADS) {
+                    val mr = moreRects[i]
+                    // etwas großzügigere Trefferfläche für den kleinen Knopf
+                    if (x >= mr.left - dp(6f) && x <= mr.right + dp(6f) && y >= mr.top - dp(4f) && y <= mr.bottom + dp(4f)) {
+                        performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+                        onPadMenu?.invoke(i)
+                        return true
+                    }
                 }
                 val p = hitPad(x, y)
                 if (p < 0) return true
