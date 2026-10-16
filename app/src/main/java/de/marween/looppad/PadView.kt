@@ -219,6 +219,31 @@ class PadView(context: Context) : View(context) {
         drawButton(canvas, clearBtn, "CLEAR", if (clearMode) Color.rgb(255, 40, 70) else neon(340f, 0.6f, 1f), clearMode, blink)
         val muteLabel = if (Engine.anyPlaying()) "ALLE STUMM" else "ALLE AN"
         drawButton(canvas, muteBtn, muteLabel, neon(time * 40f + 180f), false, 0f)
+
+        // Taktgeber-Leiste: zeigt, wo im Raster alle Loops gerade sind
+        val mp = Engine.masterProgress()
+        val y = clearBtn.bottom + dp(14f)
+        val left = margin
+        val right = width - margin
+        strokePaint.strokeWidth = dp(3f)
+        strokePaint.color = alpha(Color.WHITE, 0.12f)
+        canvas.drawLine(left, y, right, y, strokePaint)
+        if (mp >= 0f) {
+            val x = left + (right - left) * mp
+            val beat = if (mp < 0.05f) 1f - mp / 0.05f else 0f
+            val bc = neon(time * 40f + 90f)
+            strokePaint.strokeWidth = dp(8f)
+            strokePaint.color = alpha(bc, 0.2f + 0.4f * beat)
+            canvas.drawLine(left, y, x, y, strokePaint)
+            strokePaint.strokeWidth = dp(3f)
+            strokePaint.color = bc
+            canvas.drawLine(left, y, x, y, strokePaint)
+            dotPaint.color = Color.WHITE
+            canvas.drawCircle(x, y, dp(4f) + dp(4f) * beat, dotPaint)
+            textPaint.textSize = dp(10f)
+            textPaint.color = alpha(Color.WHITE, 0.6f)
+            canvas.drawText(String.format(Locale.GERMANY, "TAKT %.2fs", Engine.masterSeconds()), width / 2f, y + dp(14f), textPaint)
+        }
     }
 
     private fun drawButton(canvas: Canvas, r: RectF, label: String, color: Int, active: Boolean, blink: Float) {

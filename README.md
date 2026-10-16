@@ -2,7 +2,7 @@
 
 Android-App für Musiker: 16 Neon-Pads im Kaoss-Pad-Stil zum Live-Loopen übers Mikrofon.
 
-- **Pad halten** – nimmt auf, solange du hältst. Beim Loslassen läuft der Loop sofort in exakt der gehaltenen Länge weiter.
+- **Pad halten** – nimmt auf, solange du hältst. Der erste Loop wird zum Taktgeber. Alle weiteren Loops rasten automatisch auf sein Raster ein: Länge wird auf 1/8, 1/4, 1/2, 1, 2, 4 oder 8 Takte gerundet, der Start auf den nächsten Rasterpunkt.
 - **Pad mit Loop halten** – Overdub: nimmt zusätzlich auf den laufenden Loop drauf.
 - **2× tippen** – Loop stumm / wieder an.
 - **CLEAR**, dann Pad antippen – Loop löschen.

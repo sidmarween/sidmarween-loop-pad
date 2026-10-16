@@ -29,6 +29,14 @@ class Take(val overdub: Boolean, val fromIn: Long, val downNanos: Long) {
     @Volatile var released: Boolean = false
     @Volatile var armed: Boolean = false
     var cursor: Long = fromIn
+    /** Erster Eingangs-Frame des fertigen Loops (bei Sync auf das Raster gerückt). */
+    @Volatile var fromQ: Long = fromIn
+    /** Ausgabe-Frame, an dem der Loop startet (Rasterpunkt), oder NO_GRID. */
+    @Volatile var qOut: Long = NO_GRID
+
+    companion object {
+        const val NO_GRID = Long.MIN_VALUE
+    }
 }
 
 /** Ordnet Frame-Zähler eines Audio-Streams der Systemzeit (System.nanoTime) zu. */
@@ -85,6 +93,11 @@ object Engine {
     private var ring = FloatArray(0)
     private var ringSize = 1
 
+    /** Taktraster: der erste Loop legt Länge und Phase fest, alle anderen rasten darauf ein. */
+    @Volatile private var masterLen = 0L
+    @Volatile private var masterStart = 0L
+    private var lastWritten = 0L
+
     private var record: AudioRecord? = null
     private var track: AudioTrack? = null
     private var recordThread: Thread? = null
@@ -130,10 +143,15 @@ object Engine {
         val now = System.nanoTime()
         inClock.set(0L, now)
         outClock.set(0L, now)
+        // Ausgabezähler beginnt wieder bei 0 -> alle Loops gemeinsam verschieben, Phasen bleiben erhalten
+        val shift = lastWritten
         for (p in 0 until PADS) {
             takes.set(p, null)
-            loops.get(p)?.start = 0L
+            val l = loops.get(p)
+            if (l != null) l.start = l.start - shift
         }
+        masterStart -= shift
+        lastWritten = 0L
 
         val block = max(64, min(burst, t.bufferSizeInFrames / 2))
         running = true
@@ -159,6 +177,7 @@ object Engine {
         try { mixThread?.join(500) } catch (ignored: Exception) {}
         recordThread = null
         mixThread = null
+        lastWritten = written
         releaseDevices()
         for (p in 0 until PADS) takes.set(p, null)
     }
@@ -305,9 +324,7 @@ object Engine {
                 if (take.released && take.cursor >= take.toIn) takes.compareAndSet(p, take, null)
             } else {
                 if (!take.released && captured - take.fromIn >= maxFrames) {
-                    take.upNanos = System.nanoTime()
-                    take.toIn = take.fromIn + maxFrames
-                    take.released = true
+                    releaseTake(take, inClock.nanosAt(take.fromIn + maxFrames, sampleRate))
                 }
                 if (take.released && captured >= take.toIn) {
                     if (takes.compareAndSet(p, take, null)) finishRecording(p, take)
@@ -317,17 +334,15 @@ object Engine {
     }
 
     private fun finishRecording(p: Int, take: Take) {
-        var from = take.fromIn
-        if (from < captured - ringSize) from = captured - ringSize
+        val from = take.fromQ
         val len = (take.toIn - from).toInt()
         val minFrames = (sampleRate * (MIN_HOLD_NANOS / 1_000_000L) / 1000L).toInt()
         if (len < minFrames) return
         val data = FloatArray(len)
-        var ri = Math.floorMod(from, ringSize.toLong()).toInt()
+        val oldest = captured - ringSize
         for (i in 0 until len) {
-            data[i] = ring[ri]
-            ri++
-            if (ri == ringSize) ri = 0
+            val f = from + i
+            if (f >= oldest && f >= 0 && f < captured) data[i] = ring[(f % ringSize).toInt()]
         }
         val fade = min(len / 4, sampleRate * FADE_MS / 1000)
         for (i in 0 until fade) {
@@ -336,9 +351,61 @@ object Engine {
             data[len - 1 - i] *= g
         }
         val loop = Loop(data)
-        // Position 0 erklingt genau im Moment des Loslassens -> der Loop läuft nahtlos im Rhythmus weiter.
-        loop.start = outClock.frameAt(take.upNanos, sampleRate)
+        if (take.qOut != Take.NO_GRID) {
+            // Startet exakt auf dem Rasterpunkt -> synchron zu allen anderen Loops
+            loop.start = take.qOut
+        } else {
+            // Erster Loop: Position 0 erklingt im Moment des Loslassens und wird zum Taktgeber
+            loop.start = outClock.frameAt(take.upNanos, sampleRate)
+        }
+        if (masterLen == 0L) {
+            masterStart = loop.start
+            masterLen = len.toLong()
+        }
         loops.set(p, loop)
+    }
+
+    /** Wählt die Loop-Länge aus 1/8, 1/4, 1/2, 1, 2, 4, 8 x Taktgeber, die der gehaltenen Zeit am nächsten liegt. */
+    private fun quantizeLen(held: Long): Long {
+        val m = masterLen
+        val maxFrames = sampleRate.toLong() * MAX_SECONDS
+        var best = m
+        var bestErr = Double.MAX_VALUE
+        val h = max(1L, held).toDouble()
+        for (k in -3..3) {
+            val l = if (k >= 0) m shl k else m shr -k
+            if (l < sampleRate / 20 || l > maxFrames) continue
+            val err = abs(kotlin.math.ln(h / l.toDouble()))
+            if (err < bestErr) {
+                bestErr = err
+                best = l
+            }
+        }
+        return best
+    }
+
+    /** Beendet eine neue Aufnahme und rastet sie, falls es schon einen Taktgeber gibt, auf das Raster ein. */
+    private fun releaseTake(take: Take, upNanos: Long) {
+        synchronized(take) {
+            if (take.released) return
+            take.upNanos = upNanos
+            val rawTo = max(take.fromIn, inClock.frameAt(upNanos, sampleRate))
+            val m = masterLen
+            if (take.overdub || m <= 0L) {
+                take.toIn = rawTo
+            } else {
+                val len = quantizeLen(rawTo - take.fromIn)
+                val unit = min(len, m)
+                val ms = masterStart
+                val pressOut = outClock.frameAt(take.downNanos, sampleRate)
+                val qOut = ms + Math.floorDiv(pressOut - ms + unit / 2, unit) * unit
+                val qIn = inClock.frameAt(outClock.nanosAt(qOut, sampleRate), sampleRate)
+                take.qOut = qOut
+                take.fromQ = qIn
+                take.toIn = qIn + len
+            }
+            take.released = true
+        }
     }
 
     // ---------------------------------------------------------------- Wiedergabe
@@ -446,9 +513,7 @@ object Engine {
             takes.compareAndSet(p, take, null)
             return true
         }
-        take.upNanos = now
-        take.toIn = max(take.fromIn, inClock.frameAt(now, sampleRate))
-        take.released = true
+        releaseTake(take, now)
         return false
     }
 
@@ -478,7 +543,20 @@ object Engine {
     fun clear(p: Int) {
         takes.set(p, null)
         loops.set(p, null)
+        var any = false
+        for (i in 0 until PADS) if (loops.get(i) != null || takes.get(i) != null) any = true
+        if (!any) masterLen = 0L
     }
+
+    /** Position im Takt des Taktgebers 0..1, oder -1 wenn es noch keinen gibt. */
+    fun masterProgress(): Float {
+        val m = masterLen
+        if (m <= 0L) return -1f
+        val heard = outClock.frameAt(System.nanoTime(), sampleRate)
+        return Math.floorMod(heard - masterStart, m).toFloat() / m
+    }
+
+    fun masterSeconds(): Float = masterLen.toFloat() / sampleRate
 
     fun state(p: Int): PadState {
         val take = takes.get(p)
