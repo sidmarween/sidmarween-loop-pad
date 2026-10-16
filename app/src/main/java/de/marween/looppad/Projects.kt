@@ -57,6 +57,13 @@ object Projects {
             o.put("slices", sv.slices)
             o.put("bars", sv.bars.toDouble())
             o.put("semi", sv.semi)
+            val na = JSONArray()
+            for (ev in Engine.getNotes(p)) {
+                val e = JSONArray()
+                for (x in ev) e.put(x.toDouble())
+                na.put(e)
+            }
+            o.put("notes", na)
             val d = sv.data
             if (d != null) {
                 val f = "pad_$p.wav"
@@ -110,6 +117,15 @@ object Projects {
             }
         } else null
         Engine.restore(pads, master, j.optDouble("bpm", 0.0).toFloat(), pattern)
+        for (p in 0 until min(Engine.PADS, pa.length())) {
+            val na = pa.getJSONObject(p).optJSONArray("notes") ?: continue
+            val list = ArrayList<FloatArray>()
+            for (q in 0 until na.length()) {
+                val e = na.getJSONArray(q)
+                list.add(FloatArray(e.length()) { e.getDouble(it).toFloat() })
+            }
+            Engine.setNotes(p, list)
+        }
         Engine.selectFx(j.optInt("fxType", 0))
         val kn = j.optJSONArray("knobs")
         if (kn != null) for (k in 0 until min(4, kn.length())) Engine.knobs[k] = kn.getDouble(k).toFloat()

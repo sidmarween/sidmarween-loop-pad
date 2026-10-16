@@ -118,6 +118,7 @@ object Engine {
 
     fun seqClear() {
         for (row in seq) java.util.Arrays.fill(row, 0f)
+        for (p in 0 until PADS) clearNotes(p)
     }
 
     fun seqHas(p: Int, step: Int): Boolean = seq[p][step] > 0f
@@ -166,6 +167,7 @@ object Engine {
                         l.shotStart = f
                     }
                 }
+                triggerNotes(step, n, f, w, bar / STEPS)
             }
             n++
         }
@@ -195,6 +197,7 @@ object Engine {
 
     fun seqHasAny(): Boolean {
         for (row in seq) for (b in row) if (b > 0f) return true
+        for (p in 0 until PADS) if (noteCount(p) > 0) return true
         return false
     }
 
@@ -205,6 +208,7 @@ object Engine {
             takes.set(p, null)
             loops.set(p, null)
             java.util.Arrays.fill(seq[p], 0f)
+            clearNotes(p)
             padOneShot[p] = false
         }
         fixedBpm = bpm
@@ -261,6 +265,33 @@ object Engine {
                 }
             }
         }
+        val stepLen = bar / STEPS
+        for (p in 0 until PADS) {
+            val l = loops.get(p) ?: continue
+            val d = l.data
+            if (d.size < 2) continue
+            for (a in getNotes(p)) {
+                any = true
+                val st = (a[0].toLong() * bar / STEPS).toInt()
+                val rate = 2.0.pow(a[1] / 12.0)
+                val lenF = (a[2] * stepLen).toInt()
+                val rel = (sampleRate * 0.03).toInt()
+                var pos = 0.0
+                for (i in 0 until lenF + rel) {
+                    var i0 = pos.toInt()
+                    if (i0 >= d.size - 1) {
+                        if (l.oneShot) break
+                        pos -= (d.size - 1).toDouble()
+                        i0 = pos.toInt().coerceIn(0, d.size - 2)
+                    }
+                    val fr = (pos - i0).toFloat()
+                    var v = (d[i0] + (d[i0 + 1] - d[i0]) * fr) * a[3]
+                    if (i >= lenF) v *= 1f - (i - lenF).toFloat() / rel
+                    out[(st + i) % bar] += v
+                    pos += rate
+                }
+            }
+        }
         if (!any) return null
         for (i in out.indices) out[i] = softClip(out[i])
         return out
@@ -283,6 +314,9 @@ object Engine {
         var active = false
         var pad = -1
         var id = 0
+        var vel = 1f
+        var wait = 0
+        var offFrame = Long.MAX_VALUE
     }
 
     private val voices = Array(16) { Voice() }
@@ -301,6 +335,9 @@ object Engine {
             v.gain = 1f
             v.releasing = false
             v.pad = pad
+            v.vel = 1f
+            v.wait = 0
+            v.offFrame = Long.MAX_VALUE
             v.id = ++voiceIds
             v.active = true
             return v.id
@@ -328,7 +365,7 @@ object Engine {
     /** Vorhören eines Ausschnitts (Wave-Editor). */
     fun preview(data: FloatArray): Int = startVoice(data, -1, 1.0, false)
 
-    private fun renderVoices(out: FloatArray, bus: FloatArray, tgt: Int, block: Int) {
+    private fun renderVoices(out: FloatArray, bus: FloatArray, tgt: Int, block: Int, w: Long) {
         synchronized(voiceLock) {
             val relStep = 1f / (0.12f * sampleRate)
             for (v in voices) {
@@ -338,6 +375,11 @@ object Engine {
                 val dst = if (v.pad >= 0 && v.pad == tgt) bus else out
                 var peak = 0f
                 for (i in 0 until block) {
+                    if (v.wait > 0) {
+                        v.wait--
+                        continue
+                    }
+                    if (!v.releasing && w + i >= v.offFrame) v.releasing = true
                     var i0 = v.pos.toInt()
                     if (i0 >= len - 1) {
                         if (v.loop) {
@@ -349,7 +391,7 @@ object Engine {
                         }
                     }
                     val fr = (v.pos - i0).toFloat()
-                    val sm = (d[i0] + (d[i0 + 1] - d[i0]) * fr) * v.gain
+                    val sm = (d[i0] + (d[i0 + 1] - d[i0]) * fr) * v.gain * v.vel
                     dst[i] += sm
                     val a = abs(sm)
                     if (a > peak) peak = a
@@ -363,6 +405,83 @@ object Engine {
                     v.pos += v.rate
                 }
                 if (v.pad in 0 until PADS) levels[v.pad] = max(levels[v.pad], peak)
+            }
+        }
+    }
+
+    // ---------------------------------------------------------------- Noten-Pattern (Tastatur-Aufnahme)
+
+    /** Eine aufgenommene Note: Schritt, Halbton, Länge in Schritten, Lautstärke. */
+    class NoteEv(val step: Int, val semi: Int, var len: Int, val vel: Float, val startN: Long, var validFrom: Long)
+
+    private val notes = Array(PADS) { ArrayList<NoteEv>() }
+    private val notesLock = Any()
+
+    /** Beginnt eine Note in der Pattern-Aufnahme (nur wenn REC Pattern läuft). */
+    fun recordNoteOn(p: Int, semi: Int): NoteEv? {
+        if (!seqRecording || !seqPlaying || p !in 0 until PADS) return null
+        val bar = seqBar()
+        val origin = seqStart()
+        val heard = outClock.frameAt(System.nanoTime(), sampleRate)
+        val n = Math.floorDiv((heard - origin) * STEPS + bar / 2, bar)
+        val ev = NoteEv(Math.floorMod(n, STEPS.toLong()).toInt(), semi, 1, 1f, n, n + 1)
+        synchronized(notesLock) {
+            notes[p].removeAll { it.step == ev.step && it.semi == semi }
+            notes[p].add(ev)
+        }
+        return ev
+    }
+
+    fun recordNoteOff(ev: NoteEv) {
+        val bar = seqBar()
+        val origin = seqStart()
+        val heard = outClock.frameAt(System.nanoTime(), sampleRate)
+        val nEnd = Math.floorDiv((heard - origin) * STEPS + bar / 2, bar)
+        ev.len = (nEnd - ev.startN).toInt().coerceIn(1, STEPS)
+    }
+
+    fun noteAt(p: Int, step: Int): Boolean {
+        if (p !in 0 until PADS) return false
+        synchronized(notesLock) { return notes[p].any { it.step == step } }
+    }
+
+    fun noteCount(p: Int): Int = if (p in 0 until PADS) synchronized(notesLock) { notes[p].size } else 0
+
+    /** Für Projekte: [Schritt, Halbton, Länge, Lautstärke] je Note. */
+    fun getNotes(p: Int): List<FloatArray> = synchronized(notesLock) {
+        notes[p].map { floatArrayOf(it.step.toFloat(), it.semi.toFloat(), it.len.toFloat(), it.vel) }
+    }
+
+    fun setNotes(p: Int, list: List<FloatArray>) {
+        synchronized(notesLock) {
+            notes[p].clear()
+            for (a in list) if (a.size >= 4) notes[p].add(NoteEv(a[0].toInt(), a[1].toInt(), a[2].toInt(), a[3], 0L, Long.MIN_VALUE))
+        }
+    }
+
+    private fun clearNotes(p: Int) {
+        synchronized(notesLock) { notes[p].clear() }
+    }
+
+    /** Spielt die Noten eines Schritts sample-genau über die Stimmen. */
+    private fun triggerNotes(step: Int, n: Long, f: Long, w: Long, stepLen: Long) {
+        synchronized(notesLock) {
+            for (p in 0 until PADS) {
+                val list = notes[p]
+                if (list.isEmpty()) continue
+                val l = loops.get(p) ?: continue
+                for (ev in list) {
+                    if (ev.step != step || n < ev.validFrom) continue
+                    val id = startVoice(l.data, p, 2.0.pow(ev.semi / 12.0), !l.oneShot)
+                    if (id < 0) continue
+                    synchronized(voiceLock) {
+                        for (v in voices) if (v.id == id) {
+                            v.wait = (f - w).toInt().coerceAtLeast(0)
+                            v.vel = ev.vel
+                            v.offFrame = f + ev.len * stepLen
+                        }
+                    }
+                }
             }
         }
     }
@@ -1070,7 +1189,7 @@ object Engine {
                 loop.fade = fg
                 levels[p] = max(if (mute) peak * 0.25f else peak, levels[p] * 0.88f)
             }
-            renderVoices(out, bus, tgt, block)
+            renderVoices(out, bus, tgt, block, w)
             val f = fx
             if (f != null) {
                 f.process(
@@ -1298,6 +1417,7 @@ object Engine {
         takes.set(p, null)
         loops.set(p, null)
         java.util.Arrays.fill(seq[p], 0f)
+        clearNotes(p)
         var any = false
         for (i in 0 until PADS) {
             val l = loops.get(i)

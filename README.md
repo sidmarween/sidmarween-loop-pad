@@ -34,6 +34,7 @@ Der Effekt wirkt auf den **ganzen Song** oder **nur auf ein Pad**: im •••-
 ## 🎹 Tastatur
 
 Der kleine Klavier-Knopf unter jedem Pad blendet eine Tastatur (2 Oktaven, Oktave −/+) ein: das Sample wird höher/tiefer gespielt, mehrere Finger = Akkord. Mit „📌 Ton fürs Pad“ wird der gespielte Ton zur festen Tonhöhe des Pads (gilt für ⚡-Antippen und den Sequenzer).
+Unten in der Tastatur: **● REC** (Pattern oder Song), **▶** und **■**. Im Pattern-Modus werden gespielte Töne und Akkorde mit Tonhöhe und Länge auf das 16-Schritt-Raster gerastet und laufen im Sequenzer mit (Punkt oben im Schritt = Note).
 
 ## 〰 Wave-Editor
 

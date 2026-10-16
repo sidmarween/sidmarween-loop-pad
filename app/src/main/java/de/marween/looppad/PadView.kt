@@ -908,6 +908,10 @@ class PadView(context: Context) : View(context) {
                 tmpRect.set(s.left, s.bottom - s.height() * Engine.seqVel(sel, k).coerceIn(0.08f, 1f), s.right, s.bottom)
                 canvas.drawRoundRect(tmpRect, dp(3f), dp(3f), fillPaint)
             }
+            if (sel >= 0 && Engine.noteAt(sel, k)) {
+                dotPaint.color = if (light) Color.BLACK else Color.WHITE
+                canvas.drawCircle(s.centerX(), s.top + dp(5f), dp(2.6f), dotPaint)
+            }
             strokePaint.strokeWidth = dp(if (playing) 2f else 1f)
             strokePaint.color = if (playing) Color.WHITE else alpha(sc, 0.5f)
             canvas.drawRoundRect(s, dp(3f), dp(3f), strokePaint)
@@ -1507,14 +1511,7 @@ class PadView(context: Context) : View(context) {
                 if (seqRect.contains(x, y)) {
                     when {
                         recBtn.contains(x, y) -> {
-                            when {
-                                Engine.songRecording -> onSongStopped?.invoke()
-                                Engine.seqRecording -> {
-                                    Engine.seqToggleRec()
-                                    onPatternStopped?.invoke()
-                                }
-                                else -> onRecMenu?.invoke()
-                            }
+                            recPressed()
                             burst(x, y, Color.rgb(255, 45, 70), 18, 220f)
                         }
                         playBtn.contains(x, y) -> {
@@ -2400,6 +2397,10 @@ class PadView(context: Context) : View(context) {
                 tmpRect.set(s.left, s.bottom - s.height() * Engine.seqVel(sel, k).coerceIn(0.08f, 1f), s.right, s.bottom)
                 canvas.drawRoundRect(tmpRect, dp(3f), dp(3f), fillPaint)
             }
+            if (sel >= 0 && Engine.noteAt(sel, k)) {
+                dotPaint.color = if (light) Color.BLACK else Color.WHITE
+                canvas.drawCircle(s.centerX(), s.top + dp(5f), dp(2.6f), dotPaint)
+            }
             strokePaint.strokeWidth = dp(if (playing) 2.5f else if (comic) 1.6f else 1f)
             strokePaint.color = if (playing) (if (comic) COMIC_MAGENTA else Color.WHITE) else if (comic) Color.BLACK else alpha(R_LCD, 0.5f)
             canvas.drawRoundRect(s, dp(3f), dp(3f), strokePaint)
@@ -3120,6 +3121,10 @@ class PadView(context: Context) : View(context) {
                 tmpRect.set(s.left, s.bottom - s.height() * Engine.seqVel(sel, k).coerceIn(0.08f, 1f), s.right, s.bottom)
                 canvas.drawRoundRect(tmpRect, dp(3f), dp(3f), fillPaint)
             }
+            if (sel >= 0 && Engine.noteAt(sel, k)) {
+                dotPaint.color = if (light) Color.BLACK else Color.WHITE
+                canvas.drawCircle(s.centerX(), s.top + dp(5f), dp(2.6f), dotPaint)
+            }
             strokePaint.strokeWidth = dp(if (playing) 2f else 1f)
             strokePaint.color = if (playing) txt else alpha(txt, 0.3f)
             canvas.drawRoundRect(s, dp(3f), dp(3f), strokePaint)
@@ -3184,6 +3189,23 @@ class PadView(context: Context) : View(context) {
 
     // ================================================================ Tastatur
 
+    /** REC-Knopf (Sequenzer und Tastatur): Aufnahme beenden oder Auswahl Pattern/Song öffnen. */
+    private fun recPressed() {
+        when {
+            Engine.songRecording -> onSongStopped?.invoke()
+            Engine.seqRecording -> {
+                Engine.seqToggleRec()
+                onPatternStopped?.invoke()
+            }
+            else -> onRecMenu?.invoke()
+        }
+    }
+
+    private val kbRec = RectF()
+    private val kbPlay = RectF()
+    private val kbStop = RectF()
+    private val kbEvents = HashMap<Int, Engine.NoteEv>()
+
     private var kbPad = -1
     private var kbOctave = 0
     private var kbTake = false
@@ -3208,8 +3230,12 @@ class PadView(context: Context) : View(context) {
         kbClose.set(kbRect.right - dp(8f) - hh, kbRect.top + dp(8f), kbRect.right - dp(8f), kbRect.top + dp(8f) + hh)
         kbOctUp.set(kbClose.left - dp(8f) - hh, kbClose.top, kbClose.left - dp(8f), kbClose.bottom)
         kbOctDown.set(kbOctUp.left - dp(6f) - hh, kbClose.top, kbOctUp.left - dp(6f), kbClose.bottom)
-        kbTakeBtn.set(kbRect.left + dp(8f), kbRect.bottom - dp(8f) - dp(34f), kbRect.left + dp(8f) + dp(170f), kbRect.bottom - dp(8f))
-        kbKeysRect.set(kbRect.left + dp(8f), kbClose.bottom + dp(10f), kbRect.right - dp(8f), kbTakeBtn.top - dp(10f))
+        kbTakeBtn.set(kbRect.left + dp(8f), kbRect.bottom - dp(8f) - dp(38f), kbRect.left + dp(8f) + dp(150f), kbRect.bottom - dp(8f))
+        val tb = dp(46f)
+        kbStop.set(kbRect.right - dp(8f) - tb, kbTakeBtn.top, kbRect.right - dp(8f), kbTakeBtn.bottom)
+        kbPlay.set(kbStop.left - dp(6f) - tb, kbTakeBtn.top, kbStop.left - dp(6f), kbTakeBtn.bottom)
+        kbRec.set(kbPlay.left - dp(6f) - tb, kbTakeBtn.top, kbPlay.left - dp(6f), kbTakeBtn.bottom)
+        kbKeysRect.set(kbRect.left + dp(8f), kbClose.bottom + dp(10f), kbRect.right - dp(8f), kbTakeBtn.top - dp(16f))
     }
 
     private fun closeKeyboard() {
@@ -3253,6 +3279,10 @@ class PadView(context: Context) : View(context) {
     private fun kbNoteOn(pid: Int, semi: Int) {
         kbPointers[pid] = semi
         kbVoices[pid] = Engine.noteOn(kbPad, semi)
+        Engine.recordNoteOn(kbPad, semi)?.let {
+            kbEvents[pid] = it
+            Engine.seqSelected = kbPad
+        }
         kbLastSemi = semi
         if (kbTake) Engine.setPadPitch(kbPad, semi)
         recountHeld()
@@ -3260,6 +3290,7 @@ class PadView(context: Context) : View(context) {
 
     private fun kbNoteOff(pid: Int) {
         kbVoices.remove(pid)?.let { Engine.noteOff(it) }
+        kbEvents.remove(pid)?.let { Engine.recordNoteOff(it) }
         kbPointers.remove(pid)
         recountHeld()
     }
@@ -3285,6 +3316,14 @@ class PadView(context: Context) : View(context) {
                     kbTakeBtn.contains(x, y) -> {
                         kbTake = !kbTake
                         if (kbTake) Engine.setPadPitch(kbPad, kbLastSemi)
+                    }
+                    kbRec.contains(x, y) -> recPressed()
+                    kbPlay.contains(x, y) -> Engine.seqPlay()
+                    kbStop.contains(x, y) -> {
+                        val wasPatternRec = Engine.seqRecording
+                        Engine.seqStop()
+                        if (Engine.songRecording) onSongStopped?.invoke()
+                        else if (wasPatternRec) onPatternStopped?.invoke()
                     }
                     else -> {
                         val k = keyAt(x, y)
@@ -3371,11 +3410,20 @@ class PadView(context: Context) : View(context) {
         smallBtn(canvas, kbOctDown, "−", false, cols)
         smallBtn(canvas, kbOctUp, "+", false, cols)
         smallBtn(canvas, kbClose, "✕", false, cols)
-        smallBtn(canvas, kbTakeBtn, if (kbTake) "📌 Ton fürs Pad: AN" else "📌 Ton fürs Pad: AUS", kbTake, cols)
+        smallBtn(canvas, kbTakeBtn, if (kbTake) "📌 Ton fürs Pad: AN" else "📌 Ton fürs Pad", kbTake, cols)
+        val recOn = Engine.seqRecording || Engine.songRecording
+        smallBtn(canvas, kbRec, if (Engine.songRecording) "● S" else if (Engine.seqRecording) "● P" else "●", recOn, intArrayOf(cols[0], cols[1], Color.rgb(225, 40, 50)))
+        smallBtn(canvas, kbPlay, "▶", Engine.seqPlaying, cols)
+        smallBtn(canvas, kbStop, "■", false, cols)
         textPaint.textAlign = Paint.Align.LEFT
         textPaint.textSize = dp(9.5f)
         textPaint.color = alpha(cols[1], 0.6f)
-        canvas.drawText("Mehrere Finger = Akkord", kbTakeBtn.right + dp(10f), kbTakeBtn.centerY() + dp(3f), textPaint)
+        val info = when {
+            Engine.songRecording -> String.format(Locale.GERMANY, "Song %d:%02d", Engine.songSeconds().toInt() / 60, Engine.songSeconds().toInt() % 60)
+            Engine.seqRecording -> "Pattern: Töne werden aufgenommen"
+            else -> "Mehrere Finger = Akkord"
+        }
+        canvas.drawText(info, kbRect.left + dp(14f), kbTakeBtn.top - dp(4f), textPaint)
         textPaint.textAlign = Paint.Align.CENTER
 
         // Tasten
