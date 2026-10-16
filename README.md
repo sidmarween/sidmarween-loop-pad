@@ -13,6 +13,13 @@ Android-App für Musiker: 16 Neon-Pads, XY-Effektfläche und Drehregler im Kaoss
 Oben rechts der **Farbpunkte-Knopf**: Design wählen – NEON (Regenbogen), GLOW (Orange glühend), STUDIO (Grau & Orange), HUD (Tech-Linien). Die Wahl wird gespeichert.
 Das **Display** in der Kopfzeile zeigt den aktuellen Effekt, die X/Y-Werte und den Takt. Antippen öffnet die Effektliste.
 
+## Sequenzer
+
+Statt der unteren Pad-Reihe: 16-Schritt-Sequenzer, synchron zum Takt (ohne Takt: 120 BPM).
+- **● REC** – Aufnahme an (startet auch die Wiedergabe). Angetippte ⚡-One-Shot-Pads landen auf dem nächsten Schritt.
+- **▶ PLAY** – Pattern abspielen · **■ STOP** – anhalten · **STOP halten** – Pattern leeren
+- **Schritte antippen** – Schritt für das zuletzt gespielte ⚡-Pad an/aus
+
 ## Pad-Modi
 
 Im **•••**-Menü jedes Pads: **∞ LOOP** (läuft im Takt endlos, Regenbogen-Leuchten) oder **⚡ ONE SHOT** (spielt bei jedem Antippen einmal, Feuer-Leuchten).

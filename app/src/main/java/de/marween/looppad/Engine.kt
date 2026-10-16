@@ -72,6 +72,84 @@ object Engine {
 
     enum class PadState { EMPTY, RECORDING, PLAYING, MUTED, OVERDUB, ONESHOT }
 
+    // ---------------------------------------------------------------- Sequenzer
+    const val STEPS = 16
+    private val seq = Array(PADS) { BooleanArray(STEPS) }
+    @Volatile var seqPlaying = false
+        private set
+    @Volatile var seqRecording = false
+        private set
+    /** Zuletzt angeschlagenes ONE-SHOT-Pad – dessen Schritte zeigt und bearbeitet der Sequenzer. */
+    @Volatile var seqSelected = -1
+    @Volatile private var seqOrigin = 0L
+
+    private fun seqBar(): Long = if (masterLen > 0L) masterLen else sampleRate * 2L
+    private fun seqStart(): Long = if (masterLen > 0L) masterStart else seqOrigin
+    private fun stepFrame(origin: Long, bar: Long, n: Long): Long = origin + Math.floorDiv(n * bar, STEPS.toLong())
+
+    fun seqPlay() {
+        if (seqPlaying) return
+        seqOrigin = written + sampleRate / 50
+        seqPlaying = true
+    }
+
+    fun seqStop() {
+        seqPlaying = false
+        seqRecording = false
+    }
+
+    fun seqToggleRec() {
+        seqRecording = !seqRecording
+        if (seqRecording) seqPlay()
+    }
+
+    fun seqClear() {
+        for (row in seq) java.util.Arrays.fill(row, false)
+    }
+
+    fun seqHas(p: Int, step: Int): Boolean = seq[p][step]
+
+    fun seqCount(step: Int): Int {
+        var c = 0
+        for (p in 0 until PADS) if (seq[p][step]) c++
+        return c
+    }
+
+    fun seqToggle(p: Int, step: Int) {
+        if (p in 0 until PADS && step in 0 until STEPS) seq[p][step] = !seq[p][step]
+    }
+
+    /** Aktuell hörbarer Schritt 0..15, oder -1 wenn gestoppt. */
+    fun seqCurrentStep(): Int {
+        if (!seqPlaying) return -1
+        val bar = seqBar()
+        val rel = outClock.frameAt(System.nanoTime(), sampleRate) - seqStart()
+        if (rel < 0) return -1
+        return Math.floorMod(Math.floorDiv(rel * STEPS, bar), STEPS.toLong()).toInt()
+    }
+
+    /** Wird im Mischer-Thread pro Block aufgerufen: schlägt die ONE SHOTS der fälligen Schritte sample-genau an. */
+    private fun runSequencer(w: Long, block: Int) {
+        if (!seqPlaying) return
+        val bar = seqBar()
+        if (bar <= 0L) return
+        val origin = seqStart()
+        var n = -Math.floorDiv(-(w - origin) * STEPS, bar) // ceil
+        while (true) {
+            val f = stepFrame(origin, bar, n)
+            if (f >= w + block) break
+            if (f >= w) {
+                val step = Math.floorMod(n, STEPS.toLong()).toInt()
+                for (p in 0 until PADS) {
+                    if (!seq[p][step]) continue
+                    val l = loops.get(p)
+                    if (l != null && l.oneShot) l.shotStart = f
+                }
+            }
+            n++
+        }
+    }
+
     /** Modus je Pad: true = ONE SHOT, false = LOOP. */
     val padOneShot = BooleanArray(PADS)
 
@@ -451,6 +529,7 @@ object Engine {
         while (running) {
             java.util.Arrays.fill(out, 0f)
             val w = written
+            runSequencer(w, block)
             for (p in 0 until PADS) {
                 val loop = loops.get(p)
                 if (loop == null) {
@@ -579,6 +658,17 @@ object Engine {
         if (!running || takes.get(p) != null) return false
         val loop = loops.get(p)
         if (loop != null && loop.oneShot) {
+            seqSelected = p
+            if (seqRecording && seqPlaying) {
+                val bar = seqBar()
+                val origin = seqStart()
+                val heard = outClock.frameAt(System.nanoTime(), sampleRate)
+                val n = Math.floorDiv((heard - origin) * STEPS + bar / 2, bar)
+                val f = stepFrame(origin, bar, n)
+                seq[p][Math.floorMod(n, STEPS.toLong()).toInt()] = true
+                // Liegt der Rasterpunkt noch vor uns, spielt ihn gleich der Sequenzer – kein Doppelschlag
+                if (f >= written) return true
+            }
             loop.shotStart = written
             return true
         }
@@ -709,6 +799,7 @@ object Engine {
     fun clear(p: Int) {
         takes.set(p, null)
         loops.set(p, null)
+        java.util.Arrays.fill(seq[p], false)
         var any = false
         for (i in 0 until PADS) {
             val l = loops.get(i)

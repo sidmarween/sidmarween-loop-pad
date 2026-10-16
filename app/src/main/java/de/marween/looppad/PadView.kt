@@ -74,6 +74,13 @@ class PadView(context: Context) : View(context) {
     }
     private val muteBtn = RectF()
     private val designBtn = RectF()
+    private val seqRect = RectF()
+    private val stepRects = Array(Engine.STEPS) { RectF() }
+    private val recBtn = RectF()
+    private val playBtn = RectF()
+    private val stopBtn = RectF()
+    private var stopDownMs = 0L
+    private var stopPointer = -1
     private val displayRect = RectF()
     var onDesignMenu: (() -> Unit)? = null
 
@@ -209,13 +216,14 @@ class PadView(context: Context) : View(context) {
         val colGap = dp(10f)
         val rowGap = dp(4f)
         val mb = dp(20f)
-        var cell = min((inner - 3 * colGap) / 4f, (avail * 0.62f - 3 * rowGap - 4 * mb) / 4f)
-        var gridH = 4 * cell + 4 * mb + 3 * rowGap
+        val seqH = dp(84f)
+        var cell = min((inner - 3 * colGap) / 4f, (avail * 0.66f - seqH - gap - 2 * rowGap - 3 * mb) / 3f)
+        var gridH = 3 * cell + 3 * mb + 2 * rowGap + gap + seqH
         var xyH = avail - gridH - gap
         val minXy = dp(110f)
         if (xyH < minXy) {
-            cell -= (minXy - xyH) / 4f
-            gridH = 4 * cell + 4 * mb + 3 * rowGap
+            cell -= (minXy - xyH) / 3f
+            gridH = 3 * cell + 3 * mb + 2 * rowGap + gap + seqH
             xyH = minXy
         }
         xyRect.set(margin, contentTop, w - margin, contentTop + xyH)
@@ -229,6 +237,11 @@ class PadView(context: Context) : View(context) {
             else -> cell * 0.17f
         }
         for (i in 0 until Engine.PADS) {
+            if (i >= VISIBLE_PADS) {
+                padRects[i].setEmpty()
+                moreRects[i].setEmpty()
+                continue
+            }
             val row = i / 4
             val col = i % 4
             val x = left + col * (cell + colGap)
@@ -240,6 +253,25 @@ class PadView(context: Context) : View(context) {
             padMeasures[i].setPath(path, true)
             padLengths[i] = padMeasures[i].length
         }
+        // Sequenzer an Stelle der unteren Pad-Reihe
+        val seqTop = gridTop + 3 * (cell + mb + rowGap) - rowGap + gap
+        seqRect.set(left, seqTop, left + gridW, seqTop + seqH)
+        val sp = dp(8f)
+        val stripH = dp(30f)
+        val sgap = dp(3f)
+        val groupGap = dp(5f)
+        val stepW = (seqRect.width() - 2 * sp - 15 * sgap - 3 * groupGap) / 16f
+        var sx = seqRect.left + sp
+        for (k in 0 until Engine.STEPS) {
+            stepRects[k].set(sx, seqRect.top + sp, sx + stepW, seqRect.top + sp + stripH)
+            sx += stepW + sgap + if (k % 4 == 3) groupGap else 0f
+        }
+        val bTop = seqRect.top + sp + stripH + dp(6f)
+        val bH = seqRect.bottom - sp - bTop
+        val bW = min(dp(52f), (seqRect.width() - 2 * sp) / 6f)
+        recBtn.set(seqRect.left + sp, bTop, seqRect.left + sp + bW, bTop + bH)
+        playBtn.set(recBtn.right + dp(8f), bTop, recBtn.right + dp(8f) + bW, bTop + bH)
+        stopBtn.set(playBtn.right + dp(8f), bTop, playBtn.right + dp(8f) + bW, bTop + bH)
         buildHudLines(w, h)
     }
 
@@ -341,10 +373,11 @@ class PadView(context: Context) : View(context) {
         drawKnobs(canvas)
         drawFxButton(canvas, dt)
         drawXy(canvas, dt)
-        for (i in 0 until Engine.PADS) {
+        for (i in 0 until VISIBLE_PADS) {
             drawPad(canvas, i, dt)
             drawMore(canvas, i)
         }
+        drawSequencer(canvas)
         drawShocks(canvas, dt)
         drawParticles(canvas, dt)
         drawFooter(canvas)
@@ -763,6 +796,113 @@ class PadView(context: Context) : View(context) {
         }
         val d = dp(5f)
         for (k in -1..1) canvas.drawCircle(r.centerX() + k * d, r.centerY(), dp(1.6f), dotPaint)
+    }
+
+    // ---------------------------------------------------------------- Sequenzer
+
+    private fun drawSequencer(canvas: Canvas) {
+        val r = seqRect
+        if (r.width() <= 0f) return
+        val neonMode = theme == NEON
+        val acc = if (neonMode) neon(time * 30f) else ORANGE
+        val rr = if (theme == HUD) dp(6f) else dp(12f)
+        // Panel
+        fillPaint.shader = null
+        fillPaint.color = when (theme) {
+            NEON -> alpha(Color.BLACK, 0.45f)
+            STUDIO -> Color.rgb(40, 43, 47)
+            HUD -> Color.rgb(13, 17, 23)
+            else -> Color.rgb(18, 19, 23)
+        }
+        canvas.drawRoundRect(r, rr, rr, fillPaint)
+        if (neonMode) strokePaint.shader = sweep(r.centerX(), r.centerY(), time * 40f, false)
+        strokePaint.strokeWidth = dp(1.5f)
+        strokePaint.color = if (neonMode) alpha(Color.WHITE, 0.8f) else alpha(ORANGE, 0.75f)
+        canvas.drawRoundRect(r, rr, rr, strokePaint)
+        strokePaint.shader = null
+
+        // Schritte
+        val cur = Engine.seqCurrentStep()
+        val sel = Engine.seqSelected
+        for (k in 0 until Engine.STEPS) {
+            val s = stepRects[k]
+            val sc = if (neonMode) neon(k * 22.5f + time * 20f) else if (k % 4 == 0) AMBER else ORANGE
+            val on = sel >= 0 && Engine.seqHas(sel, k)
+            val count = Engine.seqCount(k)
+            val playing = k == cur
+            fillPaint.color = when {
+                on -> alpha(sc, if (playing) 1f else 0.8f)
+                playing -> alpha(Color.WHITE, 0.35f)
+                else -> alpha(Color.WHITE, if (k % 4 == 0) 0.10f else 0.05f)
+            }
+            canvas.drawRoundRect(s, dp(3f), dp(3f), fillPaint)
+            strokePaint.strokeWidth = dp(if (playing) 2f else 1f)
+            strokePaint.color = if (playing) Color.WHITE else alpha(sc, 0.5f)
+            canvas.drawRoundRect(s, dp(3f), dp(3f), strokePaint)
+            // Treffer anderer Pads als Punkte
+            val others = count - (if (on) 1 else 0)
+            if (others > 0) {
+                dotPaint.color = alpha(Color.WHITE, 0.85f)
+                for (d in 0 until min(others, 3)) canvas.drawCircle(s.centerX(), s.bottom - dp(4f) - d * dp(5f), dp(1.6f), dotPaint)
+            }
+        }
+
+        // Transport-Knöpfe
+        val blink = 0.5f + 0.5f * sin(time * 8f)
+        val red = Color.rgb(255, 45, 70)
+        val green = Color.rgb(60, 230, 120)
+        transportButton(canvas, recBtn, Engine.seqRecording, red, blink)
+        transportButton(canvas, playBtn, Engine.seqPlaying, if (neonMode) green else ORANGE, 1f)
+        transportButton(canvas, stopBtn, false, Color.WHITE, 0f)
+        // Symbole
+        val ic = min(recBtn.height(), recBtn.width()) * 0.22f
+        dotPaint.color = if (Engine.seqRecording) Color.WHITE else red
+        canvas.drawCircle(recBtn.centerX(), recBtn.centerY(), ic, dotPaint)
+        val tri = Path()
+        tri.moveTo(playBtn.centerX() - ic * 0.8f, playBtn.centerY() - ic)
+        tri.lineTo(playBtn.centerX() + ic * 1.1f, playBtn.centerY())
+        tri.lineTo(playBtn.centerX() - ic * 0.8f, playBtn.centerY() + ic)
+        tri.close()
+        fillPaint.color = if (Engine.seqPlaying) Color.WHITE else (if (neonMode) green else ORANGE)
+        canvas.drawPath(tri, fillPaint)
+        fillPaint.color = alpha(Color.WHITE, 0.9f)
+        canvas.drawRect(stopBtn.centerX() - ic * 0.9f, stopBtn.centerY() - ic * 0.9f, stopBtn.centerX() + ic * 0.9f, stopBtn.centerY() + ic * 0.9f, fillPaint)
+
+        // Info rechts
+        val ix = stopBtn.right + dp(10f)
+        textPaint.textAlign = Paint.Align.LEFT
+        textPaint.textSize = dp(11f)
+        textPaint.color = acc
+        val head = when {
+            Engine.seqRecording -> "● REC"
+            Engine.seqPlaying -> "▶ SEQ"
+            else -> "SEQUENZER"
+        }
+        canvas.drawText(head, ix, recBtn.top + dp(13f), textPaint)
+        textPaint.textSize = dp(9.5f)
+        textPaint.color = alpha(Color.WHITE, 0.65f)
+        val sub = if (sel >= 0) "Pad ${sel + 1}: Schritte tippen" else "⚡-Pad antippen"
+        canvas.drawText(sub, ix, recBtn.top + dp(27f), textPaint)
+        canvas.drawText("STOP halten = leeren", ix, recBtn.top + dp(40f), textPaint)
+        textPaint.textAlign = Paint.Align.CENTER
+    }
+
+    private fun transportButton(canvas: Canvas, r: RectF, active: Boolean, c: Int, blink: Float) {
+        val rr = dp(8f)
+        fillPaint.shader = null
+        fillPaint.color = if (active) alpha(c, 0.35f + 0.35f * blink) else when (theme) {
+            STUDIO -> Color.rgb(58, 61, 67)
+            HUD -> Color.rgb(17, 22, 30)
+            NEON -> alpha(Color.WHITE, 0.06f)
+            else -> Color.rgb(26, 27, 33)
+        }
+        canvas.drawRoundRect(r, rr, rr, fillPaint)
+        strokePaint.strokeWidth = dp(5f)
+        strokePaint.color = alpha(c, if (active) 0.35f else 0.1f)
+        canvas.drawRoundRect(r, rr, rr, strokePaint)
+        strokePaint.strokeWidth = dp(1.4f)
+        strokePaint.color = alpha(c, if (active) 1f else 0.7f)
+        canvas.drawRoundRect(r, rr, rr, strokePaint)
     }
 
     private fun drawShocks(canvas: Canvas, dt: Float) {
@@ -1215,7 +1355,7 @@ class PadView(context: Context) : View(context) {
     // ---------------------------------------------------------------- Touch
 
     private fun hitPad(x: Float, y: Float): Int {
-        for (i in 0 until Engine.PADS) if (padRects[i].contains(x, y)) return i
+        for (i in 0 until VISIBLE_PADS) if (padRects[i].contains(x, y)) return i
         return -1
     }
 
@@ -1268,6 +1408,37 @@ class PadView(context: Context) : View(context) {
                         return true
                     }
                 }
+                if (seqRect.contains(x, y)) {
+                    when {
+                        recBtn.contains(x, y) -> {
+                            Engine.seqToggleRec()
+                            burst(x, y, Color.rgb(255, 45, 70), 18, 220f)
+                        }
+                        playBtn.contains(x, y) -> {
+                            Engine.seqPlay()
+                            burst(x, y, if (theme == NEON) Color.rgb(60, 230, 120) else ORANGE, 18, 220f)
+                        }
+                        stopBtn.contains(x, y) -> {
+                            Engine.seqStop()
+                            stopPointer = id
+                            stopDownMs = SystemClock.uptimeMillis()
+                        }
+                        else -> {
+                            for (k in 0 until Engine.STEPS) {
+                                val sr = stepRects[k]
+                                if (x >= sr.left - dp(2f) && x <= sr.right + dp(2f) && y >= sr.top - dp(6f) && y <= sr.bottom + dp(6f)) {
+                                    if (Engine.seqSelected >= 0) {
+                                        Engine.seqToggle(Engine.seqSelected, k)
+                                        burst(sr.centerX(), sr.centerY(), padAccent(Engine.seqSelected), 8, 140f)
+                                    }
+                                    break
+                                }
+                            }
+                        }
+                    }
+                    performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+                    return true
+                }
                 if (xyRect.contains(x, y)) {
                     if (xyPointer < 0) {
                         xyPointer = id
@@ -1277,7 +1448,7 @@ class PadView(context: Context) : View(context) {
                     }
                     return true
                 }
-                for (i in 0 until Engine.PADS) {
+                for (i in 0 until VISIBLE_PADS) {
                     val mr = moreRects[i]
                     // etwas großzügigere Trefferfläche für den kleinen Knopf
                     if (x >= mr.left - dp(6f) && x <= mr.right + dp(6f) && y >= mr.top - dp(4f) && y <= mr.bottom + dp(4f)) {
@@ -1326,6 +1497,15 @@ class PadView(context: Context) : View(context) {
             MotionEvent.ACTION_UP, MotionEvent.ACTION_POINTER_UP -> {
                 val idx = e.actionIndex
                 val upId = e.getPointerId(idx)
+                if (upId == stopPointer) {
+                    stopPointer = -1
+                    if (SystemClock.uptimeMillis() - stopDownMs >= 600L) {
+                        Engine.seqClear()
+                        performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+                        burst(stopBtn.centerX(), stopBtn.centerY(), Color.WHITE, 30, 300f)
+                    }
+                    return true
+                }
                 if (upId == fxPointer) {
                     fxPointer = -1
                     removeCallbacks(fxLongPress)
@@ -1393,6 +1573,7 @@ class PadView(context: Context) : View(context) {
     companion object {
         private val BRAND_ORANGE = Color.rgb(255, 95, 0)
 
+        const val VISIBLE_PADS = 12
         const val NEON = 0
         const val GLOW = 1
         const val STUDIO = 2
