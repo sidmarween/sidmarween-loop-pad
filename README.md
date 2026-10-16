@@ -8,6 +8,11 @@ Android-App für Musiker: 16 Neon-Pads, XY-Effektfläche und Drehregler im Kaoss
 - **CLEAR**, dann Pad antippen – Loop löschen.
 - **ALLE STUMM / ALLE AN** – alles auf einmal.
 
+## Designs & Display
+
+Oben rechts der **Farbpunkte-Knopf**: Design wählen – NEON (Regenbogen), GLOW (Orange glühend), STUDIO (Grau & Orange), HUD (Tech-Linien). Die Wahl wird gespeichert.
+Das **Display** in der Kopfzeile zeigt den aktuellen Effekt, die X/Y-Werte und den Takt. Antippen öffnet die Effektliste.
+
 ## Pad-Modi
 
 Im **•••**-Menü jedes Pads: **∞ LOOP** (läuft im Takt endlos, Regenbogen-Leuchten) oder **⚡ ONE SHOT** (spielt bei jedem Antippen einmal, Feuer-Leuchten).

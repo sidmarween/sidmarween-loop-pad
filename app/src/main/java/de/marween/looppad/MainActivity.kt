@@ -37,6 +37,8 @@ class MainActivity : Activity() {
         pads.onMessageTap = { onMessageTapped() }
         pads.onPadMenu = { p -> showPadMenu(p) }
         pads.onFxList = { showFxList() }
+        pads.onDesignMenu = { showDesigns() }
+        pads.theme = getSharedPreferences("marvpad", MODE_PRIVATE).getInt("design", PadView.GLOW)
         setContentView(pads)
         hideSystemBars()
     }
@@ -161,6 +163,18 @@ class MainActivity : Activity() {
                         runOnUiThread { toast("Laden fehlgeschlagen: ${e.message ?: e}") }
                     }
                 }.start()
+            }
+            .setNegativeButton("Abbrechen", null)
+            .show()
+    }
+
+    private fun showDesigns() {
+        AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
+            .setTitle("Design wählen")
+            .setSingleChoiceItems(PadView.DESIGN_NAMES, pads.theme) { d, which ->
+                pads.theme = which
+                getSharedPreferences("marvpad", MODE_PRIVATE).edit().putInt("design", which).apply()
+                d.dismiss()
             }
             .setNegativeButton("Abbrechen", null)
             .show()
