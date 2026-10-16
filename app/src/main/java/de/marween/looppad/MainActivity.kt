@@ -197,6 +197,11 @@ class MainActivity : Activity() {
             .show()
     }
 
+    // ---------------------------------------------------------------- Aufnahme: Pattern oder Song
+
+    private var pendingSong: ShortArray? = null
+    private var pendingSongRate = 48000
+
     private fun showRecMenu() {
         AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
             .setTitle("Aufnehmen")
