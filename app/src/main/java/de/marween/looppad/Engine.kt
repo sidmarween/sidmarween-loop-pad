@@ -98,6 +98,23 @@ object Engine {
     @Volatile private var masterStart = 0L
     private var lastWritten = 0L
 
+    // Effekte: Typ, XY-Position der Touch-Fläche, Regler MIX / P1 / P2 / VOL
+    private var fx: Fx? = null
+    private var fxRate = 0
+    @Volatile var fxType = 0
+        private set
+    @Volatile var fxX = 0.5f
+    @Volatile var fxY = 0.5f
+    @Volatile var fxTouch = false
+    val knobs = floatArrayOf(1f, Fx.P1_DEFAULT[0], Fx.P2_DEFAULT[0], 0.8f)
+
+    fun selectFx(type: Int) {
+        val t = Math.floorMod(type, Fx.COUNT)
+        knobs[1] = Fx.P1_DEFAULT[t]
+        knobs[2] = Fx.P2_DEFAULT[t]
+        fxType = t
+    }
+
     private var record: AudioRecord? = null
     private var track: AudioTrack? = null
     private var recordThread: Thread? = null
@@ -137,6 +154,10 @@ object Engine {
         }
         track = t
         record = r
+        if (fx == null || fxRate != sampleRate) {
+            fx = Fx(sampleRate)
+            fxRate = sampleRate
+        }
 
         captured = 0L
         written = 0L
@@ -413,6 +434,8 @@ object Engine {
     private fun mixLoop(t: AudioTrack, block: Int) {
         Process.setThreadPriority(Process.THREAD_PRIORITY_URGENT_AUDIO)
         val out = FloatArray(block)
+        val micBuf = FloatArray(block)
+        micCursor = -1L
         val ts = AudioTimestamp()
         while (running) {
             java.util.Arrays.fill(out, 0f)
@@ -450,9 +473,17 @@ object Engine {
                 }
                 levels[p] = max(if (mute) peak * 0.25f else peak, levels[p] * 0.88f)
             }
+            val f = fx
+            if (f != null) {
+                f.process(
+                    out, block, w, fxType, fxX, fxY, fxTouch,
+                    knobs[0], knobs[1], knobs[2], masterLen, masterStart, fillMic(micBuf, block)
+                )
+            }
+            val vol = knobs[3] * 1.25f
             var mpeak = 0f
             for (i in 0 until block) {
-                val y = softClip(out[i])
+                val y = softClip(out[i] * vol)
                 out[i] = y
                 val a = abs(y)
                 if (a > mpeak) mpeak = a
@@ -471,6 +502,20 @@ object Engine {
             written = w + block
             updateOutClock(t, ts)
         }
+    }
+
+    private var micCursor = -1L
+
+    /** Liefert die neuesten Mikrofon-Samples für den Vocoder (läuft der Aufnahme leicht hinterher). */
+    private fun fillMic(dst: FloatArray, n: Int): FloatArray {
+        val c = captured
+        if (micCursor < 0 || micCursor + n > c || c - micCursor > n * 16L) micCursor = c - 4L * n
+        for (i in 0 until n) {
+            val f = micCursor + i
+            dst[i] = if (f >= 0) ring[(f % ringSize).toInt()] else 0f
+        }
+        micCursor += n
+        return dst
     }
 
     private fun softClip(x: Float): Float {
