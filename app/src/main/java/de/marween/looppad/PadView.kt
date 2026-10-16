@@ -84,6 +84,11 @@ class PadView(context: Context) : View(context) {
     private val stopBtn = RectF()
     private var stopDownMs = 0L
     private var stopPointer = -1
+    private var stepPointer = -1
+    private var stepIdx = 0
+    private var stepDownY = 0f
+    private var stepDragged = false
+    private var stepStartVel = 0f
     var onRecMenu: (() -> Unit)? = null
     var onSongStopped: (() -> Unit)? = null
     var onPatternStopped: (() -> Unit)? = null
@@ -814,7 +819,7 @@ class PadView(context: Context) : View(context) {
             Engine.PadState.EMPTY -> if (shotMode) "⚡" else ""
             Engine.PadState.ONESHOT -> String.format(Locale.GERMANY, "⚡ %.1fs", Engine.loopSeconds(i))
             Engine.PadState.PLAYING -> String.format(Locale.GERMANY, "∞ %.1fs", Engine.loopSeconds(i))
-            Engine.PadState.MUTED -> "STUMM"
+            Engine.PadState.MUTED -> "AUS"
             Engine.PadState.RECORDING -> String.format(Locale.GERMANY, "REC %.1f", Engine.recordingSeconds(i))
             Engine.PadState.OVERDUB -> "DUB"
         }
@@ -893,11 +898,16 @@ class PadView(context: Context) : View(context) {
             val count = Engine.seqCount(k)
             val playing = k == cur
             fillPaint.color = when {
-                on -> alpha(sc, if (playing) 1f else 0.8f)
+                on -> alpha(alpha(sc, if (playing) 1f else 0.9f), 0.28f)
                 playing -> alpha(Color.WHITE, 0.35f)
                 else -> alpha(Color.WHITE, if (k % 4 == 0) 0.10f else 0.05f)
             }
             canvas.drawRoundRect(s, dp(3f), dp(3f), fillPaint)
+            if (on) {
+                fillPaint.color = alpha(sc, if (playing) 1f else 0.9f)
+                tmpRect.set(s.left, s.bottom - s.height() * Engine.seqVel(sel, k).coerceIn(0.08f, 1f), s.right, s.bottom)
+                canvas.drawRoundRect(tmpRect, dp(3f), dp(3f), fillPaint)
+            }
             strokePaint.strokeWidth = dp(if (playing) 2f else 1f)
             strokePaint.color = if (playing) Color.WHITE else alpha(sc, 0.5f)
             canvas.drawRoundRect(s, dp(3f), dp(3f), strokePaint)
@@ -947,7 +957,7 @@ class PadView(context: Context) : View(context) {
         canvas.drawText(head, ix, recBtn.top + dp(13f), textPaint)
         textPaint.textSize = dp(9.5f)
         textPaint.color = alpha(Color.WHITE, 0.65f)
-        val sub = if (sel >= 0) "Pad ${sel + 1}: Schritte tippen" else "⚡-Pad antippen"
+        val sub = if (sel >= 0) "Pad ${sel + 1}: tippen · ↕ Lautst." else "⚡-Pad antippen"
         canvas.drawText(sub, ix, recBtn.top + dp(27f), textPaint)
         canvas.drawText("STOP halten = leeren", ix, recBtn.top + dp(40f), textPaint)
         textPaint.textAlign = Paint.Align.CENTER
@@ -1020,7 +1030,7 @@ class PadView(context: Context) : View(context) {
             canvas.drawText("Tippe auf ein Pad, um es zu löschen", w / 2f, y, textPaint)
         } else {
             textPaint.color = ink(0.55f)
-            canvas.drawText("Halten = Aufnahme · Overdub · 2× = Stumm · ⚡ = One Shot", w / 2f, y, textPaint)
+            canvas.drawText("Halten = Aufnahme/Overdub · Tippen = An/Aus · ⚡ = One Shot", w / 2f, y, textPaint)
         }
         textPaint.textSize = dp(10f)
         textPaint.color = alpha(BRAND_ORANGE, 0.8f)
@@ -1524,8 +1534,11 @@ class PadView(context: Context) : View(context) {
                                 val sr = stepRects[k]
                                 if (x >= sr.left - dp(2f) && x <= sr.right + dp(2f) && y >= sr.top - dp(6f) && y <= sr.bottom + dp(6f)) {
                                     if (Engine.seqSelected >= 0) {
-                                        Engine.seqToggle(Engine.seqSelected, k)
-                                        burst(sr.centerX(), sr.centerY(), padAccent(Engine.seqSelected), 8, 140f)
+                                        stepPointer = id
+                                        stepIdx = k
+                                        stepDownY = y
+                                        stepDragged = false
+                                        stepStartVel = Engine.seqVel(Engine.seqSelected, k)
                                     }
                                     break
                                 }
@@ -1584,6 +1597,14 @@ class PadView(context: Context) : View(context) {
                 for (pi in 0 until e.pointerCount) {
                     val id = e.getPointerId(pi)
                     if (id == xyPointer) setXy(e.getX(pi), e.getY(pi))
+                    if (id == stepPointer && Engine.seqSelected >= 0) {
+                        val dy = stepDownY - e.getY(pi)
+                        if (stepDragged || abs(dy) > dp(8f)) {
+                            stepDragged = true
+                            val base = if (stepStartVel > 0f) stepStartVel else 1f
+                            Engine.setSeqVel(Engine.seqSelected, stepIdx, (base + dy / dp(90f)).coerceIn(0.05f, 1f))
+                        }
+                    }
                     val k = pointerKnob[id] ?: continue
                     val sy0 = knobStartY[id] ?: continue
                     val sv = knobStartVal[id] ?: continue
@@ -1593,6 +1614,16 @@ class PadView(context: Context) : View(context) {
             MotionEvent.ACTION_UP, MotionEvent.ACTION_POINTER_UP -> {
                 val idx = e.actionIndex
                 val upId = e.getPointerId(idx)
+                if (upId == stepPointer) {
+                    stepPointer = -1
+                    val sel = Engine.seqSelected
+                    if (sel >= 0 && !stepDragged) {
+                        Engine.seqToggle(sel, stepIdx)
+                        val sr = stepRects[stepIdx]
+                        burst(sr.centerX(), sr.centerY(), padAccent(sel), 8, 140f)
+                    }
+                    return true
+                }
                 if (upId == stopPointer) {
                     stopPointer = -1
                     if (SystemClock.uptimeMillis() - stopDownMs >= 600L) {
@@ -1648,15 +1679,10 @@ class PadView(context: Context) : View(context) {
         val tap = Engine.padUp(p)
         if (tap) {
             if (hadLoop) {
-                val now = SystemClock.uptimeMillis()
-                if (now - lastTap[p] < 350L) {
-                    Engine.toggleMute(p)
-                    lastTap[p] = 0L
-                    flash[p] = 1f
-                    burst(x, y, neon(hue(p)), 18, 200f)
-                } else {
-                    lastTap[p] = now
-                }
+                // Antippen schaltet den Loop an/aus – er läuft immer im Raster weiter und steigt synchron ein
+                Engine.toggleMute(p)
+                flash[p] = 1f
+                burst(x, y, padAccent(p), 18, 200f)
             }
         } else {
             val c = neon(hue(p))
@@ -2006,7 +2032,7 @@ class PadView(context: Context) : View(context) {
             Engine.PadState.EMPTY -> ""
             Engine.PadState.ONESHOT -> String.format(Locale.GERMANY, "%.1fs", Engine.loopSeconds(i))
             Engine.PadState.PLAYING -> String.format(Locale.GERMANY, "∞ %.1fs", Engine.loopSeconds(i))
-            Engine.PadState.MUTED -> "STUMM"
+            Engine.PadState.MUTED -> "AUS"
             Engine.PadState.RECORDING -> String.format(Locale.GERMANY, "REC %.1f", Engine.recordingSeconds(i))
             Engine.PadState.OVERDUB -> "DUB"
         }
@@ -2364,11 +2390,16 @@ class PadView(context: Context) : View(context) {
             val playing = k == cur
             val onCol = if (comic) COMIC_PADS[(k / 4) % 4] else R_LCD
             fillPaint.color = when {
-                on -> onCol
+                on -> alpha(onCol, 0.28f)
                 playing -> if (comic) Color.rgb(230, 230, 230) else alpha(R_LCD, 0.35f)
                 else -> if (comic) Color.WHITE else alpha(R_LCD, if (k % 4 == 0) 0.14f else 0.07f)
             }
             canvas.drawRoundRect(s, dp(3f), dp(3f), fillPaint)
+            if (on) {
+                fillPaint.color = onCol
+                tmpRect.set(s.left, s.bottom - s.height() * Engine.seqVel(sel, k).coerceIn(0.08f, 1f), s.right, s.bottom)
+                canvas.drawRoundRect(tmpRect, dp(3f), dp(3f), fillPaint)
+            }
             strokePaint.strokeWidth = dp(if (playing) 2.5f else if (comic) 1.6f else 1f)
             strokePaint.color = if (playing) (if (comic) COMIC_MAGENTA else Color.WHITE) else if (comic) Color.BLACK else alpha(R_LCD, 0.5f)
             canvas.drawRoundRect(s, dp(3f), dp(3f), strokePaint)
@@ -2424,7 +2455,7 @@ class PadView(context: Context) : View(context) {
         canvas.drawText(head, ix, recBtn.top + dp(13f), textPaint)
         textPaint.textSize = dp(9.5f)
         textPaint.color = alpha(txt, 0.75f)
-        canvas.drawText(if (sel >= 0) "Pad ${sel + 1}: Schritte tippen" else "⚡-Pad antippen", ix, recBtn.top + dp(27f), textPaint)
+        canvas.drawText(if (sel >= 0) "Pad ${sel + 1}: tippen · ↕ Lautst." else "⚡-Pad antippen", ix, recBtn.top + dp(27f), textPaint)
         canvas.drawText("STOP halten = leeren", ix, recBtn.top + dp(40f), textPaint)
         textPaint.textAlign = Paint.Align.CENTER
     }
@@ -3032,7 +3063,7 @@ class PadView(context: Context) : View(context) {
             Engine.PadState.EMPTY -> ""
             Engine.PadState.ONESHOT -> String.format(Locale.GERMANY, "%.1fs", Engine.loopSeconds(i))
             Engine.PadState.PLAYING -> String.format(Locale.GERMANY, "∞ %.1fs", Engine.loopSeconds(i))
-            Engine.PadState.MUTED -> "STUMM"
+            Engine.PadState.MUTED -> "AUS"
             Engine.PadState.RECORDING -> String.format(Locale.GERMANY, "REC %.1f", Engine.recordingSeconds(i))
             Engine.PadState.OVERDUB -> "DUB"
         }
@@ -3079,11 +3110,16 @@ class PadView(context: Context) : View(context) {
             val count = Engine.seqCount(k)
             val playing = k == cur
             fillPaint.color = when {
-                on -> sk.accent
+                on -> alpha(sk.accent, 0.28f)
                 playing -> alpha(txt, 0.3f)
                 else -> alpha(txt, if (k % 4 == 0) 0.12f else 0.06f)
             }
             canvas.drawRoundRect(s, dp(3f), dp(3f), fillPaint)
+            if (on) {
+                fillPaint.color = sk.accent
+                tmpRect.set(s.left, s.bottom - s.height() * Engine.seqVel(sel, k).coerceIn(0.08f, 1f), s.right, s.bottom)
+                canvas.drawRoundRect(tmpRect, dp(3f), dp(3f), fillPaint)
+            }
             strokePaint.strokeWidth = dp(if (playing) 2f else 1f)
             strokePaint.color = if (playing) txt else alpha(txt, 0.3f)
             canvas.drawRoundRect(s, dp(3f), dp(3f), strokePaint)
@@ -3136,7 +3172,7 @@ class PadView(context: Context) : View(context) {
         canvas.drawText(head, ix, recBtn.top + dp(13f), textPaint)
         textPaint.textSize = dp(9.5f)
         textPaint.color = alpha(txt, 0.7f)
-        canvas.drawText(if (sel >= 0) "Pad ${sel + 1}: Schritte tippen" else "⚡-Pad antippen", ix, recBtn.top + dp(27f), textPaint)
+        canvas.drawText(if (sel >= 0) "Pad ${sel + 1}: tippen · ↕ Lautst." else "⚡-Pad antippen", ix, recBtn.top + dp(27f), textPaint)
         canvas.drawText("STOP halten = leeren", ix, recBtn.top + dp(40f), textPaint)
         textPaint.textAlign = Paint.Align.CENTER
     }

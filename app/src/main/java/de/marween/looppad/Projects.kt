@@ -69,7 +69,7 @@ object Projects {
         val sq = JSONArray()
         for (row in Engine.seqSnapshot()) {
             val r = JSONArray()
-            for (b in row) r.put(b)
+            for (b in row) r.put(b.toDouble())
             sq.put(r)
         }
         j.put("seq", sq)
@@ -101,7 +101,13 @@ object Projects {
         val sq = j.optJSONArray("seq")
         val pattern = if (sq != null) Array(sq.length()) { p ->
             val r = sq.getJSONArray(p)
-            BooleanArray(r.length()) { r.getBoolean(it) }
+            FloatArray(r.length()) {
+                when (val o = r.get(it)) {
+                    is Boolean -> if (o) 1f else 0f
+                    is Number -> o.toFloat()
+                    else -> 0f
+                }
+            }
         } else null
         Engine.restore(pads, master, j.optDouble("bpm", 0.0).toFloat(), pattern)
         Engine.selectFx(j.optInt("fxType", 0))

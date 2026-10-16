@@ -24,6 +24,10 @@ class Loop(val data: FloatArray) {
     /** ONE SHOT: spielt nur einmal nach Anschlag, ab [shotStart] (Ausgabe-Frame). */
     @Volatile var oneShot: Boolean = false
     @Volatile var shotStart: Long = Long.MIN_VALUE
+    /** Lautstärke des aktuellen Anschlags (Sequenzer-Schritt). */
+    @Volatile var shotGain: Float = 1f
+    /** Aktuelle Ein/Aus-Blende (nur Mischer-Thread). */
+    var fade: Float = 1f
     /** Tonhöhe (Halbtöne) für ONE SHOTS, als Abspielrate. */
     @Volatile var semi: Int = 0
     @Volatile var rate: Double = 1.0
@@ -82,7 +86,8 @@ object Engine {
 
     // ---------------------------------------------------------------- Sequenzer
     const val STEPS = 16
-    private val seq = Array(PADS) { BooleanArray(STEPS) }
+    /** Lautstärke je Schritt (0 = aus, bis 1). */
+    private val seq = Array(PADS) { FloatArray(STEPS) }
     @Volatile var seqPlaying = false
         private set
     @Volatile var seqRecording = false
@@ -115,16 +120,20 @@ object Engine {
         for (row in seq) java.util.Arrays.fill(row, false)
     }
 
-    fun seqHas(p: Int, step: Int): Boolean = seq[p][step]
+    fun seqHas(p: Int, step: Int): Boolean = seq[p][step] > 0f
+    fun seqVel(p: Int, step: Int): Float = seq[p][step]
+    fun setSeqVel(p: Int, step: Int, v: Float) {
+        if (p in 0 until PADS && step in 0 until STEPS) seq[p][step] = v.coerceIn(0f, 1f)
+    }
 
     fun seqCount(step: Int): Int {
         var c = 0
-        for (p in 0 until PADS) if (seq[p][step]) c++
+        for (p in 0 until PADS) if (seq[p][step] > 0f) c++
         return c
     }
 
     fun seqToggle(p: Int, step: Int) {
-        if (p in 0 until PADS && step in 0 until STEPS) seq[p][step] = !seq[p][step]
+        if (p in 0 until PADS && step in 0 until STEPS) seq[p][step] = if (seq[p][step] > 0f) 0f else 1f
     }
 
     /** Aktuell hörbarer Schritt 0..15, oder -1 wenn gestoppt. */
@@ -149,9 +158,13 @@ object Engine {
             if (f >= w) {
                 val step = Math.floorMod(n, STEPS.toLong()).toInt()
                 for (p in 0 until PADS) {
-                    if (!seq[p][step]) continue
+                    val vel = seq[p][step]
+                    if (vel <= 0f) continue
                     val l = loops.get(p)
-                    if (l != null && l.oneShot) l.shotStart = f
+                    if (l != null && l.oneShot) {
+                        l.shotGain = vel
+                        l.shotStart = f
+                    }
                 }
             }
             n++
@@ -178,20 +191,20 @@ object Engine {
 
     fun masterFrames(): Long = masterLen
 
-    fun seqSnapshot(): Array<BooleanArray> = Array(PADS) { seq[it].copyOf() }
+    fun seqSnapshot(): Array<FloatArray> = Array(PADS) { seq[it].copyOf() }
 
     fun seqHasAny(): Boolean {
-        for (row in seq) for (b in row) if (b) return true
+        for (row in seq) for (b in row) if (b > 0f) return true
         return false
     }
 
     /** Stellt einen gespeicherten Projektzustand wieder her (alle Loops starten gemeinsam auf der Eins). */
-    fun restore(pads: Array<PadSave>, master: Long, bpm: Float, pattern: Array<BooleanArray>?) {
+    fun restore(pads: Array<PadSave>, master: Long, bpm: Float, pattern: Array<FloatArray>?) {
         seqStop()
         for (p in 0 until PADS) {
             takes.set(p, null)
             loops.set(p, null)
-            java.util.Arrays.fill(seq[p], false)
+            java.util.Arrays.fill(seq[p], 0f)
             padOneShot[p] = false
         }
         fixedBpm = bpm
@@ -238,12 +251,13 @@ object Engine {
             if (!l.oneShot) continue
             val d = l.data
             for (k in 0 until STEPS) {
-                if (!seq[p][k]) continue
+                val vel = seq[p][k]
+                if (vel <= 0f) continue
                 any = true
                 val st = ((k.toLong() * bar) / STEPS).toInt()
                 for (i in d.indices) {
                     val idx = (st + i) % bar
-                    out[idx] += d[i]
+                    out[idx] += d[i] * vel
                 }
             }
         }
@@ -980,6 +994,7 @@ object Engine {
                     var peak = 0f
                     if (ss != Long.MIN_VALUE && len > 1) {
                         val rate = loop.rate
+                        val sg = loop.shotGain
                         val rel = w - ss
                         val total = (len / rate).toLong()
                         if (rel + block > 0 && rel < total) {
@@ -989,7 +1004,7 @@ object Engine {
                                 val i0 = sp.toInt()
                                 if (i0 >= len - 1) break
                                 val fr = (sp - i0).toFloat()
-                                val v = d[i0] + (d[i0 + 1] - d[i0]) * fr
+                                val v = (d[i0] + (d[i0 + 1] - d[i0]) * fr) * sg
                                 val a = abs(v)
                                 if (a > peak) peak = a
                                 dst[i] += v
@@ -1002,6 +1017,9 @@ object Engine {
                 }
                 val rel = w - loop.start
                 val mute = loop.muted
+                val fadeTarget = if (mute) 0f else 1f
+                val fadeStep = 1f / (0.006f * sampleRate)
+                var fg = loop.fade
                 var peak = 0f
                 val sl = loop.slices
                 if (sl != null && mlen > 0L && len > 0) {
@@ -1025,7 +1043,8 @@ object Engine {
                         if (endRem < fadeN) v *= endRem / fadeN.toFloat()
                         val a = abs(v)
                         if (a > peak) peak = a
-                        if (!mute) dst[i] += v
+                        fg = if (fg < fadeTarget) min(fadeTarget, fg + fadeStep) else max(fadeTarget, fg - fadeStep)
+                        dst[i] += v * fg
                     }
                 } else if (rel + block > 0 && len > 0) {
                     var i: Int
@@ -1041,12 +1060,14 @@ object Engine {
                         val v = d[idx]
                         val a = abs(v)
                         if (a > peak) peak = a
-                        if (!mute) dst[i] += v
+                        fg = if (fg < fadeTarget) min(fadeTarget, fg + fadeStep) else max(fadeTarget, fg - fadeStep)
+                        dst[i] += v * fg
                         idx++
                         if (idx == len) idx = 0
                         i++
                     }
                 }
+                loop.fade = fg
                 levels[p] = max(if (mute) peak * 0.25f else peak, levels[p] * 0.88f)
             }
             renderVoices(out, bus, tgt, block)
@@ -1140,10 +1161,11 @@ object Engine {
                 val heard = outClock.frameAt(System.nanoTime(), sampleRate)
                 val n = Math.floorDiv((heard - origin) * STEPS + bar / 2, bar)
                 val f = stepFrame(origin, bar, n)
-                seq[p][Math.floorMod(n, STEPS.toLong()).toInt()] = true
+                seq[p][Math.floorMod(n, STEPS.toLong()).toInt()] = 1f
                 // Liegt der Rasterpunkt noch vor uns, spielt ihn gleich der Sequenzer – kein Doppelschlag
                 if (f >= written) return true
             }
+            loop.shotGain = 1f
             loop.shotStart = written
             return true
         }
@@ -1275,7 +1297,7 @@ object Engine {
     fun clear(p: Int) {
         takes.set(p, null)
         loops.set(p, null)
-        java.util.Arrays.fill(seq[p], false)
+        java.util.Arrays.fill(seq[p], 0f)
         var any = false
         for (i in 0 until PADS) {
             val l = loops.get(i)

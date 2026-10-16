@@ -4,7 +4,7 @@ Android-App für Musiker: 16 Neon-Pads, XY-Effektfläche und Drehregler im Kaoss
 
 - **Pad halten** – nimmt auf, solange du hältst. Der erste Loop wird zum Taktgeber. Alle weiteren Loops rasten automatisch auf sein Raster ein: Länge wird auf 1/8, 1/4, 1/2, 1, 2, 4 oder 8 Takte gerundet, der Start auf den nächsten Rasterpunkt.
 - **Pad mit Loop halten** – Overdub: nimmt zusätzlich auf den laufenden Loop drauf.
-- **2× tippen** – Loop stumm / wieder an.
+- **Antippen** – Loop an / aus (steigt immer synchron zu den anderen Pads ein).
 - **CLEAR**, dann Pad antippen – Loop löschen.
 - **ALLE STUMM / ALLE AN** – alles auf einmal.
 
@@ -47,6 +47,7 @@ Statt der unteren Pad-Reihe: 16-Schritt-Sequenzer, synchron zum Takt (ohne Takt:
   - **Song aufnehmen** – nimmt alles auf, was du hörst (Loops, One-Shots, Sequenzer, Effekte), bis 15 Minuten. REC oder STOP beendet die Aufnahme, danach als WAV speichern.
 - **▶ PLAY** – Pattern abspielen · **■ STOP** – anhalten · **STOP halten** – Pattern leeren
 - **Schritte antippen** – Schritt für das zuletzt gespielte ⚡-Pad an/aus
+- **Schritt hoch/runter ziehen** – Lautstärke dieses Schritts (Füllhöhe zeigt sie an)
 
 ## Pad-Modi
 
