@@ -20,7 +20,7 @@ Nach einer **Song-Aufnahme**: als Audio (WAV), als Projekt (inkl. Song) speicher
 
 ## Designs & Display
 
-Im Menü ☰ → Design wählen – NEON (Regenbogen), GLOW (Orange glühend), STUDIO (Grau & Orange), HUD (Tech-Linien), RETRO (Grau/Grün/Orange mit Spektrum-Anzeigen für Ausgang und Mikrofon), COMIC (Pop-Art), GLAS, PASTELL, HOLZ (Walnuss/Messing/Leinen), CREME, NOIR (Schwarz im Walnussrahmen), GRAU. Die Wahl wird gespeichert.
+Im Menü ☰ → Design wählen (Standard: NOIR) – NEON (Regenbogen), GLOW (Orange glühend), STUDIO (Grau & Orange), HUD (Tech-Linien), RETRO (Grau/Grün/Orange mit Spektrum-Anzeigen für Ausgang und Mikrofon), COMIC (Pop-Art), GLAS, PASTELL, HOLZ (Walnuss/Messing/Leinen), CREME, NOIR (Schwarz im Walnussrahmen), GRAU. Die Wahl wird gespeichert.
 Das **Display** in der Kopfzeile zeigt den aktuellen Effekt, die X/Y-Werte und den Takt. Links antippen öffnet die Effektliste, rechts das Tempo.
 
 ## Master-Tempo
@@ -54,7 +54,8 @@ Im **•••**-Menü jedes Pads: **∞ LOOP** (läuft im Takt endlos, Regenbog
 
 ## Bibliothek
 
-„Aus Bibliothek laden“ im •••-Menü: Kick, Snare, Clap, Rimshot, Hi-Hats, Toms, 808 Bass, Synth Stab, Pad Akkord, Riser, Impact, Laser sowie Loops (Beat, House, Bass, Arpeggio, je 120 BPM). Alle Sounds sind selbst synthetisiert und frei verwendbar.
+„Aus Bibliothek laden" im •••-Menü, nach Kategorien: 🎙 Meine Aufnahmen · 🥁 Drums · 🪘 Percussion · 🎹 Tasten · 🎼 Melodisch · 🔊 Synth & Bass · ✨ FX · ∞ Loops (90–174 BPM) – über 100 Sounds.
+Quellen: selbst synthetisiert (frei) und die **Versilian Community Sample Library (VCSL)**, CC0 1.0 (gemeinfrei) – https://github.com/sgossner/VCSL. Tonale Samples liegen meist auf C4 und lassen sich mit der 🎹-Tastatur spielen.
 
 ## Import / Export
 

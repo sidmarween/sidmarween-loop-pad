@@ -1,0 +1,6 @@
+Marv PAD – Quellen der mitgelieferten Sounds
+
+1) Selbst synthetisierte Sounds (alle Dateien direkt in samples/): frei verwendbar.
+2) samples/vcsl/: Versilian Community Sample Library (VCSL) von Versilian Studios LLC,
+   Lizenz CC0 1.0 Universal (gemeinfrei). https://github.com/sgossner/VCSL
+   Für Marv PAD auf mono 44,1 kHz umgewandelt, gekürzt und normalisiert.

@@ -60,7 +60,7 @@ class MainActivity : Activity() {
         pads.onTempo = { showTempo() }
         pads.onRecMenu = { showRecMenu() }
         pads.onSongStopped = { finishSong() }
-        pads.theme = getSharedPreferences("marvpad", MODE_PRIVATE).getInt("design", PadView.GLOW)
+        pads.theme = getSharedPreferences("marvpad", MODE_PRIVATE).getInt("design", PadView.NOIR)
         setContentView(pads)
         hideSystemBars()
     }
@@ -182,32 +182,45 @@ class MainActivity : Activity() {
     }
 
     private fun showLibrary(p: Int) {
-        val recs = Projects.listSamples(this).take(30)
-        val titles = ArrayList<String>()
-        for (f in recs) titles.add(Projects.sampleTitle(f))
-        for (smp in SampleLibrary.samples) titles.add(smp.title)
+        val recs = Projects.listSamples(this)
+        val cats = ArrayList<String>()
+        if (recs.isNotEmpty()) cats.add("🎙 Meine Aufnahmen (${recs.size})")
+        for (c in SampleLibrary.categories) cats.add("$c (${SampleLibrary.inCategory(c).size})")
         AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
             .setTitle("Bibliothek → Pad ${p + 1}")
-            .setItems(titles.toTypedArray()) { _, which ->
-                if (which < recs.size) {
-                    loadRecording(recs[which], p)
+            .setItems(cats.toTypedArray()) { _, which ->
+                if (recs.isNotEmpty() && which == 0) {
+                    AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
+                        .setTitle("🎙 Meine Aufnahmen")
+                        .setItems(recs.map { Projects.sampleTitle(it) }.toTypedArray()) { _, i -> loadRecording(recs[i], p) }
+                        .setNegativeButton("Zurück") { _, _ -> showLibrary(p) }
+                        .show()
                     return@setItems
                 }
-                val smp = SampleLibrary.samples[which - recs.size]
-                val rate = Engine.sampleRate
-                Thread {
-                    try {
-                        val data = AudioFiles.decodeAsset(this, smp.file, rate, Engine.MAX_SECONDS)
-                        Engine.padOneShot[p] = smp.oneShot
-                        Engine.importLoop(p, data)
-                        runOnUiThread { toast("Pad ${p + 1}: ${smp.title}") }
-                    } catch (e: Exception) {
-                        runOnUiThread { toast("Laden fehlgeschlagen: ${e.message ?: e}") }
-                    }
-                }.start()
+                val cat = SampleLibrary.categories[which - (if (recs.isNotEmpty()) 1 else 0)]
+                val list = SampleLibrary.inCategory(cat)
+                AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
+                    .setTitle(cat)
+                    .setItems(list.map { it.title }.toTypedArray()) { _, i -> loadLibrarySample(list[i], p) }
+                    .setNegativeButton("Zurück") { _, _ -> showLibrary(p) }
+                    .show()
             }
             .setNegativeButton("Abbrechen", null)
             .show()
+    }
+
+    private fun loadLibrarySample(smp: SampleLibrary.Sample, p: Int) {
+        val rate = Engine.sampleRate
+        Thread {
+            try {
+                val data = AudioFiles.decodeAsset(this, smp.file, rate, Engine.MAX_SECONDS)
+                Engine.padOneShot[p] = smp.oneShot
+                Engine.importLoop(p, data)
+                runOnUiThread { toast("Pad ${p + 1}: ${smp.title}") }
+            } catch (e: Exception) {
+                runOnUiThread { toast("Laden fehlgeschlagen: ${e.message ?: e}") }
+            }
+        }.start()
     }
 
     // ---------------------------------------------------------------- Aufnahme: Pattern oder Song
