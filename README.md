@@ -72,6 +72,12 @@ Der **Effekt-Knopf** schaltet durch (links tippen = zurück, rechts = weiter, la
 
 **Filter:** LOWPASS · HIGHPASS · BANDPASS · NOTCH (je 12/24/36/48 dB über den STEIL-Regler) · BELL (Peaking-EQ, ±18 dB, 1–3 Stufen) · PEAK (Resonanzspitze) · COMB (Feedback oder Feedforward)
 
+**Modulation & Klang:** PHASER · TREMOLO (frei/Takt) · VIBRATO · EQ (3 Bänder) · FILTER (Multimode) · SATURATE · OVERDRIVE
+
+**Granular & Spektral:** GRAIN DLY · PITCH (Pitch-Shifter) · STRETCH (Time-Stretch) · GRANULAR (Granular-Wolke) · KRISTALL (rückwärts gepitchte Granular-Echos) · SMEAR · FREEZE (Spektral-Freeze/Blur)
+
+**Experimentell:** RINGMOD · FM · FREQ SHIFT · RESONATOR (Akkord-Resonatoren) · SHUFFLE (Buffer-Shuffler im Takt) · SEQ-FX (Effekt-Sequenzer pro Schritt) · MULTI-FX (Morph-Kette Filter/Drive/Echo)
+
 **Weitere:** DELAY (taktsynchron) · STUTTER (taktsynchron) · FLANGER · CHORUS · REVERB · HALL · VOCODER (Loops oder Mikrofon steuern einen Synth-Träger) · DISTORTION · CRUSH
 
 Maximal 30 Sekunden pro Aufnahme. Kopfhörer verhindern, dass laufende Loops mit aufgenommen werden.

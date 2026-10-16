@@ -3829,7 +3829,11 @@ class PadView(context: Context) : View(context) {
             Color.rgb(255, 122, 0), Color.rgb(255, 212, 0), Color.rgb(232, 32, 42), Color.rgb(30, 144, 232),
             Color.rgb(30, 144, 232), Color.rgb(255, 122, 0), Color.rgb(255, 212, 0), Color.rgb(232, 32, 42)
         )
-        private val FX_CODES = arrayOf("LP", "HP", "BP", "NT", "EQ", "PK", "CMB", "DLY", "STU", "FLG", "CHO", "REV", "HAL", "VOC", "DST", "BIT")
+        private val FX_CODES = arrayOf(
+            "LP", "HP", "BP", "NT", "EQ", "PK", "CMB", "DLY", "STU", "FLG", "CHO", "REV", "HAL", "VOC", "DST", "BIT",
+            "PHS", "TRM", "VIB", "EQ3", "FLT", "SAT", "OD", "GDL", "PIT", "STR", "SMR", "FRZ", "RNG", "FM", "SHF", "FSH",
+            "RES", "GRN", "SQF", "MFX", "KRS"
+        )
         private val NEON_WIDTHS = floatArrayOf(18f, 10f, 5f, 2.2f)
         private val NEON_ALPHAS = floatArrayOf(0.10f, 0.22f, 0.50f, 1.0f)
     }
