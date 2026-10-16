@@ -20,10 +20,13 @@ import kotlin.math.tanh
 class Loop(val data: FloatArray) {
     @Volatile var start: Long = 0L
     @Volatile var muted: Boolean = false
+    /** ONE SHOT: spielt nur einmal nach Anschlag, ab [shotStart] (Ausgabe-Frame). */
+    @Volatile var oneShot: Boolean = false
+    @Volatile var shotStart: Long = Long.MIN_VALUE
 }
 
 /** Eine laufende Aufnahme (neu oder Overdub) auf einem Pad. */
-class Take(val overdub: Boolean, val fromIn: Long, val downNanos: Long) {
+class Take(val overdub: Boolean, val fromIn: Long, val downNanos: Long, val oneShot: Boolean = false) {
     @Volatile var toIn: Long = Long.MAX_VALUE
     @Volatile var upNanos: Long = 0L
     @Volatile var released: Boolean = false
@@ -67,7 +70,10 @@ object Engine {
     private const val MIN_HOLD_NANOS = 180_000_000L
     private const val FADE_MS = 4
 
-    enum class PadState { EMPTY, RECORDING, PLAYING, MUTED, OVERDUB }
+    enum class PadState { EMPTY, RECORDING, PLAYING, MUTED, OVERDUB, ONESHOT }
+
+    /** Modus je Pad: true = ONE SHOT, false = LOOP. */
+    val padOneShot = BooleanArray(PADS)
 
     @Volatile var running = false
         private set
@@ -169,7 +175,10 @@ object Engine {
         for (p in 0 until PADS) {
             takes.set(p, null)
             val l = loops.get(p)
-            if (l != null) l.start = l.start - shift
+            if (l != null) {
+                l.start = l.start - shift
+                l.shotStart = Long.MIN_VALUE
+            }
         }
         masterStart -= shift
         lastWritten = 0L
@@ -379,7 +388,9 @@ object Engine {
             // Erster Loop: Position 0 erklingt im Moment des Loslassens und wird zum Taktgeber
             loop.start = outClock.frameAt(take.upNanos, sampleRate)
         }
-        if (masterLen == 0L) {
+        if (take.oneShot) {
+            loop.oneShot = true
+        } else if (masterLen == 0L) {
             masterStart = loop.start
             masterLen = len.toLong()
         }
@@ -412,7 +423,7 @@ object Engine {
             take.upNanos = upNanos
             val rawTo = max(take.fromIn, inClock.frameAt(upNanos, sampleRate))
             val m = masterLen
-            if (take.overdub || m <= 0L) {
+            if (take.overdub || m <= 0L || take.oneShot) {
                 take.toIn = rawTo
             } else {
                 val len = quantizeLen(rawTo - take.fromIn)
@@ -448,6 +459,27 @@ object Engine {
                 }
                 val d = loop.data
                 val len = d.size
+                if (loop.oneShot) {
+                    val ss = loop.shotStart
+                    var peak = 0f
+                    if (ss != Long.MIN_VALUE) {
+                        val rel = w - ss
+                        if (rel + block > 0 && rel < len) {
+                            var i = if (rel < 0) (-rel).toInt() else 0
+                            var idx = if (rel < 0) 0 else rel.toInt()
+                            while (i < block && idx < len) {
+                                val v = d[idx]
+                                val a = abs(v)
+                                if (a > peak) peak = a
+                                out[i] += v
+                                i++
+                                idx++
+                            }
+                        }
+                    }
+                    levels[p] = max(peak, levels[p] * 0.88f)
+                    continue
+                }
                 val rel = w - loop.start
                 val mute = loop.muted
                 var peak = 0f
@@ -542,11 +574,52 @@ object Engine {
 
     // ---------------------------------------------------------------- Steuerung (UI-Thread)
 
-    fun padDown(p: Int) {
-        if (!running || takes.get(p) != null) return
+    /** Gibt true zurück, wenn ein ONE SHOT angeschlagen wurde (keine Aufnahme). */
+    fun padDown(p: Int): Boolean {
+        if (!running || takes.get(p) != null) return false
+        val loop = loops.get(p)
+        if (loop != null && loop.oneShot) {
+            loop.shotStart = written
+            return true
+        }
         val now = System.nanoTime()
         val from = max(0L, inClock.frameAt(now, sampleRate))
-        takes.set(p, Take(loops.get(p) != null, from, now))
+        takes.set(p, Take(loop != null, from, now, padOneShot[p]))
+        return false
+    }
+
+    /** Schaltet ein Pad zwischen LOOP und ONE SHOT um (auch mit vorhandener Aufnahme). */
+    fun setPadMode(p: Int, oneShot: Boolean) {
+        padOneShot[p] = oneShot
+        val l = loops.get(p) ?: return
+        if (oneShot) {
+            l.oneShot = true
+            l.muted = false
+            l.shotStart = Long.MIN_VALUE
+            if (!anyLooping()) masterLen = 0L
+        } else if (l.oneShot) {
+            importLoop(p, l.data.copyOf())
+        }
+    }
+
+    private fun anyLooping(): Boolean {
+        for (i in 0 until PADS) {
+            val l = loops.get(i)
+            if (l != null && !l.oneShot) return true
+        }
+        return false
+    }
+
+    fun isOneShot(p: Int): Boolean = loops.get(p)?.oneShot ?: padOneShot[p]
+
+    /** Wiedergabeposition eines ONE SHOT 0..1, oder -1 wenn er gerade nicht spielt. */
+    fun shotProgress(p: Int): Float {
+        val l = loops.get(p) ?: return -1f
+        val ss = l.shotStart
+        if (!l.oneShot || ss == Long.MIN_VALUE || l.data.isEmpty()) return -1f
+        val rel = outClock.frameAt(System.nanoTime(), sampleRate) - ss
+        if (rel < 0 || rel >= l.data.size) return -1f
+        return rel.toFloat() / l.data.size
     }
 
     /** Gibt true zurück, wenn es nur ein kurzer Tipp war (keine Aufnahme). */
@@ -570,6 +643,16 @@ object Engine {
     /** Setzt eine importierte Datei als Loop ein – synchron zum Takt, falls es schon einen gibt. */
     fun importLoop(p: Int, src: FloatArray) {
         if (src.isEmpty()) return
+        if (padOneShot[p]) {
+            val fade = min(src.size / 4, sampleRate * FADE_MS / 1000)
+            for (i in 0 until fade) src[src.size - 1 - i] *= i.toFloat() / fade
+            val shot = Loop(src)
+            shot.oneShot = true
+            takes.set(p, null)
+            loops.set(p, shot)
+            if (!anyLooping()) masterLen = 0L
+            return
+        }
         val m = masterLen
         val data: FloatArray
         val start: Long
@@ -600,22 +683,25 @@ object Engine {
     }
 
     fun toggleMute(p: Int) {
-        loops.get(p)?.let { it.muted = !it.muted }
+        loops.get(p)?.let { if (!it.oneShot) it.muted = !it.muted }
     }
 
     fun toggleMuteAll() {
         var anyOn = false
         for (p in 0 until PADS) {
             val l = loops.get(p)
-            if (l != null && !l.muted) anyOn = true
+            if (l != null && !l.muted && !l.oneShot) anyOn = true
         }
-        for (p in 0 until PADS) loops.get(p)?.muted = anyOn
+        for (p in 0 until PADS) {
+            val l = loops.get(p)
+            if (l != null && !l.oneShot) l.muted = anyOn
+        }
     }
 
     fun anyPlaying(): Boolean {
         for (p in 0 until PADS) {
             val l = loops.get(p)
-            if (l != null && !l.muted) return true
+            if (l != null && !l.muted && !l.oneShot) return true
         }
         return false
     }
@@ -624,7 +710,10 @@ object Engine {
         takes.set(p, null)
         loops.set(p, null)
         var any = false
-        for (i in 0 until PADS) if (loops.get(i) != null || takes.get(i) != null) any = true
+        for (i in 0 until PADS) {
+            val l = loops.get(i)
+            if ((l != null && !l.oneShot) || takes.get(i) != null) any = true
+        }
         if (!any) masterLen = 0L
     }
 
@@ -646,6 +735,7 @@ object Engine {
             if (!take.released && System.nanoTime() - take.downNanos >= MIN_HOLD_NANOS) return PadState.OVERDUB
         }
         if (loop == null) return PadState.EMPTY
+        if (loop.oneShot) return PadState.ONESHOT
         return if (loop.muted) PadState.MUTED else PadState.PLAYING
     }
 

@@ -5,6 +5,9 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Canvas
+import android.graphics.LinearGradient
+import android.graphics.Matrix
+import android.graphics.SweepGradient
 import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.Path
@@ -76,6 +79,7 @@ class PadView(context: Context) : View(context) {
 
     private val flash = FloatArray(Engine.PADS)
     private val pointerPad = HashMap<Int, Int>()
+    private val shotPointers = HashSet<Int>()
     private val lastTap = LongArray(Engine.PADS)
     private var clearMode = false
     private var time = 0f
@@ -234,6 +238,38 @@ class PadView(context: Context) : View(context) {
 
     private fun hue(i: Int) = i * 22.5f + time * 14f
 
+    // ---------------------------------------------------------------- Regenbogen-Verläufe
+
+    private val shaderMatrix = Matrix()
+    private val rainbowCols = IntArray(7)
+    private val warmCols = intArrayOf(
+        Color.rgb(255, 40, 90), Color.rgb(255, 95, 0), Color.rgb(255, 200, 0),
+        Color.rgb(255, 60, 160), Color.rgb(255, 40, 90)
+    )
+
+    private fun rainbow(sat: Float, value: Float): IntArray {
+        for (k in 0 until 7) rainbowCols[k] = neon(k * 60f, sat, value)
+        return rainbowCols
+    }
+
+    /** Ringsum laufender Regenbogen (oder Feuer-Verlauf für ONE SHOT). */
+    private fun sweep(cx: Float, cy: Float, rot: Float, warm: Boolean, sat: Float = 1f, value: Float = 1f): Shader {
+        val cols = if (warm) warmCols else rainbow(sat, value)
+        val sh = SweepGradient(cx, cy, cols, null)
+        shaderMatrix.setRotate(rot % 360f, cx, cy)
+        sh.setLocalMatrix(shaderMatrix)
+        return sh
+    }
+
+    /** Waagerecht wandernder Regenbogen für Knöpfe. */
+    private fun stripe(r: RectF, warm: Boolean = false): Shader {
+        val cols = if (warm) warmCols else rainbow(1f, 1f)
+        val sh = LinearGradient(r.left, 0f, r.left + r.width() * 1.5f, 0f, cols, null, Shader.TileMode.MIRROR)
+        shaderMatrix.setTranslate((time * dp(60f)) % (r.width() * 3f), 0f)
+        sh.setLocalMatrix(shaderMatrix)
+        return sh
+    }
+
     // ---------------------------------------------------------------- Zeichnen
 
     override fun onDraw(canvas: Canvas) {
@@ -323,14 +359,16 @@ class PadView(context: Context) : View(context) {
         fillPaint.shader = null
         fillPaint.color = alpha(color, if (active) 0.35f + 0.4f * blink else 0.08f)
         canvas.drawRoundRect(r, rr, rr, fillPaint)
+        strokePaint.shader = stripe(r)
         strokePaint.strokeWidth = dp(7f)
-        strokePaint.color = alpha(color, 0.25f)
+        strokePaint.color = alpha(Color.WHITE, 0.3f)
         canvas.drawRoundRect(r, rr, rr, strokePaint)
-        strokePaint.strokeWidth = dp(1.8f)
-        strokePaint.color = color
+        strokePaint.strokeWidth = dp(2f)
+        strokePaint.color = Color.WHITE
         canvas.drawRoundRect(r, rr, rr, strokePaint)
+        strokePaint.shader = null
         textPaint.textSize = dp(13f)
-        textPaint.color = if (active) Color.WHITE else color
+        textPaint.color = Color.WHITE
         canvas.drawText(label, r.centerX(), r.centerY() + dp(4.5f), textPaint)
     }
 
@@ -344,14 +382,29 @@ class PadView(context: Context) : View(context) {
         val inLvl = min(1f, Engine.inputLevel * 3f)
         val pulse = 0.5f + 0.5f * sin(time * 2.2f + i * 0.7f)
 
-        var color = neon(h)
+        val shotMode = Engine.isOneShot(i)
+        val warmHue = 15f + 25f * sin(time * 1.3f + i * 0.9f)
+        var color = if (shotMode) neon(warmHue) else neon(h)
+        var sat = 1f
+        var value = 1f
+        var solid = false
         var glow = 0f
         var fillA = 0f
         var progress = -1f
         when (st) {
             Engine.PadState.EMPTY -> {
-                glow = 0.16f + 0.10f * pulse
+                glow = 0.18f + 0.12f * pulse
                 fillA = 0.05f
+            }
+            Engine.PadState.ONESHOT -> {
+                progress = Engine.shotProgress(i)
+                if (progress >= 0f) {
+                    glow = 0.6f + 0.4f * lvl
+                    fillA = 0.2f + 0.6f * lvl
+                } else {
+                    glow = 0.38f + 0.12f * pulse
+                    fillA = 0.08f
+                }
             }
             Engine.PadState.PLAYING -> {
                 progress = Engine.progress(i)
@@ -362,12 +415,15 @@ class PadView(context: Context) : View(context) {
             Engine.PadState.MUTED -> {
                 progress = Engine.progress(i)
                 color = neon(h, 0.35f, 0.55f)
+                sat = 0.3f
+                value = 0.55f
                 glow = 0.14f
                 fillA = 0.03f
             }
             Engine.PadState.RECORDING -> {
                 val blink = 0.5f + 0.5f * sin(time * 14f)
                 color = neon(345f + 25f * blink)
+                solid = true
                 glow = 0.75f + 0.25f * inLvl
                 fillA = 0.25f + 0.55f * inLvl
             }
@@ -392,11 +448,14 @@ class PadView(context: Context) : View(context) {
         // Neon-Rand in mehreren Schichten
         val widths = NEON_WIDTHS
         val alphas = NEON_ALPHAS
+        // LOOP = voller Regenbogen, ONE SHOT = Feuer-Verlauf, Aufnahme = rot
+        strokePaint.shader = if (solid) null else sweep(r.centerX(), r.centerY(), time * 70f + i * 22.5f, shotMode, sat, value)
         for (k in widths.indices) {
             strokePaint.strokeWidth = dp(widths[k])
-            strokePaint.color = alpha(color, glow * alphas[k])
+            strokePaint.color = if (solid) alpha(color, glow * alphas[k]) else alpha(Color.WHITE, glow * alphas[k])
             canvas.drawRoundRect(r, radius, radius, strokePaint)
         }
+        strokePaint.shader = null
         if (glow > 0.5f) {
             strokePaint.strokeWidth = dp(1.2f)
             strokePaint.color = alpha(Color.WHITE, (glow - 0.5f) * 1.2f)
@@ -409,10 +468,14 @@ class PadView(context: Context) : View(context) {
             val faded = st == Engine.PadState.MUTED
             for (j in 0 until 14) {
                 var p = progress - j * 0.011f
-                if (p < 0f) p += 1f
+                if (p < 0f) {
+                    if (shotMode) break
+                    p += 1f
+                }
                 padMeasures[i].getPosTan(p * len, pos, null)
                 val k = 1f - j / 14f
-                dotPaint.color = alpha(if (j == 0) Color.WHITE else color, k * (if (faded) 0.35f else 1f))
+                val dc = if (shotMode) color else neon(h + j * 18f)
+                dotPaint.color = alpha(if (j == 0) Color.WHITE else dc, k * (if (faded) 0.35f else 1f))
                 canvas.drawCircle(pos[0], pos[1], dp(5.5f) * k + dp(1f), dotPaint)
             }
         }
@@ -440,8 +503,9 @@ class PadView(context: Context) : View(context) {
 
         // Beschriftung
         val label = when (st) {
-            Engine.PadState.EMPTY -> ""
-            Engine.PadState.PLAYING -> String.format(Locale.GERMANY, "%.1fs", Engine.loopSeconds(i))
+            Engine.PadState.EMPTY -> if (shotMode) "⚡" else ""
+            Engine.PadState.ONESHOT -> String.format(Locale.GERMANY, "⚡ %.1fs", Engine.loopSeconds(i))
+            Engine.PadState.PLAYING -> String.format(Locale.GERMANY, "∞ %.1fs", Engine.loopSeconds(i))
             Engine.PadState.MUTED -> "STUMM"
             Engine.PadState.RECORDING -> String.format(Locale.GERMANY, "REC %.1f", Engine.recordingSeconds(i))
             Engine.PadState.OVERDUB -> "DUB"
@@ -457,15 +521,18 @@ class PadView(context: Context) : View(context) {
         val r = moreRects[i]
         if (r.width() <= 0f) return
         val has = Engine.hasLoop(i)
-        val c = if (has) BRAND_ORANGE else Color.WHITE
+        val shot = Engine.isOneShot(i)
         val rr = r.height() / 2f
-        fillPaint.shader = null
-        fillPaint.color = alpha(c, if (has) 0.16f else 0.05f)
+        fillPaint.shader = stripe(r, shot)
+        fillPaint.color = alpha(Color.WHITE, if (has) 0.22f else 0.08f)
         canvas.drawRoundRect(r, rr, rr, fillPaint)
-        strokePaint.strokeWidth = dp(1f)
-        strokePaint.color = alpha(c, if (has) 0.8f else 0.25f)
+        fillPaint.shader = null
+        strokePaint.shader = stripe(r, shot)
+        strokePaint.strokeWidth = dp(1.4f)
+        strokePaint.color = alpha(Color.WHITE, if (has) 1f else 0.45f)
         canvas.drawRoundRect(r, rr, rr, strokePaint)
-        dotPaint.color = alpha(c, if (has) 1f else 0.5f)
+        strokePaint.shader = null
+        dotPaint.color = alpha(Color.WHITE, if (has) 1f else 0.6f)
         val d = dp(5f)
         for (k in -1..1) canvas.drawCircle(r.centerX() + k * d, r.centerY(), dp(1.6f), dotPaint)
     }
@@ -519,7 +586,7 @@ class PadView(context: Context) : View(context) {
             canvas.drawText("Tippe auf ein Pad, um es zu löschen", w / 2f, y, textPaint)
         } else {
             textPaint.color = alpha(Color.WHITE, 0.5f)
-            canvas.drawText("Halten = Aufnahme · Loop halten = Overdub · 2× = Stumm", w / 2f, y, textPaint)
+            canvas.drawText("Halten = Aufnahme · Overdub · 2× = Stumm · ⚡ = One Shot", w / 2f, y, textPaint)
         }
         textPaint.textSize = dp(10f)
         textPaint.color = alpha(BRAND_ORANGE, 0.8f)
@@ -557,13 +624,15 @@ class PadView(context: Context) : View(context) {
             strokePaint.strokeWidth = dp(4f)
             strokePaint.color = alpha(Color.WHITE, 0.12f)
             canvas.drawArc(tmpRect, 135f, 270f, false, strokePaint)
-            val glow = if (active) 1f else 0.7f
+            val glow = if (active) 1f else 0.75f
+            strokePaint.shader = sweep(cx, cy, 120f + k * 40f + time * 20f, false)
             strokePaint.strokeWidth = dp(11f)
-            strokePaint.color = alpha(c, 0.18f * glow)
+            strokePaint.color = alpha(Color.WHITE, 0.22f * glow)
             canvas.drawArc(tmpRect, 135f, 270f * v, false, strokePaint)
             strokePaint.strokeWidth = dp(4f)
-            strokePaint.color = alpha(c, glow)
+            strokePaint.color = alpha(Color.WHITE, glow)
             canvas.drawArc(tmpRect, 135f, 270f * v, false, strokePaint)
+            strokePaint.shader = null
             strokePaint.strokeCap = Paint.Cap.BUTT
 
             // Zeiger
@@ -599,11 +668,13 @@ class PadView(context: Context) : View(context) {
         fillPaint.shader = RadialGradient(r.centerX(), r.centerY(), r.width() * 0.8f, alpha(c, 0.25f + 0.5f * fxFlash), alpha(c, 0.03f), Shader.TileMode.CLAMP)
         canvas.drawRoundRect(r, rr, rr, fillPaint)
         fillPaint.shader = null
+        strokePaint.shader = sweep(r.centerX(), r.centerY(), time * 90f, false)
         for (k in NEON_WIDTHS.indices) {
             strokePaint.strokeWidth = dp(NEON_WIDTHS[k]) * 0.7f
-            strokePaint.color = alpha(c, g * NEON_ALPHAS[k])
+            strokePaint.color = alpha(Color.WHITE, g * NEON_ALPHAS[k])
             canvas.drawRoundRect(r, rr, rr, strokePaint)
         }
+        strokePaint.shader = null
         textPaint.textSize = dp(9.5f)
         textPaint.color = alpha(Color.WHITE, 0.6f)
         canvas.drawText("◂ EFFEKT ▸", r.centerX(), r.top + dp(20f), textPaint)
@@ -676,11 +747,13 @@ class PadView(context: Context) : View(context) {
         canvas.restore()
 
         // Rahmen
+        strokePaint.shader = sweep(r.centerX(), r.centerY(), -time * 50f, false)
         for (k in NEON_WIDTHS.indices) {
             strokePaint.strokeWidth = dp(NEON_WIDTHS[k]) * 0.8f
-            strokePaint.color = alpha(c, (0.45f + 0.55f * xyGlow) * NEON_ALPHAS[k])
+            strokePaint.color = alpha(Color.WHITE, (0.45f + 0.55f * xyGlow) * NEON_ALPHAS[k])
             canvas.drawRoundRect(r, rr, rr, strokePaint)
         }
+        strokePaint.shader = null
 
         // Achsen
         textPaint.textSize = dp(10f)
@@ -807,9 +880,15 @@ class PadView(context: Context) : View(context) {
                 }
                 if (pointerPad.containsValue(p)) return true
                 pointerPad[id] = p
-                Engine.padDown(p)
+                val shot = Engine.padDown(p)
+                if (shot) shotPointers.add(id)
                 flash[p] = 1f
-                burst(x, y, neon(hue(p)), 22, 260f)
+                if (shot) {
+                    burst(x, y, warmCols[Random.nextInt(warmCols.size)], 30, 340f)
+                    shocks.add(Shock(RectF(padRects[p]), 0f, Color.rgb(255, 95, 0)))
+                } else {
+                    burst(x, y, neon(hue(p)), 22, 260f)
+                }
                 performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
             }
             MotionEvent.ACTION_MOVE -> {
@@ -847,6 +926,7 @@ class PadView(context: Context) : View(context) {
                     return true
                 }
                 val p = pointerPad.remove(upId) ?: return true
+                if (shotPointers.remove(upId)) return true
                 release(p, e.getX(idx), e.getY(idx))
             }
             MotionEvent.ACTION_CANCEL -> {
@@ -855,8 +935,10 @@ class PadView(context: Context) : View(context) {
                 xyPointer = -1
                 Engine.fxTouch = false
                 pointerKnob.clear()
-                val held = ArrayList(pointerPad.values)
+                val held = ArrayList<Int>()
+                for ((pid, pad) in pointerPad) if (!shotPointers.contains(pid)) held.add(pad)
                 pointerPad.clear()
+                shotPointers.clear()
                 for (p in held) release(p, padRects[p].centerX(), padRects[p].centerY())
             }
         }

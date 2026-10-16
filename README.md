@@ -8,6 +8,14 @@ Android-App für Musiker: 16 Neon-Pads, XY-Effektfläche und Drehregler im Kaoss
 - **CLEAR**, dann Pad antippen – Loop löschen.
 - **ALLE STUMM / ALLE AN** – alles auf einmal.
 
+## Pad-Modi
+
+Im **•••**-Menü jedes Pads: **∞ LOOP** (läuft im Takt endlos, Regenbogen-Leuchten) oder **⚡ ONE SHOT** (spielt bei jedem Antippen einmal, Feuer-Leuchten).
+
+## Bibliothek
+
+„Aus Bibliothek laden“ im •••-Menü: Kick, Snare, Clap, Rimshot, Hi-Hats, Toms, 808 Bass, Synth Stab, Pad Akkord, Riser, Impact, Laser sowie Loops (Beat, House, Bass, Arpeggio, je 120 BPM). Alle Sounds sind selbst synthetisiert und frei verwendbar.
+
 ## Import / Export
 
 Unter jedem Pad sitzt ein kleiner **•••**-Knopf:

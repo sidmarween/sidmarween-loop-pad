@@ -122,19 +122,45 @@ class MainActivity : Activity() {
     private fun showPadMenu(p: Int) {
         menuPad = p
         val has = Engine.hasLoop(p)
-        val items = if (has) {
-            arrayOf("Audio importieren (WAV / MP3)", "Loop exportieren (WAV)", "Loop löschen")
-        } else {
-            arrayOf("Audio importieren (WAV / MP3)")
+        val shot = Engine.isOneShot(p)
+        val labels = ArrayList<String>()
+        val actions = ArrayList<() -> Unit>()
+        labels.add(if (shot) "Modus: ⚡ ONE SHOT  →  auf ∞ LOOP umschalten" else "Modus: ∞ LOOP  →  auf ⚡ ONE SHOT umschalten")
+        actions.add { Engine.setPadMode(p, !shot) }
+        labels.add("Aus Bibliothek laden")
+        actions.add { showLibrary(p) }
+        labels.add("Audio importieren (WAV / MP3)")
+        actions.add { pickImport() }
+        if (has) {
+            labels.add("Als WAV exportieren")
+            actions.add { pickExport(p) }
+            labels.add("Löschen")
+            actions.add { Engine.clear(p) }
         }
         AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
             .setTitle("Pad ${p + 1}")
-            .setItems(items) { _, which ->
-                when (which) {
-                    0 -> pickImport()
-                    1 -> pickExport(p)
-                    2 -> Engine.clear(p)
-                }
+            .setItems(labels.toTypedArray()) { _, which -> actions[which]() }
+            .setNegativeButton("Abbrechen", null)
+            .show()
+    }
+
+    private fun showLibrary(p: Int) {
+        val names = SampleLibrary.samples.map { it.title }.toTypedArray()
+        AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
+            .setTitle("Bibliothek → Pad ${p + 1}")
+            .setItems(names) { _, which ->
+                val smp = SampleLibrary.samples[which]
+                val rate = Engine.sampleRate
+                Thread {
+                    try {
+                        val data = AudioFiles.decodeAsset(this, smp.file, rate, Engine.MAX_SECONDS)
+                        Engine.padOneShot[p] = smp.oneShot
+                        Engine.importLoop(p, data)
+                        runOnUiThread { toast("Pad ${p + 1}: ${smp.title}") }
+                    } catch (e: Exception) {
+                        runOnUiThread { toast("Laden fehlgeschlagen: ${e.message ?: e}") }
+                    }
+                }.start()
             }
             .setNegativeButton("Abbrechen", null)
             .show()

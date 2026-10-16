@@ -46,6 +46,16 @@ object AudioFiles {
     private fun decodeWav(context: Context, uri: Uri, targetRate: Int, maxSeconds: Int): FloatArray {
         val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
             ?: throw IllegalStateException("Datei nicht lesbar")
+        return decodeWavBytes(bytes, targetRate, maxSeconds)
+    }
+
+    /** Lädt ein mitgeliefertes Sample aus assets/samples. */
+    fun decodeAsset(context: Context, file: String, targetRate: Int, maxSeconds: Int): FloatArray {
+        val bytes = context.assets.open("samples/$file").use { it.readBytes() }
+        return decodeWavBytes(bytes, targetRate, maxSeconds)
+    }
+
+    private fun decodeWavBytes(bytes: ByteArray, targetRate: Int, maxSeconds: Int): FloatArray {
         val bb = ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN)
         var pos = 12
         var format = 1
