@@ -20,7 +20,7 @@ Nach einer **Song-Aufnahme**: als Audio (WAV), als Projekt (inkl. Song) speicher
 
 ## Designs & Display
 
-Im Menü ☰ → Design wählen – NEON (Regenbogen), GLOW (Orange glühend), STUDIO (Grau & Orange), HUD (Tech-Linien), RETRO (Grau/Grün/Orange mit Spektrum-Anzeigen für Ausgang und Mikrofon), COMIC (Pop-Art). Die Wahl wird gespeichert.
+Im Menü ☰ → Design wählen – NEON (Regenbogen), GLOW (Orange glühend), STUDIO (Grau & Orange), HUD (Tech-Linien), RETRO (Grau/Grün/Orange mit Spektrum-Anzeigen für Ausgang und Mikrofon), COMIC (Pop-Art), GLAS, PASTELL, HOLZ (Walnuss/Messing/Leinen), CREME, NOIR (Schwarz im Walnussrahmen), GRAU. Die Wahl wird gespeichert.
 Das **Display** in der Kopfzeile zeigt den aktuellen Effekt, die X/Y-Werte und den Takt. Links antippen öffnet die Effektliste, rechts das Tempo.
 
 ## Master-Tempo

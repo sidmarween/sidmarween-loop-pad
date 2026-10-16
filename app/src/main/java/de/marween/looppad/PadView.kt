@@ -247,6 +247,7 @@ class PadView(context: Context) : View(context) {
             HUD -> dp(5f)
             RETRO -> dp(4f)
             COMIC -> cell * 0.26f
+            in GLASS..GREY -> cell * SKINS[theme - GLASS].padRadius
             else -> cell * 0.17f
         }
         if (theme == RETRO) {
@@ -301,6 +302,7 @@ class PadView(context: Context) : View(context) {
         stopBtn.set(playBtn.right + dp(8f), bTop, playBtn.right + dp(8f) + bW, bTop + bH)
         buildHudLines(w, h)
         buildLightCaches()
+        buildSkinCaches()
     }
 
     /** Dekorative Leiterbahnen für das HUD-Design. */
@@ -415,6 +417,7 @@ class PadView(context: Context) : View(context) {
     }
 
     private fun drawBackground(canvas: Canvas) {
+        if (skinned) { drawBackgroundSkin(canvas); return }
         if (light) { drawBackgroundLight(canvas); return }
         val w = width.toFloat()
         val h = height.toFloat()
@@ -457,6 +460,7 @@ class PadView(context: Context) : View(context) {
     }
 
     private fun drawTopBar(canvas: Canvas) {
+        if (skinned) { drawTopBarSkin(canvas); return }
         if (light) { drawTopBarLight(canvas); return }
         // Kopfzeilen-Hintergrund (wie in den Entwürfen)
         if (theme != NEON) {
@@ -486,6 +490,7 @@ class PadView(context: Context) : View(context) {
     private fun drawDisplay(canvas: Canvas) {
         val r = displayRect
         if (r.width() <= dp(40f)) return
+        if (skinned) { drawDisplaySkin(canvas); return }
         if (light) { drawDisplayLight(canvas); return }
         val rr = dp(8f)
         val type = Engine.fxType
@@ -562,6 +567,7 @@ class PadView(context: Context) : View(context) {
     }
 
     private fun drawDesignButton(canvas: Canvas) {
+        if (skinned) { drawDesignButtonSkin(canvas); return }
         if (light) { drawDesignButtonLight(canvas); return }
         val r = designBtn
         val rr = dp(8f)
@@ -591,6 +597,7 @@ class PadView(context: Context) : View(context) {
 
     private fun drawButton(canvas: Canvas, r: RectF, label: String, active: Boolean, blink: Float) {
         if (r.width() <= 0f) return
+        if (skinned) { drawButtonSkin(canvas, r, label, active, blink); return }
         if (light) { drawButtonLight(canvas, r, label, active, blink); return }
         val rr = r.height() / 2f
         fillPaint.shader = null
@@ -627,7 +634,7 @@ class PadView(context: Context) : View(context) {
     }
 
     /** Leuchtfarbe eines Pads (für Partikel usw.). */
-    private fun padAccent(i: Int): Int = if (light) lightPadColor(i) else if (theme == NEON) {
+    private fun padAccent(i: Int): Int = if (skinned) (if (Engine.isOneShot(i)) skin.shot else skin.accent) else if (light) lightPadColor(i) else if (theme == NEON) {
         if (Engine.isOneShot(i)) neon(15f + 25f * sin(time * 1.3f + i * 0.9f)) else neon(hue(i))
     } else {
         if (Engine.isOneShot(i)) AMBER else ORANGE
@@ -636,6 +643,7 @@ class PadView(context: Context) : View(context) {
     private fun drawPad(canvas: Canvas, i: Int, dt: Float) {
         val r = padRects[i]
         if (r.width() <= 0f) return
+        if (skinned) { drawPadSkin(canvas, i, dt); return }
         if (light) { drawPadLight(canvas, i, dt); return }
         val st = Engine.state(i)
         val h = hue(i)
@@ -813,6 +821,7 @@ class PadView(context: Context) : View(context) {
     private fun drawMore(canvas: Canvas, i: Int) {
         val r = moreRects[i]
         if (r.width() <= 0f) return
+        if (skinned) { drawMoreSkin(canvas, i); return }
         if (light) { drawMoreLight(canvas, i); return }
         val has = Engine.hasLoop(i)
         val shot = Engine.isOneShot(i)
@@ -847,6 +856,7 @@ class PadView(context: Context) : View(context) {
     private fun drawSequencer(canvas: Canvas) {
         val r = seqRect
         if (r.width() <= 0f) return
+        if (skinned) { drawSequencerSkin(canvas); return }
         if (light) { drawSequencerLight(canvas); return }
         val neonMode = theme == NEON
         val acc = if (neonMode) neon(time * 30f) else ORANGE
@@ -1035,7 +1045,8 @@ class PadView(context: Context) : View(context) {
                 STUDIO -> knobStudio(canvas, cx, cy, rad, v, ang, active)
                 HUD -> knobHud(canvas, cx, cy, rad, v, ang, active)
                 RETRO -> knobRetro(canvas, cx, cy, rad, v, ang, active)
-                else -> knobComic(canvas, k, cx, cy, rad, v, ang, active)
+                COMIC -> knobComic(canvas, k, cx, cy, rad, v, ang, active)
+                else -> knobSkin(canvas, cx, cy, rad, v, ang, active)
             }
             // Beschriftung
             textPaint.textSize = dp(10f)
@@ -1044,7 +1055,7 @@ class PadView(context: Context) : View(context) {
             val step = Fx.stepLabel(Engine.fxType, k, v)
             if (active || step != null) {
                 textPaint.textSize = dp(if (step != null && step.length > 3) 9f else 11f)
-                textPaint.color = if (light) Color.BLACK else Color.WHITE
+                textPaint.color = if (skinned) skin.knobText else if (light) Color.BLACK else Color.WHITE
                 canvas.drawText(step ?: "${(v * 100).toInt()}", cx, cy + dp(4f), textPaint)
             }
         }
@@ -1169,6 +1180,7 @@ class PadView(context: Context) : View(context) {
         val r = fxBtn
         if (r.width() <= 0f) return
         fxFlash = max(0f, fxFlash - dt * 2f)
+        if (skinned) { drawFxButtonSkin(canvas); return }
         if (light) { drawFxButtonLight(canvas); return }
         val rr = dp(10f)
         val g = 0.7f + 0.5f * fxFlash + 0.3f * xyGlow
@@ -1213,6 +1225,7 @@ class PadView(context: Context) : View(context) {
         if (r.width() <= 0f) return
         val touching = xyPointer >= 0
         xyGlow += ((if (touching) 1f else 0f) - xyGlow) * min(1f, dt * 10f)
+        if (skinned) { drawXySkin(canvas, dt); return }
         if (light) { drawXyLight(canvas, dt); return }
         val neonMode = theme == NEON
         val c = if (neonMode) neon(Fx.HUES[Engine.fxType] + 20f * sin(time * 0.8f)) else ORANGE
@@ -1642,9 +1655,10 @@ class PadView(context: Context) : View(context) {
     private var comicBg: Bitmap? = null
     private var comicXy: Bitmap? = null
 
-    private fun ink(a: Float): Int = when (theme) {
-        RETRO -> alpha(R_INK, a)
-        COMIC -> alpha(Color.BLACK, a)
+    private fun ink(a: Float): Int = when {
+        theme == RETRO -> alpha(R_INK, a)
+        theme == COMIC -> alpha(Color.BLACK, a)
+        skinned -> alpha(skin.ink, a)
         else -> alpha(Color.WHITE, a)
     }
 
@@ -2395,12 +2409,730 @@ class PadView(context: Context) : View(context) {
         textPaint.textAlign = Paint.Align.CENTER
     }
 
+
+    // ================================================================ Produkt-Designs (GLAS, PASTELL, HOLZ, CREME, NOIR, GRAU)
+
+    private class Skin(
+        val bg: Int, val bg2: Int, val texture: Int, val panel: Int, val panelBorder: Int,
+        val ink: Int, val padInk: Int, val accent: Int, val shot: Int,
+        val knob: Int, val knobCap: Int, val knobRing: Int, val knobPointer: Int, val knobText: Int,
+        val xyStyle: Int, val xyFill: Int, val xyFill2: Int, val xyGrid: Int, val xyCols: Int, val xyRows: Int, val xyBorder: Int, val xyDot: Int,
+        val padStyle: Int, val padFill: Int, val palette: IntArray?, val padOutline: Int, val padRadius: Float, val shadow: Boolean,
+        val btnFill: Int, val btnOutline: Int, val btnText: Int,
+        val lcdBg: Int, val lcdText: Int, val lcdBorder: Int, val logoBadge: Boolean
+    )
+
+    private val skinned: Boolean get() = theme >= GLASS
+    private val skin: Skin get() = SKINS[(theme - GLASS).coerceIn(0, SKINS.size - 1)]
+    private var woodBmp: Bitmap? = null
+    private var woodShader: Shader? = null
+    private var linenShader: Shader? = null
+    private val dashEffect = android.graphics.DashPathEffect(floatArrayOf(10f, 7f), 0f)
+
+    private fun buildSkinCaches() {
+        if (!skinned || width <= 0 || height <= 0) return
+        val sk = skin
+        if (sk.texture != TEX_NONE && woodBmp == null) {
+            // Holzmaserung prozedural erzeugen
+            val b = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+            val c = Canvas(b)
+            c.drawColor(WOOD_BASE)
+            val rnd = Random(7)
+            val p = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE }
+            val path = Path()
+            var y = -20f
+            while (y < height + 20f) {
+                path.reset()
+                val amp = 3f + rnd.nextFloat() * 14f
+                val freq = 0.002f + rnd.nextFloat() * 0.006f
+                val ph = rnd.nextFloat() * 6.28f
+                path.moveTo(0f, y)
+                var x = 0f
+                while (x <= width) {
+                    path.lineTo(x, y + amp * sin(x * freq + ph) + 4f * sin(x * freq * 3.1f + ph * 2f))
+                    x += 12f
+                }
+                val dark = rnd.nextFloat() < 0.6f
+                p.color = if (dark) Color.argb((20 + rnd.nextInt(50)), 30, 14, 6) else Color.argb((10 + rnd.nextInt(30)), 255, 210, 160)
+                p.strokeWidth = 1f + rnd.nextFloat() * 3f
+                c.drawPath(path, p)
+                y += 2f + rnd.nextFloat() * 5f
+            }
+            woodBmp = b
+            woodShader = android.graphics.BitmapShader(b, Shader.TileMode.MIRROR, Shader.TileMode.MIRROR)
+        }
+        if (linenShader == null) {
+            val n = 64
+            val b = Bitmap.createBitmap(n, n, Bitmap.Config.ARGB_8888)
+            val c = Canvas(b)
+            c.drawColor(Color.rgb(234, 226, 210))
+            val rnd = Random(3)
+            val p = Paint()
+            for (q in 0 until 260) {
+                val horiz = rnd.nextBoolean()
+                val x = rnd.nextInt(n).toFloat()
+                val y = rnd.nextInt(n).toFloat()
+                val l = 3f + rnd.nextInt(8)
+                p.color = if (rnd.nextBoolean()) Color.argb(28, 120, 100, 70) else Color.argb(40, 255, 255, 245)
+                if (horiz) c.drawRect(x, y, x + l, y + 1f, p) else c.drawRect(x, y, x + 1f, y + l, p)
+            }
+            linenShader = android.graphics.BitmapShader(b, Shader.TileMode.REPEAT, Shader.TileMode.REPEAT)
+        }
+    }
+
+    private fun softShadow(canvas: Canvas, r: RectF, rr: Float, strength: Float = 1f) {
+        fillPaint.shader = null
+        for (q in 1..3) {
+            fillPaint.color = Color.argb((14 * strength).toInt(), 0, 0, 0)
+            val o = dp(q * 1.6f)
+            tmpRect.set(r.left - o * 0.3f, r.top + o * 0.6f, r.right + o * 0.3f, r.bottom + o * 1.4f)
+            canvas.drawRoundRect(tmpRect, rr + o, rr + o, fillPaint)
+        }
+    }
+
+    private fun drawBackgroundSkin(canvas: Canvas) {
+        val sk = skin
+        val w = width.toFloat()
+        val h = height.toFloat()
+        if (sk.texture != TEX_NONE && woodShader != null) {
+            bgPaint.shader = woodShader
+            canvas.drawRect(0f, 0f, w, h, bgPaint)
+            bgPaint.shader = null
+            if (sk.texture == TEX_WOOD_FRAME) {
+                val m = dp(9f)
+                tmpRect.set(m, m + insetTop * 0.2f, w - m, h - m)
+                val rr = dp(16f)
+                fillPaint.shader = null
+                fillPaint.color = Color.argb(90, 0, 0, 0)
+                canvas.drawRoundRect(tmpRect, rr, rr, fillPaint)
+                tmpRect.inset(dp(2f), dp(2f))
+                fillPaint.color = sk.panel
+                canvas.drawRoundRect(tmpRect, rr, rr, fillPaint)
+            }
+        } else {
+            bgPaint.shader = LinearGradient(0f, 0f, 0f, h, sk.bg, sk.bg2, Shader.TileMode.CLAMP)
+            canvas.drawRect(0f, 0f, w, h, bgPaint)
+            bgPaint.shader = null
+            if (Color.alpha(sk.panel) > 0) {
+                val m = dp(7f)
+                val r = RectF(m, displayRect.bottom + dp(10f), w - m, h - insetBottom - dp(30f))
+                val rr = dp(18f)
+                softShadow(canvas, r, rr)
+                fillPaint.color = sk.panel
+                canvas.drawRoundRect(r, rr, rr, fillPaint)
+                strokePaint.strokeWidth = dp(1.2f)
+                strokePaint.color = sk.panelBorder
+                canvas.drawRoundRect(r, rr, rr, strokePaint)
+            }
+        }
+    }
+
+    private fun drawTopBarSkin(canvas: Canvas) {
+        val sk = skin
+        if (sk.logoBadge) {
+            val rr = dp(10f)
+            val badge = RectF(logoDst.left - dp(6f), logoDst.top - dp(4f), logoDst.right + dp(6f), logoDst.bottom + dp(4f))
+            softShadow(canvas, badge, rr, 1.5f)
+            fillPaint.color = Color.rgb(28, 30, 34)
+            canvas.drawRoundRect(badge, rr, rr, fillPaint)
+        }
+        canvas.drawBitmap(logo, null, logoDst, logoPaint)
+        drawDisplay(canvas)
+        drawDesignButton(canvas)
+        val blink = 0.5f + 0.5f * sin(time * 10f)
+        drawButton(canvas, clearBtn, "CLEAR", clearMode, blink)
+        drawButton(canvas, muteBtn, if (Engine.anyPlaying()) "ALLE STUMM" else "ALLE AN", false, 0f)
+    }
+
+    private fun drawDisplaySkin(canvas: Canvas) {
+        val sk = skin
+        val r = displayRect
+        val rr = dp(8f)
+        if (sk.shadow) softShadow(canvas, r, rr)
+        fillPaint.shader = null
+        fillPaint.color = sk.lcdBg
+        canvas.drawRoundRect(r, rr, rr, fillPaint)
+        strokePaint.strokeWidth = dp(1.4f)
+        strokePaint.color = sk.lcdBorder
+        canvas.drawRoundRect(r, rr, rr, strokePaint)
+        val txt = sk.lcdText
+        val type = Engine.fxType
+        val pad = dp(9f)
+        val touching = xyPointer >= 0
+        canvas.save()
+        canvas.clipRect(r.left + dp(2f), r.top + dp(2f), r.right - dp(2f), r.bottom - dp(2f))
+        textPaint.textAlign = Paint.Align.LEFT
+        textPaint.textSize = dp(9f)
+        textPaint.color = alpha(txt, 0.65f)
+        canvas.drawText(String.format(Locale.GERMANY, "FX %02d/%d %s", type + 1, Fx.COUNT, if (touching) "●" else "○"), r.left + pad, r.top + dp(14f), textPaint)
+        textPaint.textAlign = Paint.Align.RIGHT
+        textPaint.textSize = dp(10f)
+        textPaint.color = sk.accent
+        canvas.drawText(bpmLabel(), r.right - pad, r.top + dp(15f), textPaint)
+        textPaint.textSize = dp(8f)
+        textPaint.color = alpha(txt, 0.5f)
+        canvas.drawText("TEMPO ▸", r.right - pad, r.top + dp(26f), textPaint)
+        textPaint.textAlign = Paint.Align.LEFT
+        textPaint.textSize = min(dp(17f), r.height() * 0.32f)
+        textPaint.color = txt
+        canvas.drawText(Fx.NAMES[type], r.left + pad, r.top + dp(32f), textPaint)
+        textPaint.textSize = dp(8.5f)
+        textPaint.color = alpha(txt, 0.75f)
+        canvas.drawText("X ${Fx.X_LABELS[type]} ${(xyDispX * 100).toInt()}  Y ${Fx.Y_LABELS[type]} ${(xyDispY * 100).toInt()}", r.left + pad, r.top + dp(44f), textPaint)
+        textPaint.textAlign = Paint.Align.CENTER
+        val mp = Engine.masterProgress()
+        val ly = r.bottom - dp(7f)
+        strokePaint.strokeWidth = dp(2.5f)
+        strokePaint.color = alpha(txt, 0.15f)
+        canvas.drawLine(r.left + pad, ly, r.right - pad, ly, strokePaint)
+        if (mp >= 0f) {
+            strokePaint.color = sk.accent
+            canvas.drawLine(r.left + pad, ly, r.left + pad + (r.width() - 2 * pad) * mp, ly, strokePaint)
+        }
+        canvas.restore()
+    }
+
+    private fun drawDesignButtonSkin(canvas: Canvas) {
+        val sk = skin
+        val r = designBtn
+        val rr = dp(8f)
+        if (sk.shadow) softShadow(canvas, r, rr)
+        fillPaint.shader = null
+        fillPaint.color = sk.btnFill
+        canvas.drawRoundRect(r, rr, rr, fillPaint)
+        strokePaint.strokeWidth = dp(1.4f)
+        strokePaint.color = sk.btnOutline
+        canvas.drawRoundRect(r, rr, rr, strokePaint)
+        drawMenuIcon(canvas, r, sk.btnText)
+    }
+
+    private fun drawButtonSkin(canvas: Canvas, r: RectF, label: String, active: Boolean, blink: Float) {
+        val sk = skin
+        val rr = r.height() / 2f
+        if (sk.shadow) softShadow(canvas, r, rr)
+        fillPaint.shader = null
+        fillPaint.color = if (active) blend(Color.rgb(220, 40, 50), Color.WHITE, 0.25f * blink) else sk.btnFill
+        canvas.drawRoundRect(r, rr, rr, fillPaint)
+        strokePaint.strokeWidth = dp(1.4f)
+        strokePaint.color = sk.btnOutline
+        canvas.drawRoundRect(r, rr, rr, strokePaint)
+        textPaint.textSize = dp(11.5f)
+        textPaint.color = if (active) Color.WHITE else sk.btnText
+        canvas.drawText(label, r.centerX(), r.centerY() + dp(4f), textPaint)
+    }
+
+    private fun knobSkin(canvas: Canvas, cx: Float, cy: Float, rad: Float, v: Float, ang: Float, active: Boolean) {
+        val sk = skin
+        // Wertebogen (dezente Rückmeldung)
+        tmpRect.set(cx - rad * 1.1f, cy - rad * 1.1f, cx + rad * 1.1f, cy + rad * 1.1f)
+        strokePaint.strokeCap = Paint.Cap.ROUND
+        strokePaint.strokeWidth = dp(2f)
+        strokePaint.color = alpha(sk.ink, 0.12f)
+        canvas.drawArc(tmpRect, 135f, 270f, false, strokePaint)
+        strokePaint.color = alpha(sk.accent, if (active) 1f else 0.75f)
+        canvas.drawArc(tmpRect, 135f, 270f * v, false, strokePaint)
+        strokePaint.strokeCap = Paint.Cap.BUTT
+        // Schatten
+        dotPaint.color = Color.argb(45, 0, 0, 0)
+        canvas.drawCircle(cx + dp(1.5f), cy + dp(3f), rad * 0.92f, dotPaint)
+        when (sk.knob) {
+            KN_CAP -> {
+                fillPaint.shader = RadialGradient(cx - rad * 0.3f, cy - rad * 0.4f, rad * 1.2f, blend(sk.knobCap, Color.WHITE, 0.6f), blend(sk.knobCap, Color.BLACK, 0.12f), Shader.TileMode.CLAMP)
+                canvas.drawCircle(cx, cy, rad * 0.88f, fillPaint)
+                fillPaint.shader = null
+                strokePaint.strokeWidth = dp(1f)
+                strokePaint.color = Color.argb(40, 0, 0, 0)
+                canvas.drawCircle(cx, cy, rad * 0.88f, strokePaint)
+            }
+            KN_KNURL, KN_GREYCAP -> {
+                fillPaint.shader = RadialGradient(cx - rad * 0.3f, cy - rad * 0.4f, rad * 1.2f, blend(sk.knobRing, Color.WHITE, 0.5f), blend(sk.knobRing, Color.BLACK, 0.12f), Shader.TileMode.CLAMP)
+                canvas.drawCircle(cx, cy, rad * 0.92f, fillPaint)
+                fillPaint.shader = null
+                strokePaint.strokeWidth = dp(1f)
+                strokePaint.color = Color.argb(70, 0, 0, 0)
+                for (t in 0 until 44) {
+                    val a = (t * Math.PI * 2 / 44).toFloat() + ang
+                    canvas.drawLine(cx + cos(a) * rad * 0.74f, cy + sin(a) * rad * 0.74f, cx + cos(a) * rad * 0.9f, cy + sin(a) * rad * 0.9f, strokePaint)
+                }
+                fillPaint.shader = RadialGradient(cx - rad * 0.2f, cy - rad * 0.3f, rad * 0.8f, blend(sk.knobCap, Color.WHITE, 0.3f), sk.knobCap, Shader.TileMode.CLAMP)
+                canvas.drawCircle(cx, cy, rad * 0.66f, fillPaint)
+                fillPaint.shader = null
+                strokePaint.color = Color.argb(60, 0, 0, 0)
+                canvas.drawCircle(cx, cy, rad * 0.66f, strokePaint)
+            }
+            KN_BRASS -> {
+                fillPaint.shader = android.graphics.SweepGradient(cx, cy, intArrayOf(
+                    Color.rgb(150, 110, 40), Color.rgb(240, 210, 130), Color.rgb(170, 125, 45), Color.rgb(235, 200, 120), Color.rgb(150, 110, 40)
+                ), null)
+                canvas.drawCircle(cx, cy, rad * 0.95f, fillPaint)
+                fillPaint.shader = null
+                strokePaint.strokeWidth = dp(1f)
+                strokePaint.color = Color.argb(90, 60, 40, 10)
+                for (t in 0 until 60) {
+                    val a = (t * Math.PI * 2 / 60).toFloat()
+                    canvas.drawLine(cx + cos(a) * rad * 0.86f, cy + sin(a) * rad * 0.86f, cx + cos(a) * rad * 0.95f, cy + sin(a) * rad * 0.95f, strokePaint)
+                }
+                fillPaint.shader = RadialGradient(cx - rad * 0.2f, cy - rad * 0.3f, rad * 0.8f, Color.rgb(120, 70, 40), Color.rgb(62, 32, 16), Shader.TileMode.CLAMP)
+                canvas.drawCircle(cx, cy, rad * 0.74f, fillPaint)
+                fillPaint.shader = RadialGradient(cx - rad * 0.15f, cy - rad * 0.2f, rad * 0.45f, Color.rgb(250, 225, 150), Color.rgb(175, 130, 50), Shader.TileMode.CLAMP)
+                canvas.drawCircle(cx, cy, rad * 0.4f, fillPaint)
+                fillPaint.shader = null
+            }
+            else -> { // KN_GLASS
+                fillPaint.shader = RadialGradient(cx, cy - rad * 0.3f, rad * 1.1f, Color.argb(230, 255, 255, 255), Color.argb(200, 205, 214, 226), Shader.TileMode.CLAMP)
+                canvas.drawCircle(cx, cy, rad * 0.95f, fillPaint)
+                fillPaint.shader = null
+                strokePaint.strokeWidth = dp(2f)
+                strokePaint.color = Color.WHITE
+                canvas.drawCircle(cx, cy, rad * 0.95f, strokePaint)
+                strokePaint.strokeWidth = dp(1.5f)
+                strokePaint.color = Color.argb(200, 255, 255, 255)
+                canvas.drawCircle(cx, cy, rad * 0.72f, strokePaint)
+                fillPaint.shader = RadialGradient(cx - rad * 0.2f, cy - rad * 0.3f, rad * 0.7f, Color.rgb(240, 242, 245), Color.rgb(196, 202, 210), Shader.TileMode.CLAMP)
+                canvas.drawCircle(cx, cy, rad * 0.6f, fillPaint)
+                fillPaint.shader = null
+            }
+        }
+        // Zeiger
+        strokePaint.strokeCap = Paint.Cap.ROUND
+        strokePaint.strokeWidth = dp(2f)
+        strokePaint.color = sk.knobPointer
+        val r0 = if (sk.knob == KN_BRASS) rad * 0.12f else rad * 0.25f
+        val r1 = if (sk.knob == KN_BRASS) rad * 0.38f else if (sk.knob == KN_CAP) rad * 0.82f else rad * 0.6f
+        canvas.drawLine(cx + cos(ang) * r0, cy + sin(ang) * r0, cx + cos(ang) * r1, cy + sin(ang) * r1, strokePaint)
+        strokePaint.strokeCap = Paint.Cap.BUTT
+    }
+
+    private fun drawFxButtonSkin(canvas: Canvas) {
+        val sk = skin
+        val r = fxBtn
+        val rr = dp(8f)
+        if (sk.shadow) softShadow(canvas, r, rr)
+        fillPaint.shader = null
+        fillPaint.color = blend(sk.btnFill, sk.accent, 0.35f * fxFlash + 0.15f * xyGlow)
+        canvas.drawRoundRect(r, rr, rr, fillPaint)
+        if (sk.padStyle == PS_FRAMED) {
+            fillPaint.shader = linenShader
+            tmpRect.set(r.left + dp(6f), r.top + dp(6f), r.right - dp(6f), r.bottom - dp(6f))
+            canvas.drawRoundRect(tmpRect, dp(5f), dp(5f), fillPaint)
+            fillPaint.shader = null
+        }
+        strokePaint.strokeWidth = dp(1.4f)
+        strokePaint.color = sk.btnOutline
+        canvas.drawRoundRect(r, rr, rr, strokePaint)
+        textPaint.textSize = r.width() * 0.28f
+        textPaint.color = if (sk.padStyle == PS_FRAMED) sk.padInk else sk.btnText
+        canvas.drawText(FX_CODES[Engine.fxType], r.centerX(), r.centerY() + r.width() * 0.1f, textPaint)
+    }
+
+    private fun drawXySkin(canvas: Canvas, dt: Float) {
+        val sk = skin
+        val r = xyRect
+        val touching = xyPointer >= 0
+        val fx = r.left + r.width() * xyDispX
+        val fy = r.bottom - r.height() * xyDispY
+        val rr = dp(if (sk.xyStyle == XY_GLOW) 14f else 10f)
+        if (sk.shadow) softShadow(canvas, r, rr)
+        // Fläche
+        when (sk.xyStyle) {
+            XY_GLOW -> fillPaint.shader = LinearGradient(0f, r.top, 0f, r.bottom, sk.xyFill, sk.xyFill2, Shader.TileMode.CLAMP)
+            XY_STITCH -> fillPaint.shader = linenShader
+            else -> { fillPaint.shader = null; fillPaint.color = sk.xyFill }
+        }
+        canvas.drawRoundRect(r, rr, rr, fillPaint)
+        fillPaint.shader = null
+        canvas.save()
+        val clip = Path()
+        clip.addRoundRect(r, rr, rr, Path.Direction.CW)
+        canvas.clipPath(clip)
+        val ins = dp(10f)
+        val gl = r.left + ins
+        val gt = r.top + ins
+        val gr = r.right - ins
+        val gb = r.bottom - ins
+        strokePaint.color = sk.xyGrid
+        when (sk.xyStyle) {
+            XY_GLOW, XY_GRID -> {
+                strokePaint.strokeWidth = dp(if (sk.xyStyle == XY_GLOW) 1f else 0.8f)
+                if (sk.xyStyle == XY_GLOW) strokePaint.color = alpha(sk.xyGrid, 0.55f + 0.3f * xyGlow)
+                for (k in 0..sk.xyCols) { val x = gl + (gr - gl) * k / sk.xyCols; canvas.drawLine(x, gt, x, gb, strokePaint) }
+                for (k in 0..sk.xyRows) { val y = gt + (gb - gt) * k / sk.xyRows; canvas.drawLine(gl, y, gr, y, strokePaint) }
+                if (sk.xyStyle == XY_GRID) {
+                    // kleine Markierungen wie im Entwurf
+                    textPaint.textSize = dp(9f)
+                    textPaint.color = alpha(sk.xyGrid, 1f)
+                    for (k in 0..sk.xyCols step 2) canvas.drawText("×", gl + (gr - gl) * k / sk.xyCols, gb + dp(8f), textPaint)
+                }
+            }
+            XY_STITCH -> {
+                strokePaint.strokeWidth = dp(1.3f)
+                strokePaint.pathEffect = dashEffect
+                for (k in 1 until sk.xyCols) { val x = r.left + r.width() * k / sk.xyCols; canvas.drawLine(x, r.top, x, r.bottom, strokePaint) }
+                for (k in 1 until sk.xyRows) { val y = r.top + r.height() * k / sk.xyRows; canvas.drawLine(r.left, y, r.right, y, strokePaint) }
+                tmpRect.set(r.left + dp(5f), r.top + dp(5f), r.right - dp(5f), r.bottom - dp(5f))
+                canvas.drawRoundRect(tmpRect, rr - dp(3f), rr - dp(3f), strokePaint)
+                strokePaint.pathEffect = null
+                textPaint.typeface = Typeface.SERIF
+                textPaint.textSize = dp(12f)
+                textPaint.color = Color.rgb(180, 140, 70)
+                canvas.drawText("XY PAD", r.centerX(), r.top + dp(22f), textPaint)
+                textPaint.typeface = Typeface.create(Typeface.MONOSPACE, Typeface.BOLD)
+            }
+            XY_DIAG -> {
+                strokePaint.strokeWidth = dp(0.9f)
+                for (q in 0..2) {
+                    val o = dp(6f) + q * dp(4f)
+                    tmpRect.set(r.left + o, r.top + o, r.right - o, r.bottom - o)
+                    canvas.drawRoundRect(tmpRect, dp(6f), dp(6f), strokePaint)
+                }
+                val o = dp(22f)
+                canvas.drawLine(r.left + o, r.top + o, r.right - o, r.bottom - o, strokePaint)
+                canvas.drawLine(r.right - o, r.top + o, r.left + o, r.bottom - o, strokePaint)
+                canvas.drawLine(r.centerX(), r.top + dp(10f), r.centerX(), r.bottom - dp(10f), strokePaint)
+                canvas.drawLine(r.left + dp(10f), r.centerY(), r.right - dp(10f), r.centerY(), strokePaint)
+            }
+            XY_CROSS -> {
+                strokePaint.strokeWidth = dp(1f)
+                canvas.drawLine(r.centerX(), r.top, r.centerX(), r.bottom, strokePaint)
+                canvas.drawLine(r.left, r.centerY(), r.right, r.centerY(), strokePaint)
+            }
+            else -> { // XY_INSET
+                strokePaint.strokeWidth = dp(1.2f)
+                tmpRect.set(r.left + dp(7f), r.top + dp(7f), r.right - dp(7f), r.bottom - dp(7f))
+                canvas.drawRoundRect(tmpRect, dp(5f), dp(5f), strokePaint)
+                strokePaint.strokeWidth = dp(0.8f)
+                strokePaint.color = alpha(sk.xyGrid, 0.6f)
+                for (k in 1 until sk.xyCols) { val x = tmpRect.left + tmpRect.width() * k / sk.xyCols; canvas.drawLine(x, tmpRect.top, x, tmpRect.bottom, strokePaint) }
+                for (k in 1 until sk.xyRows) { val y = tmpRect.top + tmpRect.height() * k / sk.xyRows; canvas.drawLine(tmpRect.left, y, tmpRect.right, y, strokePaint) }
+                strokePaint.strokeWidth = dp(1.4f)
+                strokePaint.color = sk.xyBorder
+                val c = dp(10f)
+                canvas.drawLine(r.centerX() - c, r.centerY(), r.centerX() + c, r.centerY(), strokePaint)
+                canvas.drawLine(r.centerX(), r.centerY() - c, r.centerX(), r.centerY() + c, strokePaint)
+            }
+        }
+        // Berührungspunkt
+        val a = 0.45f + 0.55f * xyGlow
+        if (touching) {
+            fillPaint.shader = RadialGradient(fx, fy, r.width() * 0.35f, alpha(sk.accent, 0.35f), Color.TRANSPARENT, Shader.TileMode.CLAMP)
+            canvas.drawRect(r, fillPaint)
+            fillPaint.shader = null
+            strokePaint.strokeWidth = dp(1f)
+            strokePaint.color = alpha(sk.xyDot, 0.5f)
+            canvas.drawLine(r.left, fy, r.right, fy, strokePaint)
+            canvas.drawLine(fx, r.top, fx, r.bottom, strokePaint)
+            val ring = (time * 2f) % 1f
+            strokePaint.strokeWidth = dp(2f) * (1f - ring)
+            strokePaint.color = alpha(sk.accent, 1f - ring)
+            canvas.drawCircle(fx, fy, dp(14f) + dp(40f) * ring, strokePaint)
+        }
+        if (sk.xyStyle == XY_GLOW || sk.xyStyle == XY_CROSS) {
+            dotPaint.color = alpha(sk.xyDot, 0.25f * a)
+            canvas.drawCircle(fx, fy, dp(16f), dotPaint)
+            dotPaint.color = alpha(sk.xyDot, 0.5f * a)
+            canvas.drawCircle(fx, fy, dp(8f), dotPaint)
+            dotPaint.color = alpha(Color.WHITE, a)
+            canvas.drawCircle(fx, fy, dp(3.5f), dotPaint)
+        } else {
+            dotPaint.color = Color.argb((60 * a).toInt(), 0, 0, 0)
+            canvas.drawCircle(fx + dp(1.5f), fy + dp(2.5f), dp(9f), dotPaint)
+            dotPaint.color = alpha(sk.xyDot, a)
+            canvas.drawCircle(fx, fy, dp(9f), dotPaint)
+            dotPaint.color = alpha(Color.WHITE, 0.6f * a)
+            canvas.drawCircle(fx - dp(2.5f), fy - dp(2.5f), dp(2.5f), dotPaint)
+        }
+        canvas.restore()
+        strokePaint.strokeWidth = dp(if (sk.xyStyle == XY_GLOW) 3f else 1.4f)
+        strokePaint.color = sk.xyBorder
+        canvas.drawRoundRect(r, rr, rr, strokePaint)
+        textPaint.textSize = dp(10f)
+        textPaint.color = alpha(if (sk.xyStyle == XY_CROSS || sk.xyStyle == XY_GLOW) Color.WHITE else sk.ink, 0.6f)
+        textPaint.textAlign = Paint.Align.RIGHT
+        canvas.drawText("X: ${Fx.X_LABELS[Engine.fxType]} →", r.right - dp(14f), r.bottom - dp(12f), textPaint)
+        textPaint.textAlign = Paint.Align.LEFT
+        canvas.drawText("↑ Y: ${Fx.Y_LABELS[Engine.fxType]}", r.left + dp(14f), r.top + dp(if (sk.xyStyle == XY_STITCH) 40f else 20f), textPaint)
+        textPaint.textAlign = Paint.Align.CENTER
+    }
+
+    private fun drawPadSkin(canvas: Canvas, i: Int, dt: Float) {
+        val sk = skin
+        val r = padRects[i]
+        val st = Engine.state(i)
+        flash[i] = max(0f, flash[i] - dt * 2.4f)
+        val lvl = min(1f, Engine.levels[i] * 2.2f)
+        val inLvl = min(1f, Engine.inputLevel * 3f)
+        val shotMode = Engine.isOneShot(i)
+        val acc = if (shotMode) sk.shot else sk.accent
+        val pal = sk.palette
+        val base = if (pal != null) pal[i % pal.size] else sk.padFill
+        var progress = -1f
+        var glowCol = acc
+        var glow = 0f
+        var led = Color.TRANSPARENT
+        when (st) {
+            Engine.PadState.EMPTY -> {}
+            Engine.PadState.ONESHOT -> {
+                progress = Engine.shotProgress(i)
+                led = acc
+                if (progress >= 0f) glow = 0.35f + 0.5f * lvl
+            }
+            Engine.PadState.PLAYING -> {
+                progress = Engine.progress(i)
+                if (progress < 0.06f) flash[i] = max(flash[i], 0.4f * (1f - progress / 0.06f))
+                led = acc
+                glow = 0.2f + 0.55f * lvl
+            }
+            Engine.PadState.MUTED -> {
+                progress = Engine.progress(i)
+                led = Color.rgb(140, 140, 140)
+            }
+            Engine.PadState.RECORDING -> {
+                glowCol = Color.rgb(235, 35, 50)
+                led = glowCol
+                glow = 0.5f + 0.3f * sin(time * 14f) + 0.2f * inLvl
+            }
+            Engine.PadState.OVERDUB -> {
+                progress = Engine.progress(i)
+                glowCol = blend(acc, Color.WHITE, 0.4f)
+                led = Color.rgb(235, 35, 50)
+                glow = 0.6f + 0.3f * inLvl
+            }
+        }
+        glow = min(1f, glow + flash[i] * 0.7f)
+        val rad = radius
+        var inner = r
+        when (sk.padStyle) {
+            PS_FRAMED -> {
+                if (sk.shadow) softShadow(canvas, r, rad, 1.6f)
+                fillPaint.shader = woodShader
+                canvas.drawRoundRect(r, rad, rad, fillPaint)
+                fillPaint.shader = null
+                fillPaint.color = Color.argb(70, 20, 8, 2)
+                canvas.drawRoundRect(r, rad, rad, fillPaint)
+                strokePaint.strokeWidth = dp(1f)
+                strokePaint.color = Color.argb(70, 255, 220, 170)
+                canvas.drawRoundRect(r, rad, rad, strokePaint)
+                val ins = r.width() * 0.13f
+                inner = RectF(r.left + ins, r.top + ins, r.right - ins, r.bottom - ins)
+                fillPaint.color = Color.argb(110, 0, 0, 0)
+                tmpRect.set(inner.left, inner.top + dp(2f), inner.right, inner.bottom + dp(2.5f))
+                canvas.drawRoundRect(tmpRect, rad * 0.7f, rad * 0.7f, fillPaint)
+                fillPaint.shader = linenShader
+                canvas.drawRoundRect(inner, rad * 0.7f, rad * 0.7f, fillPaint)
+                fillPaint.shader = null
+                strokePaint.color = sk.padOutline
+                strokePaint.strokeWidth = dp(1.2f)
+                canvas.drawRoundRect(inner, rad * 0.7f, rad * 0.7f, strokePaint)
+            }
+            PS_GLASS -> {
+                fillPaint.shader = LinearGradient(0f, r.top, 0f, r.bottom, Color.argb(235, 250, 252, 255), Color.argb(215, 226, 234, 244), Shader.TileMode.CLAMP)
+                canvas.drawRoundRect(r, rad, rad, fillPaint)
+                fillPaint.shader = RadialGradient(r.centerX(), r.centerY(), r.width() * 0.5f, alpha(sk.accent, 0.28f), Color.TRANSPARENT, Shader.TileMode.CLAMP)
+                canvas.drawRoundRect(r, rad, rad, fillPaint)
+                fillPaint.shader = null
+                strokePaint.strokeWidth = dp(1.5f)
+                strokePaint.color = Color.WHITE
+                canvas.drawRoundRect(r, rad, rad, strokePaint)
+                strokePaint.strokeWidth = dp(1f)
+                strokePaint.color = sk.padOutline
+                tmpRect.set(r.left + dp(2f), r.top + dp(2f), r.right - dp(2f), r.bottom - dp(2f))
+                canvas.drawRoundRect(tmpRect, rad, rad, strokePaint)
+            }
+            else -> {
+                if (sk.shadow) softShadow(canvas, r, rad, 1.4f)
+                fillPaint.shader = LinearGradient(0f, r.top, 0f, r.bottom, blend(base, Color.WHITE, 0.12f), blend(base, Color.BLACK, 0.05f), Shader.TileMode.CLAMP)
+                canvas.drawRoundRect(r, rad, rad, fillPaint)
+                fillPaint.shader = null
+                strokePaint.strokeWidth = dp(1.2f)
+                strokePaint.color = sk.padOutline
+                canvas.drawRoundRect(r, rad, rad, strokePaint)
+                if (sk.padStyle == PS_DOUBLE) {
+                    tmpRect.set(r.left + dp(3f), r.top + dp(3f), r.right - dp(3f), r.bottom - dp(3f))
+                    strokePaint.color = Color.argb(150, 255, 255, 255)
+                    canvas.drawRoundRect(tmpRect, rad, rad, strokePaint)
+                }
+            }
+        }
+        // Leuchten bei Aktivität
+        if (glow > 0.01f) {
+            fillPaint.shader = RadialGradient(inner.centerX(), inner.centerY(), inner.width() * 0.75f, alpha(glowCol, 0.75f * glow), alpha(glowCol, 0.08f * glow), Shader.TileMode.CLAMP)
+            canvas.drawRoundRect(inner, rad, rad, fillPaint)
+            fillPaint.shader = null
+        }
+        // Status-LED
+        if (led != Color.TRANSPARENT) {
+            val lx = inner.right - dp(8f)
+            val ly = inner.top + dp(8f)
+            dotPaint.color = alpha(led, 0.35f)
+            canvas.drawCircle(lx, ly, dp(6f), dotPaint)
+            dotPaint.color = led
+            canvas.drawCircle(lx, ly, dp(3f), dotPaint)
+        }
+        if (shotMode) {
+            textPaint.textSize = inner.width() * 0.17f
+            textPaint.color = alpha(sk.padInk, 0.8f)
+            textPaint.textAlign = Paint.Align.LEFT
+            canvas.drawText("⚡", inner.left + dp(5f), inner.top + inner.width() * 0.22f, textPaint)
+            textPaint.textAlign = Paint.Align.CENTER
+        }
+        // Lauflicht
+        if (progress >= 0f && padLengths[i] > 0f) {
+            val len = padLengths[i]
+            val faded = st == Engine.PadState.MUTED
+            for (j in 0 until 10) {
+                var p = progress - j * 0.012f
+                if (p < 0f) {
+                    if (shotMode) break
+                    p += 1f
+                }
+                padMeasures[i].getPosTan(p * len, pos, null)
+                val k = 1f - j / 10f
+                dotPaint.color = alpha(if (j == 0) (if (sk.padStyle == PS_GLASS) sk.accent else sk.padInk) else acc, k * (if (faded) 0.35f else 1f))
+                canvas.drawCircle(pos[0], pos[1], dp(4f) * k + dp(1f), dotPaint)
+            }
+        }
+        if (st == Engine.PadState.RECORDING) {
+            val secs = Engine.recordingSeconds(i)
+            val m = inner.width() * 0.24f
+            tmpRect.set(inner.left + m, inner.top + m, inner.right - m, inner.bottom - m)
+            strokePaint.strokeWidth = dp(3.5f)
+            strokePaint.color = alpha(Color.WHITE, 0.4f)
+            canvas.drawOval(tmpRect, strokePaint)
+            strokePaint.color = Color.WHITE
+            canvas.drawArc(tmpRect, -90f, (secs % 1f) * 360f, false, strokePaint)
+        }
+        if (clearMode && Engine.hasLoop(i)) {
+            strokePaint.strokeWidth = dp(3f)
+            strokePaint.color = alpha(Color.rgb(220, 40, 50), 0.5f + 0.5f * sin(time * 12f))
+            val m = inner.width() * 0.25f
+            canvas.drawLine(inner.left + m, inner.top + m, inner.right - m, inner.bottom - m, strokePaint)
+            canvas.drawLine(inner.right - m, inner.top + m, inner.left + m, inner.bottom - m, strokePaint)
+        }
+        val label = when (st) {
+            Engine.PadState.EMPTY -> ""
+            Engine.PadState.ONESHOT -> String.format(Locale.GERMANY, "%.1fs", Engine.loopSeconds(i))
+            Engine.PadState.PLAYING -> String.format(Locale.GERMANY, "∞ %.1fs", Engine.loopSeconds(i))
+            Engine.PadState.MUTED -> "STUMM"
+            Engine.PadState.RECORDING -> String.format(Locale.GERMANY, "REC %.1f", Engine.recordingSeconds(i))
+            Engine.PadState.OVERDUB -> "DUB"
+        }
+        if (label.isNotEmpty()) {
+            textPaint.textSize = inner.width() * 0.14f
+            textPaint.color = alpha(sk.padInk, if (st == Engine.PadState.MUTED) 0.5f else 0.9f)
+            canvas.drawText(label, inner.centerX(), inner.bottom - inner.height() * 0.13f, textPaint)
+        }
+    }
+
+    private fun drawMoreSkin(canvas: Canvas, i: Int) {
+        val sk = skin
+        val r = moreRects[i]
+        val has = Engine.hasLoop(i)
+        val rr = r.height() / 2f
+        fillPaint.shader = null
+        fillPaint.color = sk.btnFill
+        canvas.drawRoundRect(r, rr, rr, fillPaint)
+        strokePaint.strokeWidth = dp(1f)
+        strokePaint.color = alpha(sk.btnOutline, if (has) 1f else 0.6f)
+        canvas.drawRoundRect(r, rr, rr, strokePaint)
+        dotPaint.color = if (has) (if (Engine.isOneShot(i)) sk.shot else sk.accent) else alpha(sk.btnText, 0.6f)
+        val d = dp(5f)
+        for (k in -1..1) canvas.drawCircle(r.centerX() + k * d, r.centerY(), dp(1.6f), dotPaint)
+    }
+
+    private fun drawSequencerSkin(canvas: Canvas) {
+        val sk = skin
+        val r = seqRect
+        val rr = dp(10f)
+        if (sk.shadow) softShadow(canvas, r, rr)
+        fillPaint.shader = null
+        fillPaint.color = sk.btnFill
+        canvas.drawRoundRect(r, rr, rr, fillPaint)
+        strokePaint.strokeWidth = dp(1.4f)
+        strokePaint.color = sk.btnOutline
+        canvas.drawRoundRect(r, rr, rr, strokePaint)
+        val cur = Engine.seqCurrentStep()
+        val sel = Engine.seqSelected
+        val txt = sk.btnText
+        for (k in 0 until Engine.STEPS) {
+            val s = stepRects[k]
+            val on = sel >= 0 && Engine.seqHas(sel, k)
+            val count = Engine.seqCount(k)
+            val playing = k == cur
+            fillPaint.color = when {
+                on -> sk.accent
+                playing -> alpha(txt, 0.3f)
+                else -> alpha(txt, if (k % 4 == 0) 0.12f else 0.06f)
+            }
+            canvas.drawRoundRect(s, dp(3f), dp(3f), fillPaint)
+            strokePaint.strokeWidth = dp(if (playing) 2f else 1f)
+            strokePaint.color = if (playing) txt else alpha(txt, 0.3f)
+            canvas.drawRoundRect(s, dp(3f), dp(3f), strokePaint)
+            val others = count - (if (on) 1 else 0)
+            if (others > 0) {
+                dotPaint.color = txt
+                for (d in 0 until min(others, 3)) canvas.drawCircle(s.centerX(), s.bottom - dp(4f) - d * dp(5f), dp(1.6f), dotPaint)
+            }
+        }
+        val red = Color.rgb(225, 40, 50)
+        val recOn = Engine.seqRecording || Engine.songRecording
+        val blink = 0.5f + 0.5f * sin(time * 8f)
+        for ((btn, act) in arrayOf(recBtn to recOn, playBtn to Engine.seqPlaying, stopBtn to false)) {
+            val brr = dp(6f)
+            fillPaint.color = when {
+                btn === recBtn && act -> blend(red, Color.WHITE, 0.3f * blink)
+                btn === playBtn && act -> sk.accent
+                else -> blend(sk.btnFill, sk.btnText, 0.07f)
+            }
+            canvas.drawRoundRect(btn, brr, brr, fillPaint)
+            strokePaint.strokeWidth = dp(1.2f)
+            strokePaint.color = sk.btnOutline
+            canvas.drawRoundRect(btn, brr, brr, strokePaint)
+        }
+        val ic = min(recBtn.height(), recBtn.width()) * 0.22f
+        dotPaint.color = if (recOn) Color.WHITE else red
+        canvas.drawCircle(recBtn.centerX(), recBtn.centerY(), ic, dotPaint)
+        val tri = Path()
+        tri.moveTo(playBtn.centerX() - ic * 0.8f, playBtn.centerY() - ic)
+        tri.lineTo(playBtn.centerX() + ic * 1.1f, playBtn.centerY())
+        tri.lineTo(playBtn.centerX() - ic * 0.8f, playBtn.centerY() + ic)
+        tri.close()
+        fillPaint.color = if (Engine.seqPlaying) Color.WHITE else txt
+        canvas.drawPath(tri, fillPaint)
+        fillPaint.color = txt
+        canvas.drawRect(stopBtn.centerX() - ic * 0.9f, stopBtn.centerY() - ic * 0.9f, stopBtn.centerX() + ic * 0.9f, stopBtn.centerY() + ic * 0.9f, fillPaint)
+        val ix = stopBtn.right + dp(10f)
+        textPaint.textAlign = Paint.Align.LEFT
+        textPaint.textSize = dp(11f)
+        textPaint.color = if (recOn) red else sk.accent
+        val head = when {
+            Engine.songRecording -> {
+                val t = Engine.songSeconds().toInt()
+                String.format(Locale.GERMANY, "● SONG %d:%02d", t / 60, t % 60)
+            }
+            Engine.seqRecording -> "● REC PATTERN"
+            Engine.seqPlaying -> "▶ SEQ"
+            else -> "SEQUENZER"
+        }
+        canvas.drawText(head, ix, recBtn.top + dp(13f), textPaint)
+        textPaint.textSize = dp(9.5f)
+        textPaint.color = alpha(txt, 0.7f)
+        canvas.drawText(if (sel >= 0) "Pad ${sel + 1}: Schritte tippen" else "⚡-Pad antippen", ix, recBtn.top + dp(27f), textPaint)
+        canvas.drawText("STOP halten = leeren", ix, recBtn.top + dp(40f), textPaint)
+        textPaint.textAlign = Paint.Align.CENTER
+    }
+
     companion object {
         private val BRAND_ORANGE = Color.rgb(255, 95, 0)
 
         const val VISIBLE_PADS = 12
         const val RETRO = 4
         const val COMIC = 5
+        const val GLASS = 6
+        const val PASTEL = 7
+        const val WOOD = 8
+        const val CREAM = 9
+        const val NOIR = 10
+        const val GREY = 11
         const val NEON = 0
         const val GLOW = 1
         const val STUDIO = 2
@@ -2411,7 +3143,13 @@ class PadView(context: Context) : View(context) {
             "STUDIO – Grau & Orange",
             "HUD – Tech-Linien",
             "RETRO – Grau, Grün & Orange mit Spektrum",
-            "COMIC – Pop-Art"
+            "COMIC – Pop-Art",
+            "GLAS – Milchglas & Blau",
+            "PASTELL – Weiß & Pastell",
+            "HOLZ – Walnuss, Messing & Leinen",
+            "CREME – Beige & Rändel",
+            "NOIR – Schwarz im Walnussrahmen",
+            "GRAU – Hellgrau & Rändel"
         )
         private val ORANGE = Color.rgb(255, 106, 16)
         private val AMBER = Color.rgb(255, 196, 40)
@@ -2422,6 +3160,77 @@ class PadView(context: Context) : View(context) {
         private val STUDIO_ALPHAS = floatArrayOf(0.12f, 0.28f, 1.0f)
         private val HUD_WIDTHS = floatArrayOf(6f, 1.3f)
         private val HUD_ALPHAS = floatArrayOf(0.15f, 1.0f)
+
+        private const val TEX_NONE = 0
+        private const val TEX_WOOD = 1
+        private const val TEX_WOOD_FRAME = 2
+        private const val KN_CAP = 0
+        private const val KN_KNURL = 1
+        private const val KN_BRASS = 2
+        private const val KN_GLASS = 3
+        private const val KN_GREYCAP = 4
+        private const val XY_GLOW = 0
+        private const val XY_GRID = 1
+        private const val XY_STITCH = 2
+        private const val XY_DIAG = 3
+        private const val XY_CROSS = 4
+        private const val XY_INSET = 5
+        private const val PS_FLAT = 0
+        private const val PS_GLASS = 1
+        private const val PS_FRAMED = 2
+        private const val PS_DOUBLE = 3
+        private val WOOD_BASE = Color.parseColor("#5A3522")
+
+        private val SKINS = arrayOf(
+            // GLAS
+            Skin(Color.parseColor("#F4F7FB"), Color.parseColor("#E2E9F2"), TEX_NONE, Color.argb(130, 255, 255, 255), Color.parseColor("#C3D5EA"),
+                Color.parseColor("#3A4A5E"), Color.parseColor("#3A4A5E"), Color.parseColor("#3D8BFF"), Color.parseColor("#00B3D6"),
+                KN_GLASS, Color.parseColor("#F7F9FC"), Color.parseColor("#D9E0E8"), Color.parseColor("#3D8BFF"), Color.parseColor("#3A4A5E"),
+                XY_GLOW, Color.parseColor("#A9BBD6"), Color.parseColor("#6A84B2"), Color.parseColor("#CDE6FF"), 16, 14, Color.WHITE, Color.parseColor("#BFE3FF"),
+                PS_GLASS, Color.parseColor("#EEF3F9"), null, Color.parseColor("#C6D4E6"), 0.10f, false,
+                Color.parseColor("#F3F7FC"), Color.parseColor("#BFD0E4"), Color.parseColor("#3A4A5E"),
+                Color.parseColor("#DCE6F2"), Color.parseColor("#2C5AA0"), Color.parseColor("#B5C8DE"), true),
+            // PASTELL
+            Skin(Color.parseColor("#EFEFEF"), Color.parseColor("#E5E5E5"), TEX_NONE, Color.parseColor("#FBFBFB"), Color.parseColor("#E2E2E2"),
+                Color.parseColor("#555555"), Color.parseColor("#3A3A3A"), Color.parseColor("#FF5C8A"), Color.parseColor("#7A5CFF"),
+                KN_CAP, Color.parseColor("#FBFBFB"), Color.parseColor("#FBFBFB"), Color.parseColor("#9A9A9A"), Color.parseColor("#555555"),
+                XY_GRID, Color.parseColor("#F6F6F6"), Color.parseColor("#F6F6F6"), Color.parseColor("#D2D2D2"), 16, 10, Color.parseColor("#BDBDBD"), Color.parseColor("#FF5C8A"),
+                PS_FLAT, Color.parseColor("#EEEEEE"), intArrayOf(Color.parseColor("#FFBFDC"), Color.parseColor("#FFCBB3"), Color.parseColor("#FFEFA3"), Color.parseColor("#BFEBC9"), Color.parseColor("#A8EDE6"), Color.parseColor("#B7DDF0"), Color.parseColor("#DCC6F0"), Color.parseColor("#D3A8F2"), Color.parseColor("#FFB3B8"), Color.parseColor("#D6E8BC"), Color.parseColor("#EADBCB"), Color.parseColor("#CADDF0")), Color.parseColor("#444444"), 0.08f, true,
+                Color.parseColor("#FFFFFF"), Color.parseColor("#D0D0D0"), Color.parseColor("#555555"),
+                Color.parseColor("#F7F7F7"), Color.parseColor("#444444"), Color.parseColor("#D0D0D0"), true),
+            // HOLZ
+            Skin(Color.parseColor("#5A3522"), Color.parseColor("#4A2A1A"), TEX_WOOD, Color.TRANSPARENT, Color.TRANSPARENT,
+                Color.parseColor("#F0E6D2"), Color.parseColor("#4A3826"), Color.parseColor("#E3B65A"), Color.parseColor("#FF9A3C"),
+                KN_BRASS, Color.parseColor("#5C3420"), Color.parseColor("#C9A050"), Color.parseColor("#3A2412"), Color.parseColor("#F0E6D2"),
+                XY_STITCH, Color.parseColor("#EAE2D1"), Color.parseColor("#EAE2D1"), Color.parseColor("#BFAE8E"), 4, 4, Color.parseColor("#CDBFA5"), Color.parseColor("#B8862E"),
+                PS_FRAMED, Color.parseColor("#ECE5D6"), null, Color.parseColor("#2B1810"), 0.12f, true,
+                Color.parseColor("#3A2214"), Color.parseColor("#C9A050"), Color.parseColor("#F0E6D2"),
+                Color.parseColor("#1E140C"), Color.parseColor("#E3B65A"), Color.parseColor("#C9A050"), false),
+            // CREME
+            Skin(Color.parseColor("#EDE7D8"), Color.parseColor("#E5DECC"), TEX_NONE, Color.parseColor("#F2ECDF"), Color.parseColor("#D9D0BC"),
+                Color.parseColor("#4A4234"), Color.parseColor("#3D362B"), Color.parseColor("#C8742A"), Color.parseColor("#B8902F"),
+                KN_KNURL, Color.parseColor("#EFE8D8"), Color.parseColor("#E2D9C3"), Color.parseColor("#3D362B"), Color.parseColor("#3D362B"),
+                XY_DIAG, Color.parseColor("#F1EBDD"), Color.parseColor("#F1EBDD"), Color.parseColor("#8C8370"), 4, 4, Color.parseColor("#3D362B"), Color.parseColor("#C8742A"),
+                PS_FLAT, Color.parseColor("#F0E9DA"), null, Color.parseColor("#3D362B"), 0.10f, true,
+                Color.parseColor("#F2ECDF"), Color.parseColor("#3D362B"), Color.parseColor("#4A4234"),
+                Color.parseColor("#E6DECB"), Color.parseColor("#4A4234"), Color.parseColor("#3D362B"), true),
+            // NOIR
+            Skin(Color.parseColor("#1C1C1E"), Color.parseColor("#1C1C1E"), TEX_WOOD_FRAME, Color.parseColor("#1C1C1E"), Color.parseColor("#0E0E10"),
+                Color.parseColor("#E8E8E8"), Color.parseColor("#E0E0E0"), Color.parseColor("#F5F5F5"), Color.parseColor("#FFB347"),
+                KN_CAP, Color.parseColor("#F2F2F2"), Color.parseColor("#F2F2F2"), Color.parseColor("#8E8E8E"), Color.parseColor("#333333"),
+                XY_CROSS, Color.parseColor("#212123"), Color.parseColor("#212123"), Color.parseColor("#4E4E52"), 2, 2, Color.parseColor("#0B0B0D"), Color.parseColor("#FFFFFF"),
+                PS_FLAT, Color.parseColor("#232325"), null, Color.parseColor("#0B0B0D"), 0.08f, true,
+                Color.parseColor("#28282A"), Color.parseColor("#0B0B0D"), Color.parseColor("#E8E8E8"),
+                Color.parseColor("#121214"), Color.parseColor("#E8E8E8"), Color.parseColor("#3A3A3C"), false),
+            // GRAU
+            Skin(Color.parseColor("#E4E4E4"), Color.parseColor("#DADADA"), TEX_NONE, Color.parseColor("#EDEDED"), Color.parseColor("#CFCFCF"),
+                Color.parseColor("#4A4A4A"), Color.parseColor("#3A3A3A"), Color.parseColor("#FF6A10"), Color.parseColor("#FFB020"),
+                KN_GREYCAP, Color.parseColor("#7B7B7B"), Color.parseColor("#F3F3F3"), Color.parseColor("#EDEDED"), Color.WHITE,
+                XY_INSET, Color.parseColor("#ECECEC"), Color.parseColor("#ECECEC"), Color.parseColor("#9A9A9A"), 4, 4, Color.parseColor("#5A5A5A"), Color.parseColor("#FF6A10"),
+                PS_DOUBLE, Color.parseColor("#D9D9D9"), null, Color.parseColor("#4A4A4A"), 0.05f, false,
+                Color.parseColor("#E2E2E2"), Color.parseColor("#5A5A5A"), Color.parseColor("#4A4A4A"),
+                Color.parseColor("#DCDCDC"), Color.parseColor("#3A3A3A"), Color.parseColor("#5A5A5A"), true)
+        )
         private val R_BG = Color.rgb(207, 207, 207)
         private val R_GREEN = Color.rgb(24, 200, 75)
         private val R_ORANGE = Color.rgb(255, 115, 10)
