@@ -150,6 +150,87 @@ object Engine {
         }
     }
 
+    // ---------------------------------------------------------------- Projekte
+
+    /** Wird nach jeder neuen Mikrofon-Aufnahme aufgerufen (Pad, Samples, Samplerate). */
+    var onRecorded: ((Int, FloatArray, Int) -> Unit)? = null
+
+    class PadSave(val data: FloatArray?, val oneShot: Boolean, val muted: Boolean)
+
+    fun snapshotPads(): Array<PadSave> = Array(PADS) { p ->
+        val l = loops.get(p)
+        PadSave(l?.data?.copyOf(), l?.oneShot ?: padOneShot[p], l?.muted ?: false)
+    }
+
+    fun masterFrames(): Long = masterLen
+
+    fun seqSnapshot(): Array<BooleanArray> = Array(PADS) { seq[it].copyOf() }
+
+    fun seqHasAny(): Boolean {
+        for (row in seq) for (b in row) if (b) return true
+        return false
+    }
+
+    /** Stellt einen gespeicherten Projektzustand wieder her (alle Loops starten gemeinsam auf der Eins). */
+    fun restore(pads: Array<PadSave>, master: Long, bpm: Float, pattern: Array<BooleanArray>?) {
+        seqStop()
+        for (p in 0 until PADS) {
+            takes.set(p, null)
+            loops.set(p, null)
+            java.util.Arrays.fill(seq[p], false)
+            padOneShot[p] = false
+        }
+        fixedBpm = bpm
+        masterLen = master
+        masterStart = written
+        for (p in 0 until min(PADS, pads.size)) {
+            val sv = pads[p]
+            padOneShot[p] = sv.oneShot
+            val d = sv.data ?: continue
+            if (d.isEmpty()) continue
+            val l = Loop(d)
+            l.oneShot = sv.oneShot
+            l.muted = sv.muted
+            l.start = masterStart
+            loops.set(p, l)
+        }
+        if (pattern != null) {
+            for (p in 0 until min(PADS, pattern.size)) {
+                for (k in 0 until min(STEPS, pattern[p].size)) seq[p][k] = pattern[p][k]
+            }
+        }
+        seqSelected = -1
+    }
+
+    fun newProject() {
+        restore(Array(PADS) { PadSave(null, false, false) }, 0L, 0f, null)
+    }
+
+    /** Rendert das Sequenzer-Pattern als nahtlosen Ein-Takt-Loop. */
+    fun renderPattern(): FloatArray? {
+        val bar = seqBar().toInt()
+        if (bar <= 0) return null
+        val out = FloatArray(bar)
+        var any = false
+        for (p in 0 until PADS) {
+            val l = loops.get(p) ?: continue
+            if (!l.oneShot) continue
+            val d = l.data
+            for (k in 0 until STEPS) {
+                if (!seq[p][k]) continue
+                any = true
+                val st = ((k.toLong() * bar) / STEPS).toInt()
+                for (i in d.indices) {
+                    val idx = (st + i) % bar
+                    out[idx] += d[i]
+                }
+            }
+        }
+        if (!any) return null
+        for (i in out.indices) out[i] = softClip(out[i])
+        return out
+    }
+
     // ---------------------------------------------------------------- Analyse (Spektrum-Anzeigen)
     private const val SCOPE = 4096
     private val scope = FloatArray(SCOPE)
@@ -607,6 +688,8 @@ object Engine {
             masterLen = len.toLong()
         }
         loops.set(p, loop)
+        // Mikrofon-Aufnahme automatisch sichern (läuft außerhalb des Audio-Threads weiter)
+        onRecorded?.invoke(p, data.copyOf(), sampleRate)
     }
 
     /** Wählt die Loop-Länge aus 1/8, 1/4, 1/2, 1, 2, 4, 8 x Taktgeber, die der gehaltenen Zeit am nächsten liegt. */

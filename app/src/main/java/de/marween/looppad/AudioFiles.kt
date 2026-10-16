@@ -49,6 +49,10 @@ object AudioFiles {
         return decodeWavBytes(bytes, targetRate, maxSeconds)
     }
 
+    /** Lädt eine gespeicherte WAV-Datei aus dem App-Speicher. */
+    fun decodeFile(file: java.io.File, targetRate: Int, maxSeconds: Int): FloatArray =
+        decodeWavBytes(file.readBytes(), targetRate, maxSeconds)
+
     /** Lädt ein mitgeliefertes Sample aus assets/samples. */
     fun decodeAsset(context: Context, file: String, targetRate: Int, maxSeconds: Int): FloatArray {
         val bytes = context.assets.open("samples/$file").use { it.readBytes() }

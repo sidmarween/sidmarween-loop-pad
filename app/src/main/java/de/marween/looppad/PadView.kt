@@ -84,6 +84,7 @@ class PadView(context: Context) : View(context) {
     private var stopPointer = -1
     var onRecMenu: (() -> Unit)? = null
     var onSongStopped: (() -> Unit)? = null
+    var onPatternStopped: (() -> Unit)? = null
     private val displayRect = RectF()
     var onDesignMenu: (() -> Unit)? = null
     var onTempo: (() -> Unit)? = null
@@ -572,15 +573,20 @@ class PadView(context: Context) : View(context) {
         strokePaint.color = if (theme == NEON) Color.WHITE else ORANGE
         canvas.drawRoundRect(r, rr, rr, strokePaint)
         strokePaint.shader = null
-        // Palette-Symbol: vier Farbpunkte
-        val d = r.width() * 0.17f
-        val cols = if (theme == NEON) intArrayOf(neon(0f), neon(120f), neon(220f), neon(300f))
-        else intArrayOf(ORANGE, Color.WHITE, AMBER, Color.rgb(120, 125, 135))
-        var k = 0
-        for (yy in -1..1 step 2) for (xx in -1..1 step 2) {
-            dotPaint.color = cols[k++]
-            canvas.drawCircle(r.centerX() + xx * d, r.centerY() + yy * d, d * 0.62f, dotPaint)
+        drawMenuIcon(canvas, r, if (theme == NEON) Color.WHITE else ORANGE)
+    }
+
+    /** Menü-Symbol ☰ */
+    private fun drawMenuIcon(canvas: Canvas, r: RectF, c: Int) {
+        strokePaint.strokeCap = Paint.Cap.ROUND
+        strokePaint.strokeWidth = dp(2.4f)
+        strokePaint.color = c
+        val w2 = r.width() * 0.26f
+        for (q in -1..1) {
+            val y = r.centerY() + q * r.height() * 0.2f
+            canvas.drawLine(r.centerX() - w2, y, r.centerX() + w2, y, strokePaint)
         }
+        strokePaint.strokeCap = Paint.Cap.BUTT
     }
 
     private fun drawButton(canvas: Canvas, r: RectF, label: String, active: Boolean, blink: Float) {
@@ -1460,7 +1466,10 @@ class PadView(context: Context) : View(context) {
                         recBtn.contains(x, y) -> {
                             when {
                                 Engine.songRecording -> onSongStopped?.invoke()
-                                Engine.seqRecording -> Engine.seqToggleRec()
+                                Engine.seqRecording -> {
+                                    Engine.seqToggleRec()
+                                    onPatternStopped?.invoke()
+                                }
                                 else -> onRecMenu?.invoke()
                             }
                             burst(x, y, Color.rgb(255, 45, 70), 18, 220f)
@@ -1470,8 +1479,10 @@ class PadView(context: Context) : View(context) {
                             burst(x, y, if (theme == NEON) Color.rgb(60, 230, 120) else ORANGE, 18, 220f)
                         }
                         stopBtn.contains(x, y) -> {
+                            val wasPatternRec = Engine.seqRecording
                             Engine.seqStop()
                             if (Engine.songRecording) onSongStopped?.invoke()
+                            else if (wasPatternRec) onPatternStopped?.invoke()
                             stopPointer = id
                             stopDownMs = SystemClock.uptimeMillis()
                         }
@@ -1814,13 +1825,7 @@ class PadView(context: Context) : View(context) {
         strokePaint.strokeWidth = dp(if (theme == COMIC) 3f else 1.6f)
         strokePaint.color = if (theme == COMIC) Color.BLACK else Color.rgb(60, 60, 60)
         canvas.drawRoundRect(r, rr, rr, strokePaint)
-        val d = r.width() * 0.17f
-        val cols = if (theme == COMIC) COMIC_PADS else intArrayOf(R_GREEN, R_ORANGE, R_ORANGE, R_GREEN)
-        var k = 0
-        for (yy in -1..1 step 2) for (xx in -1..1 step 2) {
-            dotPaint.color = cols[k++]
-            canvas.drawCircle(r.centerX() + xx * d, r.centerY() + yy * d, d * 0.62f, dotPaint)
-        }
+        drawMenuIcon(canvas, r, if (theme == COMIC) Color.BLACK else R_INK)
     }
 
     private fun drawButtonLight(canvas: Canvas, r: RectF, label: String, active: Boolean, blink: Float) {

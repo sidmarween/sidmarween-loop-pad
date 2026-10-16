@@ -8,9 +8,19 @@ Android-App für Musiker: 16 Neon-Pads, XY-Effektfläche und Drehregler im Kaoss
 - **CLEAR**, dann Pad antippen – Loop löschen.
 - **ALLE STUMM / ALLE AN** – alles auf einmal.
 
+## Menü ☰ (oben rechts)
+
+- **Projekt speichern / laden** – sichert alles zum Weitermachen: Pads (Audio), Modi, Tempo, Sequenzer-Pattern, Effekt und Regler.
+- **Neues Projekt** – alles leeren.
+- **Meine Aufnahmen** – jede Mikrofon-Aufnahme wird automatisch gespeichert; von hier auf ein Pad laden, als WAV exportieren oder löschen. Sie erscheinen auch oben in der Bibliothek.
+- **Design wählen**
+
+Nach einer **Pattern-Aufnahme**: als Audio (WAV, nahtloser 1-Takt-Loop) oder als Projekt speichern.
+Nach einer **Song-Aufnahme**: als Audio (WAV), als Projekt (inkl. Song) speichern oder verwerfen.
+
 ## Designs & Display
 
-Oben rechts der **Farbpunkte-Knopf**: Design wählen – NEON (Regenbogen), GLOW (Orange glühend), STUDIO (Grau & Orange), HUD (Tech-Linien), RETRO (Grau/Grün/Orange mit Spektrum-Anzeigen für Ausgang und Mikrofon), COMIC (Pop-Art). Die Wahl wird gespeichert.
+Im Menü ☰ → Design wählen – NEON (Regenbogen), GLOW (Orange glühend), STUDIO (Grau & Orange), HUD (Tech-Linien), RETRO (Grau/Grün/Orange mit Spektrum-Anzeigen für Ausgang und Mikrofon), COMIC (Pop-Art). Die Wahl wird gespeichert.
 Das **Display** in der Kopfzeile zeigt den aktuellen Effekt, die X/Y-Werte und den Takt. Links antippen öffnet die Effektliste, rechts das Tempo.
 
 ## Master-Tempo

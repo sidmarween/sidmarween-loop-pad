@@ -15,6 +15,7 @@ import android.view.WindowInsets
 import android.view.WindowInsetsController
 import android.view.WindowManager
 import android.widget.Button
+import android.widget.EditText
 import android.widget.CheckBox
 import android.widget.LinearLayout
 import android.widget.SeekBar
@@ -45,7 +46,17 @@ class MainActivity : Activity() {
         pads.onMessageTap = { onMessageTapped() }
         pads.onPadMenu = { p -> showPadMenu(p) }
         pads.onFxList = { showFxList() }
-        pads.onDesignMenu = { showDesigns() }
+        pads.onDesignMenu = { showMainMenu() }
+        pads.onPatternStopped = { finishPattern() }
+        Engine.onRecorded = { pad, data, rate ->
+            Thread {
+                try {
+                    Projects.saveSample(applicationContext, pad, data, rate)
+                } catch (e: Exception) {
+                    runOnUiThread { toast("Aufnahme konnte nicht gesichert werden") }
+                }
+            }.start()
+        }
         pads.onTempo = { showTempo() }
         pads.onRecMenu = { showRecMenu() }
         pads.onSongStopped = { finishSong() }
@@ -158,11 +169,18 @@ class MainActivity : Activity() {
     }
 
     private fun showLibrary(p: Int) {
-        val names = SampleLibrary.samples.map { it.title }.toTypedArray()
+        val recs = Projects.listSamples(this).take(30)
+        val titles = ArrayList<String>()
+        for (f in recs) titles.add(Projects.sampleTitle(f))
+        for (smp in SampleLibrary.samples) titles.add(smp.title)
         AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
             .setTitle("Bibliothek → Pad ${p + 1}")
-            .setItems(names) { _, which ->
-                val smp = SampleLibrary.samples[which]
+            .setItems(titles.toTypedArray()) { _, which ->
+                if (which < recs.size) {
+                    loadRecording(recs[which], p)
+                    return@setItems
+                }
+                val smp = SampleLibrary.samples[which - recs.size]
                 val rate = Engine.sampleRate
                 Thread {
                     try {
@@ -178,11 +196,6 @@ class MainActivity : Activity() {
             .setNegativeButton("Abbrechen", null)
             .show()
     }
-
-    // ---------------------------------------------------------------- Aufnahme: Pattern oder Song
-
-    private var pendingSong: ShortArray? = null
-    private var pendingSongRate = 48000
 
     private fun showRecMenu() {
         AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
@@ -210,11 +223,229 @@ class MainActivity : Activity() {
         val secs = data.size / rate
         AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
             .setTitle(String.format(Locale.GERMANY, "Song aufgenommen (%d:%02d)", secs / 60, secs % 60))
-            .setMessage("Als WAV-Datei speichern?")
-            .setPositiveButton("Speichern") { _, _ -> pickSongExport() }
-            .setNegativeButton("Verwerfen") { _, _ -> pendingSong = null }
+            .setItems(arrayOf(
+                "🎧 Als Audio speichern (WAV)",
+                "💾 Als Projekt speichern (inkl. Song)",
+                "🗑 Verwerfen"
+            )) { _, which ->
+                when (which) {
+                    0 -> pickSongExport()
+                    1 -> askProjectName(data, rate)
+                    else -> pendingSong = null
+                }
+            }
             .setCancelable(false)
             .show()
+    }
+
+    // ---------------------------------------------------------------- Pattern beendet
+
+    private var pendingPattern: FloatArray? = null
+
+    private fun finishPattern() {
+        if (!Engine.seqHasAny()) return
+        AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
+            .setTitle("Pattern aufgenommen")
+            .setItems(arrayOf(
+                "🎧 Als Audio speichern (WAV, 1 Takt)",
+                "💾 Als Projekt speichern",
+                "▶ Weiter"
+            )) { _, which ->
+                when (which) {
+                    0 -> {
+                        val d = Engine.renderPattern()
+                        if (d == null) {
+                            toast("Das Pattern spielt keine ⚡-Samples")
+                        } else {
+                            pendingPattern = d
+                            pickCreate("MarvPAD_Pattern", REQ_PATTERN)
+                        }
+                    }
+                    1 -> askProjectName(null, 0)
+                }
+            }
+            .show()
+    }
+
+    // ---------------------------------------------------------------- Menü & Projekte
+
+    private fun showMainMenu() {
+        AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
+            .setTitle("Marv PAD")
+            .setItems(arrayOf(
+                "💾 Projekt speichern",
+                "📂 Projekt laden",
+                "✨ Neues Projekt",
+                "🎙 Meine Aufnahmen",
+                "🎨 Design wählen"
+            )) { _, which ->
+                when (which) {
+                    0 -> askProjectName(null, 0)
+                    1 -> showProjects()
+                    2 -> confirm("Neues Projekt?", "Alle Pads, das Pattern und das Tempo werden geleert. Nicht gespeicherte Änderungen gehen verloren.") {
+                        Engine.newProject()
+                        toast("Neues Projekt")
+                    }
+                    3 -> showRecordings()
+                    else -> showDesigns()
+                }
+            }
+            .setNegativeButton("Schließen", null)
+            .show()
+    }
+
+    private fun confirm(title: String, msg: String, onYes: () -> Unit) {
+        AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
+            .setTitle(title)
+            .setMessage(msg)
+            .setPositiveButton("Ja") { _, _ -> onYes() }
+            .setNegativeButton("Abbrechen", null)
+            .show()
+    }
+
+    private fun askProjectName(song: ShortArray?, songRate: Int) {
+        val input = EditText(this).apply {
+            setText("Projekt " + SimpleDateFormat("dd.MM. HH:mm", Locale.GERMANY).format(Date()))
+            setSelectAllOnFocus(true)
+            setTextColor(Color.WHITE)
+        }
+        val box = LinearLayout(this).apply {
+            val pad = (20 * resources.displayMetrics.density).toInt()
+            setPadding(pad, pad / 2, pad, 0)
+            addView(input, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
+        }
+        AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
+            .setTitle("Projekt speichern")
+            .setView(box)
+            .setPositiveButton("Speichern") { _, _ ->
+                val name = input.text.toString().trim().ifEmpty { "Projekt" }
+                toast("Speichere Projekt …")
+                Thread {
+                    try {
+                        Projects.save(applicationContext, name, song, songRate)
+                        runOnUiThread { toast("Projekt „$name“ gespeichert") }
+                    } catch (e: Exception) {
+                        runOnUiThread { toast("Speichern fehlgeschlagen: ${e.message ?: e}") }
+                    }
+                }.start()
+                if (song != null) pendingSong = null
+            }
+            .setNegativeButton("Abbrechen", null)
+            .show()
+    }
+
+    private fun showProjects() {
+        val list = Projects.list(this)
+        if (list.isEmpty()) {
+            toast("Noch keine Projekte gespeichert")
+            return
+        }
+        val fmt = SimpleDateFormat("dd.MM.yyyy HH:mm", Locale.GERMANY)
+        val names = list.map { "${it.name}\n${fmt.format(Date(it.date))}${if (it.hasSong) " · mit Song" else ""}" }.toTypedArray()
+        AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
+            .setTitle("Projekte")
+            .setItems(names) { _, which -> projectActions(list[which]) }
+            .setNegativeButton("Schließen", null)
+            .show()
+    }
+
+    private fun projectActions(info: Projects.Info) {
+        val labels = ArrayList<String>()
+        val actions = ArrayList<() -> Unit>()
+        labels.add("📂 Laden")
+        actions.add {
+            toast("Lade „${info.name}“ …")
+            Thread {
+                try {
+                    Projects.load(info.dir)
+                    runOnUiThread { toast("„${info.name}“ geladen") }
+                } catch (e: Exception) {
+                    runOnUiThread { toast("Laden fehlgeschlagen: ${e.message ?: e}") }
+                }
+            }.start()
+        }
+        if (info.hasSong) {
+            labels.add("🎧 Song exportieren (WAV)")
+            actions.add {
+                pendingCopy = java.io.File(info.dir, "song.wav")
+                pickCreate("MarvPAD_Song", REQ_COPY)
+            }
+        }
+        labels.add("🗑 Löschen")
+        actions.add {
+            confirm("Projekt löschen?", "„${info.name}“ wird endgültig gelöscht.") {
+                Projects.delete(info.dir)
+                toast("Gelöscht")
+            }
+        }
+        AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
+            .setTitle(info.name)
+            .setItems(labels.toTypedArray()) { _, which -> actions[which]() }
+            .setNegativeButton("Zurück", null)
+            .show()
+    }
+
+    private fun showRecordings() {
+        val files = Projects.listSamples(this)
+        if (files.isEmpty()) {
+            toast("Noch keine Aufnahmen – halte ein leeres Pad gedrückt")
+            return
+        }
+        AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
+            .setTitle("Meine Aufnahmen")
+            .setItems(files.map { Projects.sampleTitle(it) }.toTypedArray()) { _, which ->
+                val f = files[which]
+                AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
+                    .setTitle(Projects.sampleTitle(f))
+                    .setItems(arrayOf("⬇ Auf Pad laden", "🎧 Exportieren (WAV)", "🗑 Löschen")) { _, a ->
+                        when (a) {
+                            0 -> {
+                                val padNames = Array(PadView.VISIBLE_PADS) { "Pad ${it + 1}" }
+                                AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
+                                    .setTitle("Auf welches Pad?")
+                                    .setItems(padNames) { _, p -> loadRecording(f, p) }
+                                    .show()
+                            }
+                            1 -> {
+                                pendingCopy = f
+                                pickCreate(f.nameWithoutExtension, REQ_COPY)
+                            }
+                            else -> confirm("Aufnahme löschen?", Projects.sampleTitle(f)) { f.delete() }
+                        }
+                    }
+                    .show()
+            }
+            .setNegativeButton("Schließen", null)
+            .show()
+    }
+
+    private fun loadRecording(f: java.io.File, p: Int) {
+        val rate = Engine.sampleRate
+        Thread {
+            try {
+                val data = AudioFiles.decodeFile(f, rate, Engine.MAX_SECONDS)
+                Engine.importLoop(p, data)
+                runOnUiThread { toast("Pad ${p + 1}: Aufnahme geladen") }
+            } catch (e: Exception) {
+                runOnUiThread { toast("Laden fehlgeschlagen: ${e.message ?: e}") }
+            }
+        }.start()
+    }
+
+    private var pendingCopy: java.io.File? = null
+
+    private fun pickCreate(base: String, req: Int) {
+        val stamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.GERMANY).format(Date())
+        val i = Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = "audio/wav"
+            putExtra(Intent.EXTRA_TITLE, if (base.contains("_20")) "$base.wav" else "${base}_$stamp.wav")
+        }
+        try {
+            startActivityForResult(i, req)
+        } catch (e: Exception) {
+            toast("Kein Dateimanager gefunden")
+        }
     }
 
     private fun pickSongExport() {
@@ -390,6 +621,33 @@ class MainActivity : Activity() {
                     }
                 }.start()
             }
+            REQ_PATTERN -> {
+                val d = pendingPattern ?: return
+                pendingPattern = null
+                val rate = Engine.sampleRate
+                Thread {
+                    try {
+                        contentResolver.openOutputStream(uri)?.use { AudioFiles.writeWav(it, d, rate) }
+                            ?: throw IllegalStateException("Datei nicht schreibbar")
+                        runOnUiThread { toast("Pattern gespeichert") }
+                    } catch (e: Exception) {
+                        runOnUiThread { toast("Speichern fehlgeschlagen: ${e.message ?: e}") }
+                    }
+                }.start()
+            }
+            REQ_COPY -> {
+                val f = pendingCopy ?: return
+                pendingCopy = null
+                Thread {
+                    try {
+                        contentResolver.openOutputStream(uri)?.use { out -> f.inputStream().use { it.copyTo(out) } }
+                            ?: throw IllegalStateException("Datei nicht schreibbar")
+                        runOnUiThread { toast("Exportiert") }
+                    } catch (e: Exception) {
+                        runOnUiThread { toast("Export fehlgeschlagen: ${e.message ?: e}") }
+                    }
+                }.start()
+            }
             REQ_SONG -> {
                 val d = pendingSong ?: return
                 pendingSong = null
@@ -429,5 +687,7 @@ class MainActivity : Activity() {
         private const val REQ_IMPORT = 8
         private const val REQ_EXPORT = 9
         private const val REQ_SONG = 10
+        private const val REQ_PATTERN = 11
+        private const val REQ_COPY = 12
     }
 }
