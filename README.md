@@ -54,7 +54,7 @@ Im **•••**-Menü jedes Pads: **∞ LOOP** (läuft im Takt endlos, Regenbog
 
 ## Bibliothek
 
-„Aus Bibliothek laden" im •••-Menü, nach Kategorien: 🎙 Meine Aufnahmen · 🥁 Drums · 🪘 Percussion · 🎹 Tasten · 🎼 Melodisch · 🔊 Synth & Bass · ✨ FX · ∞ Loops (90–174 BPM) – über 100 Sounds.
+„Aus Bibliothek laden" im •••-Menü, nach Kategorien: 🎙 Meine Aufnahmen · 🥁 Drums · 🪘 Percussion · 🎹 Tasten · 🎼 Melodisch · 🔊 Synth & Bass · ✨ FX · ∞ Loops (90–174 BPM) – über 90 Sounds.
 Quellen: selbst synthetisiert (frei) und die **Versilian Community Sample Library (VCSL)**, CC0 1.0 (gemeinfrei) – https://github.com/sgossner/VCSL. Tonale Samples liegen meist auf C4 und lassen sich mit der 🎹-Tastatur spielen.
 
 ## Import / Export
