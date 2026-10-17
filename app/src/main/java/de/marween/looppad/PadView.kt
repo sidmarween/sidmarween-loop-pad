@@ -236,6 +236,183 @@ class PadView(context: Context) : View(context) {
         burst(fxBtn.centerX(), fxBtn.centerY(), neon(Fx.HUES[Engine.fxType]), 30, 300f)
     }
     private val muteBtn = RectF()
+
+    // ---------------------------------------------------------------- Maschine-Workflow (Funktionsleiste, Szenen, Undo)
+    private val funcRects = Array(6) { RectF() }
+    private val undoBtn = RectF()
+    private val redoBtn = RectF()
+    /** Aktiver Pad-Modus: MUTE, SOLO, ERASE oder DUPLICATE (oder keiner). */
+    private var func = F_NONE
+    /** SZENE: die Pads zeigen und starten Szenen. */
+    private var sceneView = false
+    private var funcPointer = -1
+    private var funcBtn = -1
+    private var funcWasOn = false
+    private var funcUsed = false
+    private var funcLongFired = false
+    private var duplSrc = -1
+    private var sceneDupSrc = -1
+    private var recPointer = -1
+    private var recLongFired = false
+    private var undoPointer = -1
+    private var undoLongFired = false
+    private var scenePointer = -1
+    private var scenePad = -1
+    private var sceneLongFired = false
+    var onHint: ((String) -> Unit)? = null
+    var onSceneMenu: ((Int) -> Unit)? = null
+    var onRecLongMenu: (() -> Unit)? = null
+
+    private fun hint(msg: String) {
+        onHint?.invoke(msg)
+    }
+
+    private fun funcMode(b: Int): Int = when (b) {
+        1 -> F_MUTE
+        2 -> F_SOLO
+        3 -> F_ERASE
+        4 -> F_DUPL
+        else -> F_NONE
+    }
+
+    private val funcLongPress = Runnable {
+        if (funcPointer < 0 || funcUsed) return@Runnable
+        funcLongFired = true
+        performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+        when (funcBtn) {
+            0 -> {
+                Engine.sceneChain = !Engine.sceneChain
+                hint(if (Engine.sceneChain) "⛓ Kette an: die Szenen laufen nacheinander (Länge: Szene lange drücken)" else "⛓ Kette aus: die Szene läuft in Schleife")
+            }
+            1 -> {
+                Engine.toggleMuteAll()
+                hint(if (Engine.anyPlaying()) "Alle Loops an" else "Alle Loops stumm")
+            }
+            2 -> {
+                Engine.clearSolo()
+                hint("Alle SOLO aus")
+            }
+            5 -> {
+                Engine.cycleRepeat()
+                Engine.repeatOn = true
+                hint("Note Repeat ${Engine.repeatName()}")
+            }
+            else -> {}
+        }
+        // Lange gedrückt = nur die Sonderfunktion, kein Modus-Wechsel
+        if (funcBtn in 1..4 && !funcWasOn) func = F_NONE
+    }
+
+    private fun funcDown(b: Int, id: Int) {
+        funcPointer = id
+        funcBtn = b
+        funcUsed = false
+        funcLongFired = false
+        funcWasOn = when (b) {
+            0 -> sceneView
+            5 -> Engine.repeatOn
+            else -> func == funcMode(b)
+        }
+        when (b) {
+            0 -> { if (!sceneView) { sceneView = true; sceneDupSrc = -1 } }
+            5 -> {}
+            else -> if (func != funcMode(b)) {
+                func = funcMode(b)
+                duplSrc = -1
+            }
+        }
+        performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+        burst(funcRects[b].centerX(), funcRects[b].centerY(), funcColor(b), 12, 160f)
+        postDelayed(funcLongPress, 500L)
+    }
+
+    private fun funcUp() {
+        removeCallbacks(funcLongPress)
+        val b = funcBtn
+        funcPointer = -1
+        funcBtn = -1
+        if (funcLongFired) return
+        if (b == 5) {
+            Engine.repeatOn = !Engine.repeatOn
+            if (!Engine.repeatOn) Engine.repeatAllUp()
+            hint(if (Engine.repeatOn) "Note Repeat ${Engine.repeatName()}: ⚡-Pad oder Drum-Pad halten (Rate: REPEAT lange drücken)" else "Note Repeat aus")
+            return
+        }
+        if (funcUsed) {
+            // gehalten + benutzt = nur kurz aktiv (wie die Shift-Knöpfe bei Maschine)
+            if (!funcWasOn) {
+                if (b == 0) sceneView = false else func = F_NONE
+            }
+            return
+        }
+        if (funcWasOn) {
+            if (b == 0) sceneView = false else func = F_NONE
+            duplSrc = -1
+            return
+        }
+        when (b) {
+            0 -> hint("SZENE: Pads = Szenen 1–12. Antippen startet die Szene zur nächsten Eins · lange drücken = Länge/Kette")
+            1 -> hint("MUTE: Pads antippen schaltet sie stumm/an · MUTE lange drücken = alle")
+            2 -> hint("SOLO: Pads antippen – nur Solo-Pads sind zu hören · SOLO lange drücken = alle aus")
+            3 -> hint("ERASE: Pad antippen löscht sein Pattern, nochmal das Sample · Schritte antippen leert das Pattern")
+            4 -> hint(if (sceneView) "DUPL: Quell-Szene, dann Ziel-Szene antippen" else "DUPL: Quell-Pad, dann Ziel-Pad antippen")
+        }
+    }
+
+    private fun funcColor(b: Int): Int = when (b) {
+        3 -> Color.rgb(255, 50, 70)
+        1 -> Color.rgb(90, 160, 255)
+        2 -> Color.rgb(255, 200, 40)
+        5 -> Color.rgb(60, 230, 160)
+        else -> overlayColors()[2]
+    }
+
+    private fun funcOn(b: Int): Boolean = when (b) {
+        0 -> sceneView
+        5 -> Engine.repeatOn
+        else -> func == funcMode(b)
+    }
+
+    private fun drawFuncRow(canvas: Canvas) {
+        val cols = overlayColors()
+        val blink = 0.5f + 0.5f * sin(time * 8f)
+        for (b in 0 until 6) {
+            val r = funcRects[b]
+            if (r.width() <= 0f) continue
+            val on = funcOn(b)
+            val c = funcColor(b)
+            val rr = dp(9f)
+            fillPaint.shader = null
+            if (on) {
+                fillPaint.color = alpha(c, 0.22f + 0.18f * blink)
+                tmpRect.set(r.left - dp(3f), r.top - dp(3f), r.right + dp(3f), r.bottom + dp(3f))
+                canvas.drawRoundRect(tmpRect, rr + dp(3f), rr + dp(3f), fillPaint)
+            }
+            fillPaint.color = if (on) c else alpha(cols[0], 0.9f)
+            canvas.drawRoundRect(r, rr, rr, fillPaint)
+            strokePaint.strokeWidth = dp(1.3f)
+            strokePaint.color = if (on) Color.WHITE else alpha(c, 0.75f)
+            canvas.drawRoundRect(r, rr, rr, strokePaint)
+            val main = FUNC_NAMES[b]
+            val sub = when (b) {
+                0 -> "${Engine.curScene + 1}" + (if (Engine.queuedScene >= 0) "→${Engine.queuedScene + 1}" else "") + if (Engine.sceneChain) " ⛓" else ""
+                2 -> if (Engine.soloAny) "● aktiv" else ""
+                5 -> Engine.repeatName()
+                4 -> if (duplSrc >= 0) "P${duplSrc + 1}→?" else if (sceneDupSrc >= 0) "S${sceneDupSrc + 1}→?" else ""
+                else -> ""
+            }
+            val txt = if (on) (if (light && theme == COMIC) Color.BLACK else Color.WHITE) else cols[1]
+            textPaint.color = txt
+            textPaint.textSize = min(dp(10.5f), r.width() / (main.length * 0.66f))
+            val my = if (sub.isEmpty()) r.centerY() + textPaint.textSize * 0.36f else r.centerY() - dp(1f)
+            canvas.drawText(main, r.centerX(), my, textPaint)
+            if (sub.isNotEmpty()) {
+                textPaint.textSize = min(dp(8.5f), r.width() / max(3f, sub.length * 0.62f))
+                textPaint.color = alpha(txt, 0.85f)
+                canvas.drawText(sub, r.centerX(), r.centerY() + dp(10f), textPaint)
+            }
+        }
+    }
     private val designBtn = RectF()
     private val seqRect = RectF()
     private val stepRects = Array(Engine.STEPS) { RectF() }
@@ -278,7 +455,10 @@ class PadView(context: Context) : View(context) {
     private val pointerPad = HashMap<Int, Int>()
     private val shotPointers = HashSet<Int>()
     private val lastTap = LongArray(Engine.PADS)
-    private var clearMode = false
+    /** Alter Lösch-Modus = jetzt ERASE in der Funktionsleiste. */
+    private var clearMode: Boolean
+        get() = func == F_ERASE
+        set(v) { func = if (v) F_ERASE else F_NONE }
     private var time = 0f
     private var lastFrameNanos = 0L
 
@@ -382,11 +562,20 @@ class PadView(context: Context) : View(context) {
         val rh = dp(46f)
         val cx = w / 2f
         fxBtn.set(cx - rh / 2f, rowTop, cx + rh / 2f, rowTop + rh)
-        val pw = min(dp(104f), (inner - rh) / 2f - dp(14f))
-        val ph = dp(32f)
-        val py = rowTop + (rh - ph) / 2f
-        muteBtn.set(fxBtn.left - dp(16f) - pw, py, fxBtn.left - dp(16f), py + ph)
-        clearBtn.set(fxBtn.right + dp(16f), py, fxBtn.right + dp(16f) + pw, py + ph)
+        muteBtn.setEmpty()
+        clearBtn.setEmpty()
+        // Funktionsleiste wie bei Maschine: SZENE · MUTE · SOLO | Effekt | ERASE · DUPL · REPEAT
+        val side = (inner - rh) / 2f - dp(10f)
+        val fg = dp(4f)
+        val fw = (side - 2 * fg) / 3f
+        val fh = min(rh, dp(38f))
+        val fy = rowTop + (rh - fh) / 2f
+        for (k in 0 until 3) {
+            val lx = margin + k * (fw + fg)
+            funcRects[k].set(lx, fy, lx + fw, fy + fh)
+            val rx = fxBtn.right + dp(10f) + k * (fw + fg)
+            funcRects[3 + k].set(rx, fy, rx + fw, fy + fh)
+        }
 
         // XY-Fläche und Pads (mit •••-Knopf darunter)
         val contentTop = rowTop + rh + gap
@@ -474,10 +663,14 @@ class PadView(context: Context) : View(context) {
         }
         val bTop = seqRect.top + sp + stripH + dp(6f)
         val bH = seqRect.bottom - sp - bTop
-        val bW = min(dp(52f), (seqRect.width() - 2 * sp) / 6f)
+        val bW = min(dp(46f), (seqRect.width() - 2 * sp) / 7.4f)
+        val bg = dp(6f)
         recBtn.set(seqRect.left + sp, bTop, seqRect.left + sp + bW, bTop + bH)
-        playBtn.set(recBtn.right + dp(8f), bTop, recBtn.right + dp(8f) + bW, bTop + bH)
-        stopBtn.set(playBtn.right + dp(8f), bTop, playBtn.right + dp(8f) + bW, bTop + bH)
+        playBtn.set(recBtn.right + bg, bTop, recBtn.right + bg + bW, bTop + bH)
+        stopBtn.set(playBtn.right + bg, bTop, playBtn.right + bg + bW, bTop + bH)
+        val uW = bW * 0.86f
+        undoBtn.set(stopBtn.right + dp(10f), bTop, stopBtn.right + dp(10f) + uW, bTop + bH)
+        redoBtn.set(undoBtn.right + bg, bTop, undoBtn.right + bg + uW, bTop + bH)
         buildHudLines(w, h)
         buildLightCaches()
         buildSkinCaches()
@@ -599,6 +792,7 @@ class PadView(context: Context) : View(context) {
             drawKeyButton(canvas, i)
             drawInputBadge(canvas, i)
             drawFxBadge(canvas, i)
+            drawPadOverlay(canvas, i)
         }
         drawSequencer(canvas)
         drawShocks(canvas, dt)
@@ -676,10 +870,7 @@ class PadView(context: Context) : View(context) {
         drawDisplay(canvas)
         drawDesignButton(canvas)
 
-        val blink = 0.5f + 0.5f * sin(time * 10f)
-        drawButton(canvas, clearBtn, "CLEAR", clearMode, blink)
-        val muteLabel = if (Engine.anyPlaying()) "ALLE STUMM" else "ALLE AN"
-        drawButton(canvas, muteBtn, muteLabel, false, 0f)
+        drawFuncRow(canvas)
     }
 
     /** Kleines Display: aktueller Effekt, X/Y-Werte, Takt. */
@@ -1129,26 +1320,286 @@ class PadView(context: Context) : View(context) {
         canvas.drawRect(stopBtn.centerX() - ic * 0.9f, stopBtn.centerY() - ic * 0.9f, stopBtn.centerX() + ic * 0.9f, stopBtn.centerY() + ic * 0.9f, fillPaint)
 
         // Info rechts
-        val ix = stopBtn.right + dp(10f)
-        textPaint.textAlign = Paint.Align.LEFT
-        textPaint.textSize = dp(11f)
-        textPaint.color = acc
+        drawSeqInfo(canvas, acc, alpha(Color.WHITE, 0.65f))
+    }
+
+    /** UNDO/REDO-Knöpfe und Status rechts neben dem Transport. */
+    private fun drawSeqInfo(canvas: Canvas, headCol: Int, subCol: Int) {
+        val cols = overlayColors()
+        for ((r, lab, on) in arrayOf(Triple(undoBtn, "↶", Engine.undoCount > 0), Triple(redoBtn, "↷", Engine.redoCount > 0))) {
+            if (r.width() <= 0f) continue
+            val rr = dp(7f)
+            fillPaint.shader = null
+            fillPaint.color = blend(cols[0], cols[1], 0.08f)
+            canvas.drawRoundRect(r, rr, rr, fillPaint)
+            strokePaint.strokeWidth = dp(1.3f)
+            strokePaint.color = alpha(cols[1], if (on) 0.6f else 0.2f)
+            canvas.drawRoundRect(r, rr, rr, strokePaint)
+            textPaint.textSize = dp(18f)
+            textPaint.color = alpha(cols[1], if (on) 1f else 0.3f)
+            canvas.drawText(lab, r.centerX(), r.centerY() + dp(4f), textPaint)
+            textPaint.textSize = dp(7.5f)
+            textPaint.color = alpha(cols[1], if (on) 0.7f else 0.25f)
+            canvas.drawText(if (r === undoBtn) "UNDO" else "REDO", r.centerX(), r.bottom - dp(4f), textPaint)
+        }
+        val ix = redoBtn.right + dp(8f)
+        val avail = seqRect.right - dp(6f) - ix
+        if (avail < dp(28f)) return
+        val cin = Engine.countInBeat()
+        val red = Color.rgb(255, 60, 80)
         val head = when {
             Engine.songRecording -> {
                 val t = Engine.songSeconds().toInt()
                 String.format(Locale.GERMANY, "● SONG %d:%02d", t / 60, t % 60)
             }
-            Engine.seqRecording -> "● REC PATTERN"
-            Engine.seqPlaying -> "▶ SEQ"
-            else -> "SEQUENZER"
+            cin > 0 -> "◔ ZÄHLT $cin"
+            Engine.seqRecording -> "● REC"
+            Engine.seqPlaying -> "▶ PLAY"
+            else -> "■ STOP"
         }
-        canvas.drawText(head, ix, recBtn.top + dp(13f), textPaint)
-        textPaint.textSize = dp(9.5f)
-        textPaint.color = alpha(Color.WHITE, 0.65f)
-        val sub = if (sel >= 0) "Pad ${sel + 1}: tippen · ↕ Lautst." else "⚡-Pad antippen"
-        canvas.drawText(sub, ix, recBtn.top + dp(27f), textPaint)
-        canvas.drawText("STOP halten = leeren", ix, recBtn.top + dp(40f), textPaint)
+        textPaint.textAlign = Paint.Align.LEFT
+        textPaint.textSize = min(dp(11f), avail / (head.length * 0.62f))
+        textPaint.color = if (cin > 0 || Engine.seqRecording || Engine.songRecording) red else headCol
+        canvas.drawText(head, ix, recBtn.top + dp(12f), textPaint)
+        val q = Engine.queuedScene
+        val l2 = "SZENE ${Engine.curScene + 1}" + (if (q >= 0) "→${q + 1}" else "") + if (Engine.sceneChain) " ⛓" else ""
+        textPaint.textSize = min(dp(9.5f), avail / (l2.length * 0.6f))
+        textPaint.color = subCol
+        canvas.drawText(l2, ix, recBtn.top + dp(25f), textPaint)
+        val sel = Engine.seqSelected
+        val l3 = if (Engine.repeatOn) "RPT ${Engine.repeatName()}" else if (sel >= 0) "Pad ${sel + 1}" else "⚡-Pad tippen"
+        textPaint.textSize = min(dp(9.5f), avail / (l3.length * 0.6f))
+        canvas.drawText(l3, ix, recBtn.top + dp(37f), textPaint)
         textPaint.textAlign = Paint.Align.CENTER
+    }
+
+    /** Szenen-Ansicht und Mute/Solo-Kennzeichen über den Pads. */
+    private fun drawPadOverlay(canvas: Canvas, i: Int) {
+        val r = padRects[i]
+        if (r.width() <= 0f) return
+        val cols = overlayColors()
+        if (sceneView) {
+            drawSceneTile(canvas, i, cols)
+            return
+        }
+        val has = Engine.hasLoop(i)
+        // SOLO auf anderen Pads: dieses Pad ist nicht zu hören
+        if (Engine.soloAny && !Engine.solo[i] && has) {
+            fillPaint.shader = null
+            fillPaint.color = alpha(Color.BLACK, 0.45f)
+            canvas.drawRoundRect(r, radius, radius, fillPaint)
+        }
+        val sz = min(dp(18f), r.width() * 0.2f)
+        var bx = r.right - sz * 0.5f - dp(5f)
+        val by = r.top + sz * 0.5f + dp(5f)
+        if (Engine.solo[i]) {
+            padBadge(canvas, bx, by, sz, "S", Color.rgb(255, 200, 40))
+            bx -= sz + dp(3f)
+        }
+        if (has && Engine.isOneShot(i) && Engine.isMuted(i)) padBadge(canvas, bx, by, sz, "M", Color.rgb(90, 160, 255))
+        // Modus-Rahmen
+        val mc = when (func) {
+            F_MUTE -> Color.rgb(90, 160, 255)
+            F_SOLO -> Color.rgb(255, 200, 40)
+            F_DUPL -> overlayColors()[2]
+            else -> 0
+        }
+        if (mc != 0) {
+            val pulse = 0.5f + 0.5f * sin(time * 6f)
+            strokePaint.strokeWidth = dp(if (duplSrc == i) 4f else 1.6f)
+            strokePaint.color = alpha(mc, if (duplSrc == i) 1f else 0.35f + 0.35f * pulse)
+            tmpRect.set(r.left - dp(3f), r.top - dp(3f), r.right + dp(3f), r.bottom + dp(3f))
+            canvas.drawRoundRect(tmpRect, radius + dp(3f), radius + dp(3f), strokePaint)
+        }
+    }
+
+    private fun padBadge(canvas: Canvas, cx: Float, cy: Float, sz: Float, label: String, c: Int) {
+        fillPaint.shader = null
+        fillPaint.color = c
+        canvas.drawCircle(cx, cy, sz * 0.5f, fillPaint)
+        strokePaint.strokeWidth = dp(1f)
+        strokePaint.color = Color.WHITE
+        canvas.drawCircle(cx, cy, sz * 0.5f, strokePaint)
+        textPaint.textSize = sz * 0.62f
+        textPaint.color = Color.BLACK
+        canvas.drawText(label, cx, cy + sz * 0.22f, textPaint)
+    }
+
+    private fun drawSceneTile(canvas: Canvas, i: Int, cols: IntArray) {
+        val r = padRects[i]
+        val exists = Engine.sceneExists(i)
+        val cur = i == Engine.curScene
+        val queued = i == Engine.queuedScene
+        val blink = 0.5f + 0.5f * sin(time * 10f)
+        val acc = cols[2]
+        fillPaint.shader = null
+        fillPaint.color = when {
+            cur -> acc
+            queued -> blend(cols[0], acc, 0.25f + 0.55f * blink)
+            exists -> blend(cols[0], acc, 0.22f)
+            else -> cols[0]
+        }
+        canvas.drawRoundRect(r, radius, radius, fillPaint)
+        strokePaint.strokeWidth = dp(if (cur) 2.5f else 1.4f)
+        strokePaint.color = when {
+            cur -> Color.WHITE
+            exists -> acc
+            else -> alpha(cols[1], 0.25f)
+        }
+        canvas.drawRoundRect(r, radius, radius, strokePaint)
+        if (sceneDupSrc == i) {
+            strokePaint.strokeWidth = dp(4f)
+            strokePaint.color = alpha(Color.WHITE, 0.5f + 0.5f * blink)
+            canvas.drawRoundRect(r, radius, radius, strokePaint)
+        }
+        val ink = if (cur) Color.WHITE else cols[1]
+        textPaint.textSize = r.width() * 0.11f
+        textPaint.color = alpha(ink, if (exists) 0.8f else 0.35f)
+        canvas.drawText("SZENE", r.centerX(), r.top + r.height() * 0.24f, textPaint)
+        textPaint.textSize = r.width() * 0.34f
+        textPaint.color = alpha(ink, if (exists) 1f else 0.35f)
+        canvas.drawText("${i + 1}", r.centerX(), r.centerY() + r.width() * 0.12f, textPaint)
+        textPaint.textSize = r.width() * 0.11f
+        textPaint.color = alpha(ink, if (exists) 0.8f else 0.4f)
+        val sub = when {
+            queued -> "▶ zur Eins"
+            exists -> "${Engine.sceneBars(i)} Takt" + (if (Engine.sceneBars(i) > 1) "e" else "")
+            else -> "+ neu"
+        }
+        canvas.drawText(sub, r.centerX(), r.bottom - r.height() * 0.12f, textPaint)
+        // Kette: Fortschritt der laufenden Szene
+        if (cur && Engine.sceneChain && Engine.seqPlaying) {
+            val bars = max(1, Engine.sceneBars(i))
+            val prog = ((Engine.sceneBarPos() + max(0f, Engine.masterProgress())) / bars).coerceIn(0f, 1f)
+            strokePaint.strokeWidth = dp(3f)
+            strokePaint.color = alpha(Color.WHITE, 0.9f)
+            val y = r.bottom - dp(5f)
+            canvas.drawLine(r.left + dp(8f), y, r.left + dp(8f) + (r.width() - dp(16f)) * prog, y, strokePaint)
+        }
+    }
+
+    private fun funcPad(p: Int) {
+        if (funcPointer >= 0) funcUsed = true
+        val r = padRects[p]
+        performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+        when (func) {
+            F_MUTE -> {
+                if (!Engine.hasLoop(p)) return
+                Engine.toggleMute(p)
+                flash[p] = 1f
+                burst(r.centerX(), r.centerY(), Color.rgb(90, 160, 255), 16, 200f)
+            }
+            F_SOLO -> {
+                Engine.toggleSolo(p)
+                flash[p] = 1f
+                burst(r.centerX(), r.centerY(), Color.rgb(255, 200, 40), 16, 200f)
+            }
+            F_ERASE -> {
+                if (Engine.erasePadEvents(p)) {
+                    hint("Pad ${p + 1}: Pattern gelöscht – nochmal antippen löscht das Sample")
+                    burst(r.centerX(), r.centerY(), Color.rgb(255, 40, 70), 24, 240f)
+                } else if (Engine.hasLoop(p)) {
+                    Engine.clear(p)
+                    burst(r.centerX(), r.centerY(), Color.rgb(255, 40, 70), 60, 420f)
+                    burst(r.centerX(), r.centerY(), padAccent(p), 40, 300f)
+                    shocks.add(Shock(RectF(r), 0f, Color.rgb(255, 40, 70)))
+                    performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+                    hint("Pad ${p + 1} gelöscht – ↶ UNDO holt es zurück")
+                }
+            }
+            F_DUPL -> {
+                val src = duplSrc
+                when {
+                    src < 0 -> if (Engine.hasLoop(p)) {
+                        duplSrc = p
+                        hint("Pad ${p + 1} kopieren → jetzt das Ziel-Pad antippen")
+                    } else hint("Zuerst ein Pad mit Inhalt antippen")
+                    src == p -> duplSrc = -1
+                    else -> {
+                        if (Engine.duplicatePad(src, p)) {
+                            hint("Pad ${src + 1} → Pad ${p + 1} kopiert (Sample, Modus, Schritte, Noten)")
+                            shocks.add(Shock(RectF(r), 0f, overlayColors()[2]))
+                            burst(r.centerX(), r.centerY(), overlayColors()[2], 30, 300f)
+                        }
+                        duplSrc = -1
+                    }
+                }
+            }
+        }
+    }
+
+    private val sceneLongPress = Runnable {
+        if (scenePointer < 0) return@Runnable
+        sceneLongFired = true
+        performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+        onSceneMenu?.invoke(scenePad)
+    }
+
+    private fun sceneDown(p: Int, id: Int) {
+        if (funcPointer >= 0) funcUsed = true
+        performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+        val r = padRects[p]
+        when (func) {
+            F_ERASE -> {
+                val cur = p == Engine.curScene
+                if (Engine.deleteScene(p)) {
+                    hint(if (cur) "Szene ${p + 1} geleert (Pattern und Instrumente)" else "Szene ${p + 1} gelöscht")
+                    burst(r.centerX(), r.centerY(), Color.rgb(255, 40, 70), 30, 300f)
+                }
+                return
+            }
+            F_DUPL -> {
+                val src = sceneDupSrc
+                if (src < 0) {
+                    if (Engine.sceneExists(p)) {
+                        sceneDupSrc = p
+                        hint("Szene ${p + 1} kopieren → jetzt die Ziel-Szene antippen")
+                    }
+                } else {
+                    if (src != p && Engine.copyScene(src, p)) hint("Szene ${src + 1} → Szene ${p + 1} kopiert")
+                    sceneDupSrc = -1
+                }
+                return
+            }
+        }
+        scenePointer = id
+        scenePad = p
+        sceneLongFired = false
+        postDelayed(sceneLongPress, 500L)
+    }
+
+    private fun sceneUp() {
+        removeCallbacks(sceneLongPress)
+        val p = scenePad
+        scenePointer = -1
+        if (sceneLongFired || p < 0) return
+        val from = Engine.curScene
+        val res = Engine.launchScene(p)
+        val r = padRects[p]
+        burst(r.centerX(), r.centerY(), overlayColors()[2], 24, 260f)
+        when {
+            res and 2 != 0 -> hint("Neue Szene ${p + 1} = Kopie von Szene ${from + 1}" + if (res and 1 != 0) " – startet auf der nächsten Eins" else "")
+            res and 1 != 0 -> hint("Szene ${p + 1} startet auf der nächsten Eins")
+        }
+    }
+
+    private val recLongPress = Runnable {
+        if (recPointer < 0) return@Runnable
+        recLongFired = true
+        performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+        onRecLongMenu?.invoke()
+    }
+
+    private fun doUndo(redo: Boolean) {
+        val label = if (redo) Engine.redo() else Engine.undo()
+        val b = if (redo) redoBtn else undoBtn
+        if (label == null) {
+            hint(if (redo) "Nichts zum Wiederherstellen" else "Nichts rückgängig zu machen")
+            return
+        }
+        performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+        burst(b.centerX(), b.centerY(), overlayColors()[2], 16, 200f)
+        hint((if (redo) "↷ Wiederhergestellt: " else "↶ Rückgängig: ") + label)
     }
 
     private fun transportButton(canvas: Canvas, r: RectF, active: Boolean, c: Int, blink: Float) {
@@ -1219,10 +1670,20 @@ class PadView(context: Context) : View(context) {
         val pw = min(dp(160f), (w - dp(48f)) / 2f)
         srcPill.set(w / 2f - dp(6f) - pw, top, w / 2f - dp(6f), top + ph)
         modePill.set(w / 2f + dp(6f), top, w / 2f + dp(6f) + pw, top + ph)
-        if (clearMode) {
-            textPaint.textSize = dp(11f)
-            textPaint.color = Color.rgb(255, 80, 100)
-            canvas.drawText("Tippe auf ein Pad, um es zu löschen", w / 2f, top + dp(15f), textPaint)
+        val modeText = when {
+            sceneView && func == F_ERASE -> "ERASE: Szene antippen = löschen / leeren"
+            sceneView && func == F_DUPL -> if (sceneDupSrc < 0) "DUPL: Quell-Szene antippen" else "DUPL: Ziel-Szene antippen"
+            sceneView -> "SZENEN: antippen = zur nächsten Eins starten · lange = Länge/Kette"
+            func == F_MUTE -> "MUTE: Pads antippen = stumm / an"
+            func == F_SOLO -> "SOLO: Pads antippen = nur diese hören"
+            func == F_ERASE -> "ERASE: Pad = Pattern löschen, nochmal = Sample"
+            func == F_DUPL -> if (duplSrc < 0) "DUPL: Quell-Pad antippen" else "DUPL: Ziel-Pad für Pad ${duplSrc + 1} antippen"
+            else -> null
+        }
+        if (modeText != null) {
+            textPaint.textSize = min(dp(11f), (w - dp(24f)) / (modeText.length * 0.6f))
+            textPaint.color = if (func == F_ERASE) Color.rgb(255, 80, 100) else overlayColors()[2]
+            canvas.drawText(modeText, w / 2f, top + dp(15f), textPaint)
         } else {
             val cols = overlayColors()
             val sum = Engine.sourceSummary(VISIBLE_PADS)
@@ -1775,14 +2236,14 @@ class PadView(context: Context) : View(context) {
                     onMessageTap?.invoke()
                     return true
                 }
-                if (!clearMode && srcPill.contains(x, y)) {
+                if (func == F_NONE && !sceneView && srcPill.contains(x, y)) {
                     Engine.setAllSources(if (Engine.sourceSummary(VISIBLE_PADS) == 0) 1 else 0)
                     performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
                     burst(x, y, overlayColors()[2], 12, 160f)
                     onRecSettingsChanged?.invoke()
                     return true
                 }
-                if (!clearMode && modePill.contains(x, y)) {
+                if (func == F_NONE && !sceneView && modePill.contains(x, y)) {
                     Engine.liveBars = when (Engine.liveBars) { 0 -> -1; -1 -> 1; 1 -> 2; 2 -> 4; 4 -> 8; 8 -> 16; else -> 0 }
                     performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
                     burst(x, y, overlayColors()[2], 12, 160f)
@@ -1796,6 +2257,10 @@ class PadView(context: Context) : View(context) {
                         if (Engine.hasLoop(i)) openKeyboard(i) else burst(kr.centerX(), kr.centerY(), Color.GRAY, 6, 100f)
                         return true
                     }
+                }
+                for (b in 0 until 6) if (funcRects[b].contains(x, y)) {
+                    if (funcPointer < 0) funcDown(b, id)
+                    return true
                 }
                 if (designBtn.contains(x, y)) {
                     performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
@@ -1837,9 +2302,13 @@ class PadView(context: Context) : View(context) {
                 if (seqRect.contains(x, y)) {
                     when {
                         recBtn.contains(x, y) -> {
-                            recPressed()
+                            recPointer = id
+                            recLongFired = false
+                            postDelayed(recLongPress, 500L)
                             burst(x, y, Color.rgb(255, 45, 70), 18, 220f)
                         }
+                        undoBtn.contains(x, y) -> doUndo(false)
+                        redoBtn.contains(x, y) -> doUndo(true)
                         playBtn.contains(x, y) -> {
                             Engine.seqPlay()
                             burst(x, y, if (theme == NEON) Color.rgb(60, 230, 120) else ORANGE, 18, 220f)
@@ -1851,6 +2320,12 @@ class PadView(context: Context) : View(context) {
                             else if (wasPatternRec) onPatternStopped?.invoke()
                             stopPointer = id
                             stopDownMs = SystemClock.uptimeMillis()
+                        }
+                        func == F_ERASE && y <= stepRects[0].bottom + dp(6f) -> {
+                                if (funcPointer >= 0) funcUsed = true
+                                Engine.seqClear()
+                                hint("Pattern geleert – ↶ UNDO holt es zurück")
+                                burst(x, y, Color.rgb(255, 40, 70), 30, 300f)
                         }
                         else -> {
                             for (k in 0 until Engine.STEPS) {
@@ -1921,22 +2396,22 @@ class PadView(context: Context) : View(context) {
                 }
                 val p = hitPad(x, y)
                 if (p < 0) return true
-                if (clearMode) {
-                    if (Engine.hasLoop(p)) {
-                        Engine.clear(p)
-                        val r = padRects[p]
-                        burst(r.centerX(), r.centerY(), Color.rgb(255, 40, 70), 60, 420f)
-                        burst(r.centerX(), r.centerY(), padAccent(p), 40, 300f)
-                        shocks.add(Shock(RectF(r), 0f, Color.rgb(255, 40, 70)))
-                        performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
-                    }
-                    clearMode = false
+                if (sceneView) {
+                    if (scenePointer < 0) sceneDown(p, id)
+                    return true
+                }
+                if (func != F_NONE) {
+                    funcPad(p)
                     return true
                 }
                 if (pointerPad.containsValue(p)) return true
                 pointerPad[id] = p
                 val shot = Engine.padDown(p)
-                if (shot) shotPointers.add(id)
+                if (shot) {
+                    shotPointers.add(id)
+                    // Note Repeat: gehaltenes ⚡-Pad wiederholt im Raster
+                    if (Engine.repeatOn) Engine.repeatPadDown(p)
+                }
                 flash[p] = 1f
                 if (shot) {
                     burst(x, y, if (theme == NEON) warmCols[Random.nextInt(warmCols.size)] else AMBER, 30, 340f)
@@ -1954,6 +2429,7 @@ class PadView(context: Context) : View(context) {
                     if (id == stepPointer && Engine.seqSelected >= 0) {
                         val dy = stepDownY - e.getY(pi)
                         if (stepDragged || abs(dy) > dp(8f)) {
+                            if (!stepDragged) Engine.pushPatternUndo("Lautstärke Schritt ${stepIdx + 1}")
                             stepDragged = true
                             val base = if (stepStartVel > 0f) stepStartVel else 1f
                             Engine.setSeqVel(Engine.seqSelected, stepIdx, (base + dy / dp(90f)).coerceIn(0.05f, 1f))
@@ -1972,10 +2448,25 @@ class PadView(context: Context) : View(context) {
                     instUp()
                     return true
                 }
+                if (upId == funcPointer) {
+                    funcUp()
+                    return true
+                }
+                if (upId == scenePointer) {
+                    sceneUp()
+                    return true
+                }
+                if (upId == recPointer) {
+                    recPointer = -1
+                    removeCallbacks(recLongPress)
+                    if (!recLongFired) recPressed()
+                    return true
+                }
                 if (upId == stepPointer) {
                     stepPointer = -1
                     val sel = Engine.seqSelected
                     if (sel >= 0 && !stepDragged) {
+                        Engine.pushPatternUndo("Schritt ${stepIdx + 1}")
                         Engine.seqToggle(sel, stepIdx)
                         val sr = stepRects[stepIdx]
                         burst(sr.centerX(), sr.centerY(), padAccent(sel), 8, 140f)
@@ -2014,11 +2505,21 @@ class PadView(context: Context) : View(context) {
                     return true
                 }
                 val p = pointerPad.remove(upId) ?: return true
-                if (shotPointers.remove(upId)) return true
+                if (shotPointers.remove(upId)) {
+                    Engine.repeatPadUp(p)
+                    return true
+                }
                 release(p, e.getX(idx), e.getY(idx))
             }
             MotionEvent.ACTION_CANCEL -> {
                 instRelease()
+                Engine.repeatAllUp()
+                removeCallbacks(funcLongPress)
+                removeCallbacks(sceneLongPress)
+                removeCallbacks(recLongPress)
+                if (funcPointer >= 0) funcUp()
+                scenePointer = -1
+                recPointer = -1
                 fxPointer = -1
                 removeCallbacks(fxLongPress)
                 xyPointer = -1
@@ -2172,9 +2673,7 @@ class PadView(context: Context) : View(context) {
         }
         drawDisplay(canvas)
         drawDesignButton(canvas)
-        val blink = 0.5f + 0.5f * sin(time * 10f)
-        drawButton(canvas, clearBtn, "CLEAR", clearMode, blink)
-        drawButton(canvas, muteBtn, if (Engine.anyPlaying()) "ALLE STUMM" else "ALLE AN", false, 0f)
+        drawFuncRow(canvas)
     }
 
     private fun drawDisplayLight(canvas: Canvas) {
@@ -2803,26 +3302,7 @@ class PadView(context: Context) : View(context) {
         canvas.drawPath(tri, fillPaint)
         fillPaint.color = Color.rgb(40, 40, 40)
         canvas.drawRect(stopBtn.centerX() - ic * 0.9f, stopBtn.centerY() - ic * 0.9f, stopBtn.centerX() + ic * 0.9f, stopBtn.centerY() + ic * 0.9f, fillPaint)
-        val ix = stopBtn.right + dp(10f)
-        val txt = if (comic) Color.BLACK else R_LCD
-        textPaint.textAlign = Paint.Align.LEFT
-        textPaint.textSize = dp(11f)
-        textPaint.color = if (recOn) red else txt
-        val head = when {
-            Engine.songRecording -> {
-                val t = Engine.songSeconds().toInt()
-                String.format(Locale.GERMANY, "● SONG %d:%02d", t / 60, t % 60)
-            }
-            Engine.seqRecording -> "● REC PATTERN"
-            Engine.seqPlaying -> "▶ SEQ"
-            else -> "SEQUENZER"
-        }
-        canvas.drawText(head, ix, recBtn.top + dp(13f), textPaint)
-        textPaint.textSize = dp(9.5f)
-        textPaint.color = alpha(txt, 0.75f)
-        canvas.drawText(if (sel >= 0) "Pad ${sel + 1}: tippen · ↕ Lautst." else "⚡-Pad antippen", ix, recBtn.top + dp(27f), textPaint)
-        canvas.drawText("STOP halten = leeren", ix, recBtn.top + dp(40f), textPaint)
-        textPaint.textAlign = Paint.Align.CENTER
+        drawSeqInfo(canvas, if (recOn) red else (if (comic) Color.BLACK else R_LCD), alpha(if (comic) Color.BLACK else R_LCD, 0.75f))
     }
 
 
@@ -2955,9 +3435,7 @@ class PadView(context: Context) : View(context) {
         canvas.drawBitmap(logo, null, logoDst, logoPaint)
         drawDisplay(canvas)
         drawDesignButton(canvas)
-        val blink = 0.5f + 0.5f * sin(time * 10f)
-        drawButton(canvas, clearBtn, "CLEAR", clearMode, blink)
-        drawButton(canvas, muteBtn, if (Engine.anyPlaying()) "ALLE STUMM" else "ALLE AN", false, 0f)
+        drawFuncRow(canvas)
     }
 
     private fun drawDisplaySkin(canvas: Canvas) {
@@ -3525,25 +4003,7 @@ class PadView(context: Context) : View(context) {
         canvas.drawPath(tri, fillPaint)
         fillPaint.color = txt
         canvas.drawRect(stopBtn.centerX() - ic * 0.9f, stopBtn.centerY() - ic * 0.9f, stopBtn.centerX() + ic * 0.9f, stopBtn.centerY() + ic * 0.9f, fillPaint)
-        val ix = stopBtn.right + dp(10f)
-        textPaint.textAlign = Paint.Align.LEFT
-        textPaint.textSize = dp(11f)
-        textPaint.color = if (recOn) red else sk.accent
-        val head = when {
-            Engine.songRecording -> {
-                val t = Engine.songSeconds().toInt()
-                String.format(Locale.GERMANY, "● SONG %d:%02d", t / 60, t % 60)
-            }
-            Engine.seqRecording -> "● REC PATTERN"
-            Engine.seqPlaying -> "▶ SEQ"
-            else -> "SEQUENZER"
-        }
-        canvas.drawText(head, ix, recBtn.top + dp(13f), textPaint)
-        textPaint.textSize = dp(9.5f)
-        textPaint.color = alpha(txt, 0.7f)
-        canvas.drawText(if (sel >= 0) "Pad ${sel + 1}: tippen · ↕ Lautst." else "⚡-Pad antippen", ix, recBtn.top + dp(27f), textPaint)
-        canvas.drawText("STOP halten = leeren", ix, recBtn.top + dp(40f), textPaint)
-        textPaint.textAlign = Paint.Align.CENTER
+        drawSeqInfo(canvas, if (recOn) red else sk.accent, alpha(txt, 0.7f))
     }
 
 
@@ -3568,10 +4028,18 @@ class PadView(context: Context) : View(context) {
         when {
             Engine.songRecording -> onSongStopped?.invoke()
             Engine.seqRecording -> {
+                // Punch-out wie bei Maschine: Aufnahme aus, alles läuft weiter
                 Engine.seqToggleRec()
-                onPatternStopped?.invoke()
+                hint("Aufnahme beendet – das Pattern läuft weiter (↶ UNDO verwirft sie)")
             }
-            else -> onRecMenu?.invoke()
+            else -> {
+                val wasPlaying = Engine.seqPlaying
+                Engine.seqToggleRec()
+                hint(
+                    if (!wasPlaying && Engine.countIn) "◔ Ein Takt Einzählen, dann läuft die Pattern-Aufnahme (REC lang drücken = Song-Aufnahme)"
+                    else "● Pattern-Aufnahme läuft – nochmal REC beendet sie (REC lang drücken = Song-Aufnahme)"
+                )
+            }
         }
     }
 
@@ -3889,6 +4357,7 @@ class PadView(context: Context) : View(context) {
         when {
             mxBars.contains(x, y) -> {
                 val nb = when (Engine.rollBars[p]) { 1 -> 2; 2 -> 4; 4 -> 8; else -> 1 }
+                Engine.pushPatternUndo("Matrix-Länge")
                 Engine.setRollBars(p, nb)
                 return true
             }
@@ -3899,12 +4368,14 @@ class PadView(context: Context) : View(context) {
             }
             mxQuant.contains(x, y) -> {
                 val q = if (Engine.rollQuant > 0) Engine.rollQuant else 16
+                Engine.pushPatternUndo("Quantisieren")
                 Engine.quantizeNotes(p, q)
                 performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
                 burst(mxQuant.centerX(), mxQuant.centerY(), overlayColors()[2], 18, 200f)
                 return true
             }
             mxClear.contains(x, y) -> {
+                Engine.pushPatternUndo("Matrix leeren")
                 Engine.clearNotes(p)
                 burst(mxClear.centerX(), mxClear.centerY(), Color.rgb(230, 40, 55), 18, 200f)
                 return true
@@ -3917,6 +4388,7 @@ class PadView(context: Context) : View(context) {
                 val pos = kotlin.math.floor(posRaw * q.toDouble()) / q
                 val row = ((y - g.top) / (g.height() / mxRows)).toInt().coerceIn(0, mxRows - 1)
                 val semi = mxTopSemi() - row
+                Engine.pushPatternUndo("Note")
                 if (Engine.removeNoteAt(p, posRaw.toDouble(), semi)) return true
                 Engine.toggleNote(p, pos, semi, 1.0 / q)
                 val v = Engine.noteOn(p, semi)
@@ -4439,8 +4911,15 @@ class PadView(context: Context) : View(context) {
             }
             return Triple(knobRects[k], t.first, t.second + " Werte ändern: Regler nach oben/unten ziehen.")
         }
-        if (muteBtn.contains(x, y)) return Triple(muteBtn, "Alle stumm / an", "Schaltet alle Loop-Pads auf einmal stumm oder wieder an. Die Loops laufen im Takt weiter.")
-        if (clearBtn.contains(x, y)) return Triple(clearBtn, "CLEAR", "Löschmodus: danach ein Pad antippen, um seinen Inhalt zu löschen.")
+        val funcInfo = arrayOf(
+            "SZENE" to "Wie bei Maschine: die Pads werden zu 12 Szenen. Eine Szene merkt sich Sequenzer-Schritte, Matrix-Noten, ACID/DRUM-Pattern und welche Pads stumm sind. Antippen startet sie auf der nächsten Eins (leere Szene = Kopie der aktuellen). Szene lange drücken: Länge in Takten und Kette. SZENE lange drücken: Kette (Song-Modus) an/aus – die Szenen laufen dann nacheinander. Nochmal SZENE = zurück zu den Pads.",
+            "MUTE" to "Danach Pads antippen schaltet sie stumm/an: Loops laufen leise im Takt weiter, ⚡-Pads werden vom Sequenzer nicht mehr gespielt. Halten + Pad = nur kurz aktiv. MUTE lange drücken = alle Loops stumm/an.",
+            "SOLO" to "Danach Pads antippen: nur Solo-Pads sind zu hören (auch ACID/DRUM verstummen). SOLO lange drücken schaltet alle Solos aus.",
+            "ERASE" to "Pad antippen löscht zuerst sein Pattern (Schritte und Matrix-Noten), nochmal antippen das Sample. Auf die Sequenzer-Schritte tippen leert das ganze Pattern. Mit SZENE: Szene löschen. Alles lässt sich mit ↶ UNDO zurückholen.",
+            "DUPLICATE" to "Erst das Quell-Pad, dann das Ziel-Pad antippen: kopiert Sample, Modus, Tonhöhe, Schritte und Noten. Mit SZENE: Szene auf eine andere kopieren.",
+            "NOTE REPEAT" to "Ist REPEAT an, wiederholt ein gehaltenes ⚡-Pad oder Drum-Pad (DRUM 909) im Raster – wie die Note-Repeat-Taste bei Maschine. Lange drücken wechselt die Rate: 1/4, 1/8, 1/16, 1/32, 1/8T, 1/16T. Bei laufender Pattern-Aufnahme landen die Schläge im Pattern."
+        )
+        for (b in 0 until 6) if (funcRects[b].contains(x, y)) return Triple(funcRects[b], funcInfo[b].first, funcInfo[b].second)
         if (fxBtn.contains(x, y)) return Triple(fxBtn, "Effekt-Knopf", "Links tippen = vorheriger, rechts = nächster Effekt für den gewählten Kettenplatz. Lange drücken öffnet die Liste aller 37 Effekte.")
         // ---- Umschalter & Instrumente
         for (t in 0 until 3) if (modeRects[t].contains(x, y)) {
@@ -4476,6 +4955,9 @@ class PadView(context: Context) : View(context) {
         if (motRect.contains(x, y)) return Triple(motRect, "● REC Bewegung", "Speichert deine Fingerbewegung: tippen, dann Fläche berühren startet die Aufnahme, nochmal tippen beendet sie. Sie läuft dann als ▶ AUTO im Takt. AUTO antippen löscht sie.")
         if (xyRect.contains(x, y)) return Triple(xyRect, "XY-Effektfläche", "Finger drauf = Effekt an. X (waagrecht) und Y (senkrecht) steuern zwei Parameter aller aktiven Effekte: hier ${Fx.X_LABELS[Engine.fxType]} und ${Fx.Y_LABELS[Engine.fxType]}.")
         // ---- Pads
+        if (sceneView) for (i in 0 until VISIBLE_PADS) if (padRects[i].contains(x, y)) {
+            return Triple(padRects[i], "Szene ${i + 1}", "Antippen startet die Szene auf der nächsten Eins (läuft nichts: sofort). Eine leere Szene wird als Kopie der aktuellen angelegt. Lange drücken: Länge in Takten, Kette, Löschen.")
+        }
         for (i in 0 until VISIBLE_PADS) {
             if (keyRects[i].contains(x, y)) return Triple(keyRects[i], "🎹 Tastatur-Knopf", "Öffnet die Tastatur für Pad ${i + 1}: Sample in Tonhöhen spielen, Akkorde, Aufnahme in die Matrix.")
             if (moreRects[i].contains(x, y)) return Triple(moreRects[i], "••• Pad-Menü", "Eingang (Mikrofon/Wave), Modus (Loop/One Shot), Bibliothek, Import, Wave-Editor, Tastatur, Effekt an/aus, Export und Löschen für Pad ${i + 1}.")
@@ -4498,9 +4980,11 @@ class PadView(context: Context) : View(context) {
         // ---- Sequenzer
         if (seqRect.contains(x, y)) {
             return when {
-                recBtn.contains(x, y) -> Triple(recBtn, "● REC", "Pattern aufnehmen (⚡-Pads landen auf den Schritten) oder Song aufnehmen (mit oder ohne Effekte). Nochmal drücken beendet.")
-                playBtn.contains(x, y) -> Triple(playBtn, "▶ Play", "Startet den Sequenzer und die Matrix-Noten im Master-Tempo.")
-                stopBtn.contains(x, y) -> Triple(stopBtn, "■ Stop", "Anhalten. Lange halten leert das Pattern.")
+                recBtn.contains(x, y) -> Triple(recBtn, "● REC", "Antippen: Pattern-Aufnahme (⚡-Pads, Tastatur, ACID und DRUM landen im Pattern). Steht alles, wird ein Takt eingezählt. Nochmal antippen beendet die Aufnahme, alles läuft weiter. Lange drücken: Song-Aufnahme oder Pattern als Audio speichern.")
+                playBtn.contains(x, y) -> Triple(playBtn, "▶ Play", "Startet alles gemeinsam auf der Eins: Loops, Sequenzer, Matrix, ACID und DRUM.")
+                stopBtn.contains(x, y) -> Triple(stopBtn, "■ Stop", "Hält alles an (Loops, Sequenzer, Instrumente). ▶ startet wieder auf der Eins. Lange halten leert das Pattern.")
+                undoBtn.contains(x, y) -> Triple(undoBtn, "↶ UNDO", "Macht den letzten Schritt rückgängig: Aufnahmen, Overdubs, Löschen, Laden, Schritte, Noten, Pattern-Aufnahmen.")
+                redoBtn.contains(x, y) -> Triple(redoBtn, "↷ REDO", "Stellt einen rückgängig gemachten Schritt wieder her.")
                 else -> Triple(seqRect, "Sequenzer", "16 Schritte pro Takt für das zuletzt gespielte ⚡-Pad. Schritt antippen = an/aus, hoch/runter ziehen = Lautstärke. Punkte zeigen Schritte anderer Pads und Matrix-Noten.")
             }
         }
@@ -4848,14 +5332,15 @@ class PadView(context: Context) : View(context) {
                     2 -> st.acidFx = !st.acidFx
                     3 -> st.acidOct = (st.acidOct - 1).coerceAtLeast(-1)
                     4 -> st.acidOct = (st.acidOct + 1).coerceAtMost(2)
-                    5 -> st.acidRandom()
-                    else -> st.acidClear()
+                    5 -> { Engine.pushPatternUndo("ACID Zufall"); st.acidRandom() }
+                    else -> { Engine.pushPatternUndo("ACID leeren"); st.acidClear() }
                 }
                 return
             }
             val cw = laneRect.width() / InstState.STEPS
             if (laneRect.contains(x, y)) {
                 val k = ((x - laneRect.left) / cw).toInt().coerceIn(0, InstState.STEPS - 1)
+                Engine.pushPatternUndo("ACID Schritt ${k + 1}")
                 instPointer = id
                 instKind = 2
                 laneStep = k
@@ -4867,6 +5352,7 @@ class PadView(context: Context) : View(context) {
             }
             if (accRow.contains(x, y) || sliRow.contains(x, y)) {
                 val k = ((x - laneRect.left) / cw).toInt().coerceIn(0, InstState.STEPS - 1)
+                Engine.pushPatternUndo("ACID Accent/Slide")
                 if (accRow.contains(x, y)) st.acidAcc[k] = !st.acidAcc[k] else st.acidSlide[k] = !st.acidSlide[k]
                 return
             }
@@ -4885,9 +5371,9 @@ class PadView(context: Context) : View(context) {
                 when (i) {
                     0 -> st.drumOn = !st.drumOn
                     1 -> st.drumFx = !st.drumFx
-                    2 -> st.drumApplyPreset(st.drumPreset + 1)
+                    2 -> { Engine.pushPatternUndo("DRUM Preset"); st.drumApplyPreset(st.drumPreset + 1) }
                     3 -> if (Engine.seqPlaying) Engine.seqStop() else Engine.seqPlay()
-                    else -> st.drumClear()
+                    else -> { Engine.pushPatternUndo("DRUM leeren"); st.drumClear() }
                 }
                 return
             }
@@ -4899,6 +5385,7 @@ class PadView(context: Context) : View(context) {
             if (dStepRow.contains(x, y)) {
                 val k = (((x - dStepRow.left) / dStepRow.width()) * InstState.STEPS).toInt().coerceIn(0, InstState.STEPS - 1)
                 val row = st.drumSteps[st.drumSel]
+                Engine.pushPatternUndo("DRUM Schritt ${k + 1}")
                 row[k] = (row[k] + 1) % 3
                 return
             }
@@ -4910,6 +5397,13 @@ class PadView(context: Context) : View(context) {
                 st.drumSel = i
                 drumHitT[i] = 1f
                 Engine.drumHit(i, drumAccMode)
+                if (Engine.repeatOn) {
+                    // Note Repeat: Drum-Pad halten wiederholt im Raster
+                    Engine.repeatDrumDown(i, drumAccMode)
+                    instPointer = id
+                    instKind = 3
+                    repDrumVoice = i
+                }
                 burst(x, y, overlayColors()[2], 10, 160f)
                 return
             }
@@ -4939,9 +5433,14 @@ class PadView(context: Context) : View(context) {
         }
     }
 
+    private var repDrumVoice = -1
+
     private fun instUp() {
         val st = InstState
-        if (instKind == 1) {
+        if (instKind == 3) {
+            Engine.repeatDrumUp(repDrumVoice)
+            repDrumVoice = -1
+        } else if (instKind == 1) {
             Engine.acidLiveOff()
             acidLiveSemi = Int.MIN_VALUE
             st.acidCutMod = 0f
@@ -4963,6 +5462,12 @@ class PadView(context: Context) : View(context) {
         private val BRAND_ORANGE = Color.rgb(255, 95, 0)
 
         const val VISIBLE_PADS = 12
+        const val F_NONE = 0
+        const val F_MUTE = 1
+        const val F_SOLO = 2
+        const val F_ERASE = 3
+        const val F_DUPL = 4
+        private val FUNC_NAMES = arrayOf("SZENE", "MUTE", "SOLO", "ERASE", "DUPL", "REPEAT")
         private val ACID_KNOBS = arrayOf("CUTOFF", "RESO", "ENV MOD", "DECAY", "LEVEL")
         private val DRUM_KNOBS = arrayOf("TUNE", "DECAY", "LEVEL", "DRIVE", "VOL")
         const val RETRO = 4

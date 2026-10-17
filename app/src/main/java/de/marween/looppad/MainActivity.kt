@@ -84,6 +84,10 @@ class MainActivity : Activity() {
             )
         }
         pads.onRecMenu = { showRecMenu() }
+        pads.onRecLongMenu = { showRecMenu() }
+        pads.onHint = { hint(it) }
+        pads.onSceneMenu = { showSceneMenu(it) }
+        Engine.countIn = prefs.getBoolean("countIn", true)
         pads.onSongStopped = { finishSong() }
         pads.theme = getSharedPreferences("marvpad", MODE_PRIVATE).getInt("design", PadView.NOIR)
         pads.infoMode = getSharedPreferences("marvpad", MODE_PRIVATE).getBoolean("info", false)
@@ -280,12 +284,30 @@ class MainActivity : Activity() {
         AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
             .setTitle("Aufnehmen")
             .setItems(arrayOf(
-                "● Pattern aufnehmen  (16 Schritte, ⚡-Pads)",
+                if (Engine.seqRecording) "■ Pattern-Aufnahme beenden" else "● Pattern aufnehmen  (REC kurz antippen)",
                 "● Song aufnehmen – mit Effekten (wie du es hörst)",
-                "● Song aufnehmen – ohne Effekte (trocken)"
+                "● Song aufnehmen – ohne Effekte (trocken)",
+                "🎧 Pattern als Audio speichern (WAV)",
+                "💾 Projekt speichern (inkl. Szenen)",
+                (if (Engine.countIn) "☑" else "☐") + " Einzähler: 1 Takt vor der Pattern-Aufnahme"
             )) { _, which ->
                 when (which) {
                     0 -> Engine.seqToggleRec()
+                    3 -> {
+                        val d = Engine.renderPattern()
+                        if (d == null) {
+                            toast("Das Pattern spielt keine ⚡-Samples")
+                        } else {
+                            pendingPattern = d
+                            pickCreate("MarvPAD_Pattern", REQ_PATTERN)
+                        }
+                    }
+                    4 -> askProjectName(null, 0)
+                    5 -> {
+                        Engine.countIn = !Engine.countIn
+                        getSharedPreferences("marvpad", MODE_PRIVATE).edit().putBoolean("countIn", Engine.countIn).apply()
+                        toast(if (Engine.countIn) "Einzähler an" else "Einzähler aus")
+                    }
                     1 -> {
                         Engine.songStart(false)
                         toast("Song-Aufnahme mit Effekten (${fxRoutingText()}) – REC oder STOP beendet sie")
@@ -747,6 +769,15 @@ class MainActivity : Activity() {
         box.addView(bar)
         box.addView(row)
         box.addView(metro)
+        box.addView(CheckBox(this).apply {
+            text = "Einzähler (1 Takt vor der Pattern-Aufnahme)"
+            isChecked = Engine.countIn
+            setTextColor(Color.WHITE)
+            setOnCheckedChangeListener { _, c ->
+                Engine.countIn = c
+                getSharedPreferences("marvpad", MODE_PRIVATE).edit().putBoolean("countIn", c).apply()
+            }
+        })
         show()
         AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
             .setTitle("Master-Tempo")
@@ -918,6 +949,51 @@ class MainActivity : Activity() {
     }
 
     private fun toast(msg: String) = Toast.makeText(this, msg, Toast.LENGTH_SHORT).show()
+
+    private var lastHint: Toast? = null
+
+    /** Kurzer Hinweis aus der Bedienung – ersetzt den vorigen sofort statt sich anzustauen. */
+    private fun hint(msg: String) {
+        lastHint?.cancel()
+        lastHint = Toast.makeText(this, msg, Toast.LENGTH_SHORT).also { it.show() }
+    }
+
+    // ---------------------------------------------------------------- Szenen
+
+    private fun showSceneMenu(i: Int) {
+        val exists = Engine.sceneExists(i)
+        val labels = ArrayList<String>()
+        val actions = ArrayList<() -> Unit>()
+        if (i != Engine.curScene) {
+            labels.add(if (exists) "▶ Szene ${i + 1} starten (nächste Eins)" else "＋ Szene ${i + 1} anlegen (Kopie der aktuellen)")
+            actions.add { Engine.launchScene(i) }
+        }
+        labels.add("⏱ Länge in der Kette: ${Engine.sceneBars(i)} Takt" + (if (Engine.sceneBars(i) > 1) "e" else ""))
+        actions.add {
+            val opts = intArrayOf(1, 2, 4, 8, 16, 32)
+            AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
+                .setTitle("Szene ${i + 1}: Länge")
+                .setItems(opts.map { "$it Takt" + if (it > 1) "e" else "" }.toTypedArray()) { _, w ->
+                    if (!Engine.sceneExists(i)) Engine.launchScene(i)
+                    Engine.setSceneBars(i, opts[w])
+                }
+                .show()
+        }
+        labels.add(if (Engine.sceneChain) "⛓ Kette (Song-Modus): AN → ausschalten" else "⛓ Kette (Song-Modus): AUS → einschalten")
+        actions.add {
+            Engine.sceneChain = !Engine.sceneChain
+            toast(if (Engine.sceneChain) "Kette an: Szenen laufen nacheinander, jede so lange wie eingestellt" else "Kette aus")
+        }
+        if (exists) {
+            labels.add(if (i == Engine.curScene) "🗑 Szene leeren (Pattern & Instrumente)" else "🗑 Szene löschen")
+            actions.add { Engine.deleteScene(i) }
+        }
+        AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
+            .setTitle("Szene ${i + 1}" + if (i == Engine.curScene) " (läuft)" else "")
+            .setItems(labels.toTypedArray()) { _, w -> actions[w]() }
+            .setNegativeButton("Schließen", null)
+            .show()
+    }
 
     companion object {
         private const val REQ_MIC = 7

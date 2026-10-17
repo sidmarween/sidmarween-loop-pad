@@ -147,7 +147,7 @@ object Engine {
 
     /** Touchpad: ACID-Ton an (slide = vom vorigen Ton gleiten). */
     fun acidLiveOn(semi: Int, slide: Boolean) {
-        if (seqRecording && seqPlaying && !slide) {
+        if (recLive() && !slide) {
             val (step, ahead) = liveStep()
             InstState.acidGate[step] = true
             InstState.acidSemi[step] = semi
@@ -162,7 +162,7 @@ object Engine {
 
     /** Touchpad/Pads: DRUM-Instrument anschlagen. */
     fun drumHit(v: Int, accent: Boolean) {
-        if (seqRecording && seqPlaying) {
+        if (recLive()) {
             val (step, ahead) = liveStep()
             InstState.drumSteps[v][step] = if (accent) 2 else 1
             if (ahead) return
@@ -177,23 +177,25 @@ object Engine {
     private fun seqStart(): Long = if (masterLen > 0L) masterStart else seqOrigin
     private fun stepFrame(origin: Long, bar: Long, n: Long): Long = origin + Math.floorDiv(n * bar, STEPS.toLong())
 
-    fun seqPlay() {
-        if (seqPlaying) return
-        seqOrigin = written + sampleRate / 50
-        seqPlaying = true
-    }
+    /** ▶ – startet Loops, Sequenzer und Instrumente gemeinsam auf der Eins. */
+    fun seqPlay() = transportPlay(false)
 
-    fun seqStop() {
-        seqPlaying = false
-        seqRecording = false
-    }
+    /** ■ – hält alles an (Loops, Sequenzer, Instrumente). */
+    fun seqStop() = transportStop()
 
+    /** Pattern-Aufnahme an/aus. Steht der Transport, wird (falls eingeschaltet) ein Takt eingezählt. */
     fun seqToggleRec() {
-        seqRecording = !seqRecording
-        if (seqRecording) seqPlay()
+        if (seqRecording) {
+            seqRecording = false
+            return
+        }
+        pushPatternUndo("Pattern-Aufnahme")
+        if (!seqPlaying) transportPlay(countIn)
+        seqRecording = true
     }
 
     fun seqClear() {
+        pushPatternUndo("Pattern leeren")
         for (row in seq) java.util.Arrays.fill(row, 0f)
         for (p in 0 until PADS) clearNotes(p)
     }
@@ -236,14 +238,14 @@ object Engine {
             val base = stepFrame(origin, bar, n)
             if (base >= w + block) break
             val f = if (Math.floorMod(n, 2L) == 1L) base + sw else base
-            if (f >= w && f < w + block) {
+            if (f >= w && f < w + block && base >= origin) {
                 val step = Math.floorMod(n, STEPS.toLong()).toInt()
                 instStep(step, f, w, bar / STEPS)
                 for (p in 0 until PADS) {
                     val vel = seq[p][step]
                     if (vel <= 0f) continue
                     val l = loops.get(p)
-                    if (l != null && l.oneShot) {
+                    if (l != null && l.oneShot && !l.muted && audible(p)) {
                         l.shotGain = vel
                         l.shotStart = f
                     }
@@ -284,6 +286,10 @@ object Engine {
     /** Stellt einen gespeicherten Projektzustand wieder her (alle Loops starten gemeinsam auf der Eins). */
     fun restore(pads: Array<PadSave>, master: Long, bpm: Float, pattern: Array<FloatArray>?) {
         seqStop()
+        clearUndo()
+        clearSolo()
+        resetScenes()
+        repeatAllUp()
         for (p in 0 until PADS) {
             takes.set(p, null)
             loops.set(p, null)
@@ -646,7 +652,7 @@ object Engine {
 
     /** Beginnt eine Note in der Pattern-Aufnahme (nur wenn REC Pattern läuft). */
     fun recordNoteOn(p: Int, semi: Int): NoteEv? {
-        if (!seqRecording || !seqPlaying || p !in 0 until PADS) return null
+        if (!recLive() || p !in 0 until PADS) return null
         val bar = seqBar()
         val origin = seqStart()
         val bars = rollBars[p]
@@ -757,6 +763,7 @@ object Engine {
                 val list = notes[p]
                 if (list.isEmpty()) continue
                 val l = loops.get(p) ?: continue
+                if (l.muted || !audible(p)) continue
                 val loopLen = bar * rollBars[p]
                 for (ev in list) {
                     // Swing: Noten auf ungeraden 1/16 nach hinten schieben
@@ -764,7 +771,7 @@ object Engine {
                     val off = (ev.pos * bar).toLong() + if (abs(u - 1.0) < 0.25) swingOffset(bar) else 0L
                     val k = -Math.floorDiv(-(w - origin - off), loopLen)
                     val f = origin + k * loopLen + off
-                    if (f >= end || f < w) continue
+                    if (f >= end || f < w || f < origin) continue
                     if (f < ev.validFrom) continue
                     val id = startVoice(l.data, p, 2.0.pow((ev.semi + 0) / 12.0), !l.oneShot)
                     if (id < 0) continue
@@ -816,13 +823,14 @@ object Engine {
     /** Schneidet einen Pad-Inhalt zu und zerlegt ihn optional in Slices, die dem Tempo folgen. */
     fun applyEdit(p: Int, start: Int, end: Int, slices: Int, bars: Float) {
         val l = loops.get(p) ?: return
+        pushPadUndo("Wave-Editor Pad ${p + 1}", p)
         val s0 = start.coerceIn(0, max(0, l.data.size - 2))
         val e0 = end.coerceIn(s0 + 2, l.data.size)
         val data = l.data.copyOfRange(s0, e0)
         if (l.oneShot || slices <= 1) {
             padOneShot[p] = l.oneShot
             val semi = l.semi
-            importLoop(p, data)
+            importLoopRaw(p, data)
             if (l.oneShot) setPadPitch(p, semi)
             return
         }
@@ -856,6 +864,7 @@ object Engine {
         val s0 = start.coerceIn(0, max(0, l.data.size - 2))
         val e0 = end.coerceIn(s0 + 2, l.data.size)
         val len = e0 - s0
+        pushPadUndo("Slices auf Pads", *IntArray(maxPad.coerceAtMost(PADS)) { it })
         var q = 0
         var count = 0
         for (k in 0 until n) {
@@ -865,7 +874,7 @@ object Engine {
             val b = s0 + ((k + 1).toLong() * len / n).toInt()
             if (b - a < 2) continue
             padOneShot[q] = true
-            importLoop(q, l.data.copyOfRange(a, b))
+            importLoopRaw(q, l.data.copyOfRange(a, b))
             count++
             q++
         }
@@ -1189,6 +1198,10 @@ object Engine {
             }
         }
         masterStart -= shift
+        seqOrigin -= shift
+        countFrom = Long.MIN_VALUE
+        countTo = Long.MIN_VALUE
+        repeatAllUp()
         lastWritten = 0L
 
         val block = max(64, min(burst, t.bufferSizeInFrames / 2))
@@ -1330,6 +1343,15 @@ object Engine {
             val take = takes.get(p) ?: continue
             if (take.src == 1) continue
             if (!take.armed && now - take.downNanos >= MIN_HOLD_NANOS) {
+                // Transport steht? Aufnahme startet ihn – die Eins liegt auf dem Tastendruck
+                if (!seqPlaying && masterLen > 0L && !take.oneShot) startTransportAt(outClock.frameAt(take.downNanos, sampleRate))
+                if (take.overdub) {
+                    // Stand vor dem Overdub merken (für UNDO), bevor etwas hineingeschrieben wird
+                    val l0 = loops.get(p)
+                    if (l0 != null) {
+                        pushEntry(UndoEntry("Overdub Pad ${p + 1}", listOf(snapPad(p, l0.data.copyOf())), null))
+                    }
+                }
                 take.armed = true
                 if (take.overdub) loops.get(p)?.muted = false
             }
@@ -1397,11 +1419,13 @@ object Engine {
             // Erster Loop: Position 0 erklingt im Moment des Loslassens und wird zum Taktgeber
             loop.start = outClock.frameAt(take.upNanos, sampleRate)
         }
+        pushPadUndo("Aufnahme Pad ${p + 1}", p)
         if (take.oneShot) {
             loop.oneShot = true
         } else if (masterLen == 0L) {
             masterStart = loop.start
             masterLen = len.toLong()
+            if (!seqPlaying) startTransportAt(loop.start)
         }
         padSemi[p] = 0
         loops.set(p, loop)
@@ -1496,14 +1520,18 @@ object Engine {
         val bus = FloatArray(block)
         val dryBuf = FloatArray(block)
         val micBuf = FloatArray(block)
+        val instScratch = FloatArray(block)
         micCursor = -1L
         val ts = AudioTimestamp()
         while (running) {
             java.util.Arrays.fill(out, 0f)
             java.util.Arrays.fill(bus, 0f)
             val w = written
+            sceneTick(w, block)
             runSequencer(w, block)
+            runRepeat(w, block)
             val mlen = masterLen
+            val transport = seqPlaying
             for (p in 0 until PADS) {
                 val loop = loops.get(p)
                 if (loop == null) {
@@ -1540,7 +1568,7 @@ object Engine {
                     continue
                 }
                 val rel = w - loop.start
-                val mute = loop.muted
+                val mute = loop.muted || !transport || !audible(p)
                 val fadeTarget = if (mute) 0f else 1f
                 val fadeStep = 1f / (0.006f * sampleRate)
                 var fg = loop.fade
@@ -1595,8 +1623,11 @@ object Engine {
                 levels[p] = max(if (mute) peak * 0.25f else peak, levels[p] * 0.88f)
             }
             renderVoices(out, bus, block, w)
-            acid?.render(if (InstState.acidFx) bus else out, block, w)
-            drum?.render(if (InstState.drumFx) bus else out, block)
+            // SOLO auf einem Pad: Instrumente laufen weiter, sind aber nicht zu hören
+            val soloed = soloAny
+            if (soloed) java.util.Arrays.fill(instScratch, 0f)
+            acid?.render(if (soloed) instScratch else if (InstState.acidFx) bus else out, block, w)
+            drum?.render(if (soloed) instScratch else if (InstState.drumFx) bus else out, block)
             if (songRecording && songDry) {
                 for (i in 0 until block) dryBuf[i] = out[i] + bus[i]
             }
@@ -1641,7 +1672,8 @@ object Engine {
             }
             scopeW = sp
 
-            if (metronome) addClicks(out, w, block)
+            if (metronome && transport && (countTo == Long.MIN_VALUE || w >= countTo)) addClicks(out, w, block)
+            if (countTo != Long.MIN_VALUE) countClicks(out, w, block)
             var off = 0
             while (off < block && running) {
                 val r = try { t.write(out, off, block - off, AudioTrack.WRITE_BLOCKING) } catch (ignored: Exception) { -1 }
@@ -1709,7 +1741,7 @@ object Engine {
         val loop = loops.get(p)
         if (loop != null && loop.oneShot) {
             seqSelected = p
-            if (seqRecording && seqPlaying) {
+            if (recLive()) {
                 val bar = seqBar()
                 val origin = seqStart()
                 val heard = outClock.frameAt(System.nanoTime(), sampleRate)
@@ -1781,6 +1813,8 @@ object Engine {
         }
         val heard = outClock.frameAt(now, sampleRate)
         val m = masterLen
+        // Transport steht: Wave- und Live-Aufnahmen starten ihn sofort (Eins = jetzt)
+        if (!seqPlaying && m > 0L && !t.oneShot && (t.src == 1 || liveBars > 0)) startTransportAt(heard)
         if (liveBars > 0 && m > 0L) {
             var len = m * liveBars
             val maxF = sampleRate.toLong() * MAX_SECONDS
@@ -1857,9 +1891,11 @@ object Engine {
         }
         padSemi[p] = 0
         if (takes.get(p) == null && loops.get(p) == null) {
+            val src = take.bounceSrc
+            pushPadUndo("Wave-Aufnahme Pad ${p + 1}", p, *(if (bounce && !take.oneShot) (src ?: IntArray(0)) else IntArray(0)))
+            if (!take.oneShot && !seqPlaying && masterLen > 0L) seqPlaying = true
             loops.set(p, loop)
             // Bounce: Quellen stummschalten, damit nichts doppelt klingt (in der Raster-Phase, mit Blende)
-            val src = take.bounceSrc
             if (bounce && src != null && src.isNotEmpty() && !take.oneShot) {
                 val muted = ArrayList<Int>()
                 for (q in src) {
@@ -1888,15 +1924,19 @@ object Engine {
 
     /** Schaltet ein Pad zwischen LOOP und ONE SHOT um (auch mit vorhandener Aufnahme). */
     fun setPadMode(p: Int, oneShot: Boolean) {
+        if (loops.get(p) != null) pushPadUndo("Modus Pad ${p + 1}", p)
         padOneShot[p] = oneShot
         val l = loops.get(p) ?: return
         if (oneShot) {
-            l.oneShot = true
-            l.muted = false
-            l.shotStart = Long.MIN_VALUE
+            // neues Objekt statt Umbau – so bleibt der alte Zustand für UNDO unverändert
+            val c = cloneLoop(l, l.data.copyOf())
+            c.oneShot = true
+            c.muted = false
+            c.shotStart = Long.MIN_VALUE
+            loops.set(p, c)
             if (!anyLooping()) releaseMaster()
         } else if (l.oneShot) {
-            importLoop(p, l.data.copyOf())
+            importLoopRaw(p, l.data.copyOf())
         }
     }
 
@@ -1941,6 +1981,14 @@ object Engine {
     /** Setzt eine importierte Datei als Loop ein – synchron zum Takt, falls es schon einen gibt. */
     fun importLoop(p: Int, src: FloatArray) {
         if (src.isEmpty()) return
+        pushPadUndo("Laden Pad ${p + 1}", p)
+        importLoopRaw(p, src)
+        // Ein neuer Loop bei stehendem Transport startet die Wiedergabe (läuft im Raster weiter)
+        if (!padOneShot[p] && !seqPlaying && masterLen > 0L) startTransportAt(heardNow())
+    }
+
+    private fun importLoopRaw(p: Int, src: FloatArray) {
+        if (src.isEmpty()) return
         padSemi[p] = 0
         if (padOneShot[p]) {
             val fade = min(src.size / 4, sampleRate * FADE_MS / 1000)
@@ -1981,8 +2029,9 @@ object Engine {
         loops.set(p, loop)
     }
 
+    /** Stummschalten: Loops verstummen (laufen im Takt weiter), ⚡-Pads werden vom Sequenzer nicht mehr angeschlagen. */
     fun toggleMute(p: Int) {
-        loops.get(p)?.let { if (!it.oneShot) it.muted = !it.muted }
+        loops.get(p)?.let { it.muted = !it.muted }
     }
 
     fun toggleMuteAll() {
@@ -2006,6 +2055,7 @@ object Engine {
     }
 
     fun clear(p: Int) {
+        if (loops.get(p) != null) pushUndo("Pad ${p + 1} löschen", intArrayOf(p), padHasEvents(p))
         takes.set(p, null)
         loops.set(p, null)
         java.util.Arrays.fill(seq[p], 0f)
@@ -2042,6 +2092,7 @@ object Engine {
 
     /** Abspielposition 0..1 dessen, was gerade zu hören ist. */
     fun progress(p: Int): Float {
+        if (!seqPlaying) return 0f
         val loop = loops.get(p) ?: return 0f
         val len = loop.data.size
         if (len == 0) return 0f
@@ -2061,5 +2112,673 @@ object Engine {
         }
         val end = if (take.released) take.upNanos else System.nanoTime()
         return (end - take.downNanos) / 1e9f
+    }
+
+    // ================================================================ Maschine-Workflow
+    // Transport mit Einzähler, Undo/Redo, Mute/Solo, Note Repeat, Szenen, Duplizieren
+
+    // ---------------------------------------------------------------- Transport & Einzähler
+
+    /** Einzähler: ein Takt Klicks vor der Pattern-Aufnahme, wenn der Transport steht. */
+    @Volatile var countIn = true
+    @Volatile private var countFrom = Long.MIN_VALUE
+    @Volatile private var countTo = Long.MIN_VALUE
+    private var countClickStart = Long.MIN_VALUE
+    private var countClickHigh = false
+
+    private fun heardNow(): Long = outClock.frameAt(System.nanoTime(), sampleRate)
+
+    /** Legt die Eins aller Loops und des Sequenzers auf [start] und lässt den Transport laufen. */
+    private fun startTransportAt(start: Long) {
+        seqOrigin = start
+        if (masterLen > 0L) masterStart = start
+        for (p in 0 until PADS) {
+            val l = loops.get(p) ?: continue
+            if (!l.oneShot) l.start = start
+        }
+        sceneBarCount = 0
+        seqPlaying = true
+    }
+
+    /** ▶: alles startet gemeinsam auf der Eins – auf Wunsch nach einem Takt Einzählen. */
+    fun transportPlay(withCountIn: Boolean) {
+        if (seqPlaying) return
+        val bar = seqBar()
+        val start = written + sampleRate / 50 + if (withCountIn) bar else 0L
+        if (withCountIn) {
+            countFrom = start - bar
+            countTo = start
+        } else {
+            countFrom = Long.MIN_VALUE
+            countTo = Long.MIN_VALUE
+        }
+        countClickStart = Long.MIN_VALUE
+        startTransportAt(start)
+    }
+
+    fun transportStop() {
+        seqPlaying = false
+        seqRecording = false
+        countFrom = Long.MIN_VALUE
+        countTo = Long.MIN_VALUE
+        acid?.queue(-1, false, 0, false, false)
+    }
+
+    /** Läuft gerade der Einzähler? Schlag 1..4, sonst 0. */
+    fun countInBeat(): Int {
+        val to = countTo
+        val from = countFrom
+        if (to == Long.MIN_VALUE || from == Long.MIN_VALUE || !seqPlaying) return 0
+        val h = heardNow()
+        if (h >= to) return 0
+        val bar = to - from
+        if (h < from || bar <= 0L) return 1
+        return (((h - from) * 4 / bar).toInt() + 1).coerceIn(1, 4)
+    }
+
+    /** Pattern-Aufnahme nimmt wirklich auf (Transport läuft, Einzähler vorbei). */
+    private fun recLive(): Boolean {
+        if (!seqRecording || !seqPlaying) return false
+        val to = countTo
+        return to == Long.MIN_VALUE || heardNow() >= to - seqBar() / 32
+    }
+
+    private fun countClicks(out: FloatArray, w: Long, block: Int) {
+        val from = countFrom
+        val to = countTo
+        if (to == Long.MIN_VALUE || from == Long.MIN_VALUE) return
+        val bar = to - from
+        if (bar > 0L && w < to) {
+            var n = max(0L, -Math.floorDiv(-(w - from) * 4, bar))
+            while (n < 4) {
+                val f = from + n * bar / 4
+                if (f >= w + block) break
+                if (f >= w) {
+                    countClickStart = f
+                    countClickHigh = n == 0L
+                }
+                n++
+            }
+        }
+        val cs = countClickStart
+        if (cs == Long.MIN_VALUE) return
+        val dur = sampleRate / 25
+        val freq = if (countClickHigh) 1760.0 else 1100.0
+        for (i in 0 until block) {
+            val t = w + i - cs
+            if (t < 0 || t >= dur) continue
+            val env = kotlin.math.exp(-t / (0.012 * sampleRate))
+            out[i] += (kotlin.math.sin(2.0 * Math.PI * freq * t / sampleRate) * env * 0.4).toFloat()
+        }
+    }
+
+    // ---------------------------------------------------------------- Mute / Solo
+
+    val solo = BooleanArray(PADS)
+    @Volatile var soloAny = false
+        private set
+
+    fun toggleSolo(p: Int) {
+        if (p !in 0 until PADS) return
+        solo[p] = !solo[p]
+        soloAny = solo.any { it }
+    }
+
+    fun clearSolo() {
+        java.util.Arrays.fill(solo, false)
+        soloAny = false
+    }
+
+    private fun audible(p: Int): Boolean = !soloAny || solo[p]
+
+    fun isMuted(p: Int): Boolean = loops.get(p)?.muted ?: false
+
+    // ---------------------------------------------------------------- Note Repeat
+
+    @Volatile var repeatOn = false
+    /** Teilungen pro Takt: 1/4, 1/8, 1/16, 1/32, 1/8T, 1/16T. */
+    val REPEAT_DIVS = intArrayOf(4, 8, 16, 32, 12, 24)
+    val REPEAT_NAMES = arrayOf("1/4", "1/8", "1/16", "1/32", "1/8T", "1/16T")
+    @Volatile var repeatIdx = 2
+    private val repPad = BooleanArray(PADS)
+    private val repPadFrom = LongArray(PADS)
+    private val repDrum = IntArray(InstState.DV)
+    private val repDrumFrom = LongArray(InstState.DV)
+    @Volatile private var repOrigin = 0L
+    @Volatile private var repAny = false
+
+    fun repeatName(): String = REPEAT_NAMES[repeatIdx]
+
+    fun cycleRepeat() {
+        repeatIdx = (repeatIdx + 1) % REPEAT_DIVS.size
+    }
+
+    private fun repInterval(): Long = max(1L, seqBar() / REPEAT_DIVS[repeatIdx])
+
+    private fun repUpdateAny() {
+        repAny = repPad.any { it } || repDrum.any { it > 0 }
+    }
+
+    /** Pad wird gehalten: wiederholt im Raster (der erste Schlag kam schon beim Antippen). */
+    fun repeatPadDown(p: Int) {
+        if (p !in 0 until PADS) return
+        if (!repAny && !seqPlaying) repOrigin = written
+        repPadFrom[p] = written + repInterval() / 2
+        repPad[p] = true
+        repAny = true
+    }
+
+    fun repeatPadUp(p: Int) {
+        if (p !in 0 until PADS) return
+        repPad[p] = false
+        repUpdateAny()
+    }
+
+    fun repeatDrumDown(v: Int, accent: Boolean) {
+        if (v !in 0 until InstState.DV) return
+        if (!repAny && !seqPlaying) repOrigin = written
+        repDrumFrom[v] = written + repInterval() / 2
+        repDrum[v] = if (accent) 2 else 1
+        repAny = true
+    }
+
+    fun repeatDrumUp(v: Int) {
+        if (v !in 0 until InstState.DV) return
+        repDrum[v] = 0
+        repUpdateAny()
+    }
+
+    fun repeatAllUp() {
+        java.util.Arrays.fill(repPad, false)
+        java.util.Arrays.fill(repDrum, 0)
+        repAny = false
+    }
+
+    private fun runRepeat(w: Long, block: Int) {
+        if (!repAny) return
+        val bar = seqBar()
+        if (bar <= 0L) return
+        val div = REPEAT_DIVS[repeatIdx]
+        val origin = if (seqPlaying) seqStart() else repOrigin
+        val sw = if (div == 16) swingOffset(bar) else 0L
+        val rec = recLive() && STEPS % div == 0
+        var n = -Math.floorDiv(-(w - origin) * div, bar) - 1
+        while (true) {
+            val base = origin + Math.floorDiv(n * bar, div.toLong())
+            if (base >= w + block) break
+            val f = if (sw > 0L && Math.floorMod(n, 2L) == 1L) base + sw else base
+            if (f >= w && f < w + block) {
+                val step = if (rec) Math.floorMod(n * (STEPS / div), STEPS.toLong()).toInt() else -1
+                for (p in 0 until PADS) {
+                    if (!repPad[p] || f < repPadFrom[p]) continue
+                    val l = loops.get(p) ?: continue
+                    if (!l.oneShot) continue
+                    l.shotGain = 1f
+                    l.shotStart = f
+                    if (step >= 0) seq[p][step] = 1f
+                }
+                val d = drum
+                for (v in 0 until InstState.DV) {
+                    val a = repDrum[v]
+                    if (a == 0 || f < repDrumFrom[v]) continue
+                    d?.trigger(v, (f - w).toInt(), a == 2)
+                    if (step >= 0) InstState.drumSteps[v][step] = a
+                }
+            }
+            n++
+        }
+    }
+
+    // ---------------------------------------------------------------- Undo / Redo
+
+    private class PadSnap(val p: Int, val loop: Loop?, val muted: Boolean, val oneShot: Boolean, val semi: Int)
+
+    private class UndoEntry(val label: String, val pads: List<PadSnap>, val pat: PatternSnap?) {
+        val bytes: Long = pads.sumOf { (it.loop?.data?.size ?: 0).toLong() * 4L }
+    }
+
+    private val undoStack = ArrayList<UndoEntry>()
+    private val redoStack = ArrayList<UndoEntry>()
+    private val undoLock = Any()
+    private const val UNDO_MAX = 40
+    private const val UNDO_BYTES = 140L * 1024L * 1024L
+
+    @Volatile var undoCount = 0
+        private set
+    @Volatile var redoCount = 0
+        private set
+
+    private fun cloneLoop(l: Loop, data: FloatArray): Loop {
+        val c = Loop(data)
+        c.start = l.start
+        c.muted = l.muted
+        c.oneShot = l.oneShot
+        c.semi = l.semi
+        c.rate = l.rate
+        c.slices = l.slices?.copyOf()
+        c.bars = l.bars
+        return c
+    }
+
+    private fun snapPad(p: Int, copy: FloatArray? = null): PadSnap {
+        val l = loops.get(p)
+        val keep = if (copy != null && l != null) cloneLoop(l, copy) else l
+        return PadSnap(p, keep, l?.muted ?: false, padOneShot[p], padSemi[p])
+    }
+
+    private fun snapPattern(): PatternSnap =
+        PatternSnap(Array(PADS) { seq[it].copyOf() }, Array(PADS) { getNotes(it) }, rollBars.copyOf(), InstSnap.capture())
+
+    private fun applyPattern(s: PatternSnap) {
+        for (p in 0 until PADS) {
+            System.arraycopy(s.seq[p], 0, seq[p], 0, min(STEPS, s.seq[p].size))
+            rollBars[p] = s.rollBars[p]
+            setNotes(p, s.notes[p])
+        }
+        s.inst.restore()
+    }
+
+    private fun pushEntry(e: UndoEntry) {
+        synchronized(undoLock) {
+            undoStack.add(e)
+            redoStack.clear()
+            var total = 0L
+            for (u in undoStack) total += u.bytes
+            while (undoStack.size > UNDO_MAX || (total > UNDO_BYTES && undoStack.size > 1)) total -= undoStack.removeAt(0).bytes
+            undoCount = undoStack.size
+            redoCount = 0
+        }
+    }
+
+    fun pushPadUndo(label: String, vararg pads: Int) {
+        pushEntry(UndoEntry(label, pads.filter { it in 0 until PADS }.distinct().map { snapPad(it) }, null))
+    }
+
+    fun pushPatternUndo(label: String) {
+        pushEntry(UndoEntry(label, emptyList(), snapPattern()))
+    }
+
+    private fun pushUndo(label: String, pads: IntArray, pattern: Boolean) {
+        pushEntry(UndoEntry(label, pads.filter { it in 0 until PADS }.map { snapPad(it) }, if (pattern) snapPattern() else null))
+    }
+
+    /** Stellt einen Eintrag her und liefert den bisherigen Zustand derselben Teile (für die Gegenrichtung). */
+    private fun applyEntry(e: UndoEntry): UndoEntry {
+        val back = UndoEntry(e.label, e.pads.map { snapPad(it.p) }, if (e.pat != null) snapPattern() else null)
+        for (s in e.pads) {
+            takes.set(s.p, null)
+            val l = s.loop
+            val live = loops.get(s.p)
+            padOneShot[s.p] = s.oneShot
+            padSemi[s.p] = s.semi
+            if (l != null) {
+                l.muted = s.muted
+                l.shotStart = Long.MIN_VALUE
+                if (l.oneShot) {
+                    l.semi = s.semi
+                    l.rate = 2.0.pow(s.semi / 12.0)
+                } else {
+                    if (masterLen <= 0L) {
+                        masterLen = l.data.size.toLong()
+                        masterStart = written
+                    }
+                    // zurückgeholte Loops wieder auf die Eins des Rasters legen
+                    if (l !== live) l.start = masterStart
+                }
+            }
+            loops.set(s.p, l)
+        }
+        if (e.pads.isNotEmpty() && !anyLooping()) releaseMaster()
+        e.pat?.let { applyPattern(it) }
+        return back
+    }
+
+    /** Macht den letzten Schritt rückgängig. Liefert seine Beschreibung oder null. */
+    fun undo(): String? {
+        val e = synchronized(undoLock) { if (undoStack.isEmpty()) null else undoStack.removeAt(undoStack.size - 1) } ?: return null
+        val back = applyEntry(e)
+        synchronized(undoLock) {
+            redoStack.add(back)
+            undoCount = undoStack.size
+            redoCount = redoStack.size
+        }
+        return e.label
+    }
+
+    fun redo(): String? {
+        val e = synchronized(undoLock) { if (redoStack.isEmpty()) null else redoStack.removeAt(redoStack.size - 1) } ?: return null
+        val back = applyEntry(e)
+        synchronized(undoLock) {
+            undoStack.add(back)
+            undoCount = undoStack.size
+            redoCount = redoStack.size
+        }
+        return e.label
+    }
+
+    fun clearUndo() {
+        synchronized(undoLock) {
+            undoStack.clear()
+            redoStack.clear()
+            undoCount = 0
+            redoCount = 0
+        }
+    }
+
+    /** Pattern-Schritte gehören zur Szene – beim Szenenwechsel verfallen sie im Undo. */
+    private fun dropPatternUndo() {
+        synchronized(undoLock) {
+            undoStack.removeAll { it.pat != null }
+            redoStack.removeAll { it.pat != null }
+            undoCount = undoStack.size
+            redoCount = redoStack.size
+        }
+    }
+
+    // ---------------------------------------------------------------- Pattern-Werkzeuge (ERASE / DUPLICATE)
+
+    fun padHasEvents(p: Int): Boolean = p in 0 until PADS && (seq[p].any { it > 0f } || noteCount(p) > 0)
+
+    /** ERASE + Pad: löscht nur die Pattern-Ereignisse (Schritte und Matrix-Noten) des Pads. */
+    fun erasePadEvents(p: Int): Boolean {
+        if (!padHasEvents(p)) return false
+        pushPatternUndo("Pattern Pad ${p + 1} löschen")
+        java.util.Arrays.fill(seq[p], 0f)
+        clearNotes(p)
+        return true
+    }
+
+    /** DUPLICATE: kopiert Sample, Modus, Tonhöhe, Schritte und Noten von [src] auf [dst]. */
+    fun duplicatePad(src: Int, dst: Int): Boolean {
+        if (src == dst || src !in 0 until PADS || dst !in 0 until PADS) return false
+        val l = loops.get(src) ?: return false
+        pushUndo("Pad ${src + 1} → Pad ${dst + 1}", intArrayOf(dst), true)
+        val c = cloneLoop(l, l.data.copyOf())
+        c.muted = false
+        c.shotStart = Long.MIN_VALUE
+        takes.set(dst, null)
+        padOneShot[dst] = l.oneShot
+        padSemi[dst] = padSemi[src]
+        System.arraycopy(seq[src], 0, seq[dst], 0, STEPS)
+        rollBars[dst] = rollBars[src]
+        setNotes(dst, getNotes(src))
+        padFx[dst] = padFx[src]
+        padSource[dst] = padSource[src]
+        loops.set(dst, c)
+        return true
+    }
+
+    private fun clearPatternLive() {
+        for (row in seq) java.util.Arrays.fill(row, 0f)
+        for (p in 0 until PADS) clearNotes(p)
+        InstState.acidClear()
+        InstState.drumClear()
+    }
+
+    // ---------------------------------------------------------------- Szenen (wie Maschine: Pattern-Kombinationen, im Takt umschalten)
+
+    const val SCENES = 12
+    val scenes = arrayOfNulls<Scene>(SCENES)
+    @Volatile var curScene = 0
+        private set
+    @Volatile var queuedScene = -1
+        private set
+    /** Kette (Song-Modus): Szenen laufen nacheinander, jede so viele Takte wie eingestellt. */
+    @Volatile var sceneChain = false
+    @Volatile private var sceneBarCount = 0
+
+    private fun captureScene(bars: Int): Scene =
+        Scene(snapPattern(), BooleanArray(PADS) { loops.get(it)?.muted ?: false }, bars)
+
+    private fun applyScene(s: Scene) {
+        applyPattern(s.pat)
+        for (p in 0 until PADS) loops.get(p)?.muted = s.mutes[p]
+    }
+
+    /** Sichert den aktuellen Stand in die laufende Szene. */
+    fun storeCurrentScene() {
+        scenes[curScene] = captureScene(scenes[curScene]?.bars ?: 4)
+    }
+
+    fun sceneExists(i: Int): Boolean = i == curScene || (i in 0 until SCENES && scenes[i] != null)
+
+    fun sceneCount(): Int = (0 until SCENES).count { sceneExists(it) }
+
+    fun sceneBars(i: Int): Int = scenes.getOrNull(i)?.bars ?: 4
+
+    fun setSceneBars(i: Int, bars: Int) {
+        if (i !in 0 until SCENES) return
+        if (scenes[i] == null && i == curScene) storeCurrentScene()
+        scenes[i]?.bars = bars.coerceIn(1, 64)
+    }
+
+    /** Takt in der laufenden Szene (für die Ketten-Anzeige). */
+    fun sceneBarPos(): Int = sceneBarCount
+
+    private fun switchScene(i: Int) {
+        storeCurrentScene()
+        val s = scenes[i] ?: return
+        applyScene(s)
+        curScene = i
+        queuedScene = -1
+        sceneBarCount = 0
+        dropPatternUndo()
+    }
+
+    /** Bit 0: wartet auf den nächsten Takt, Bit 1: neu angelegt (Kopie der aktuellen Szene). */
+    fun launchScene(i: Int): Int {
+        if (i !in 0 until SCENES) return 0
+        var created = 0
+        if (scenes[i] == null && i != curScene) {
+            storeCurrentScene()
+            scenes[i] = scenes[curScene]!!.copy()
+            created = 2
+        }
+        if (i == curScene) {
+            queuedScene = -1
+            return created
+        }
+        if (!seqPlaying) {
+            switchScene(i)
+            return created
+        }
+        queuedScene = i
+        return created or 1
+    }
+
+    /** ERASE + Szene: andere Szene löschen bzw. die laufende leeren. */
+    fun deleteScene(i: Int): Boolean {
+        if (i !in 0 until SCENES) return false
+        if (i == curScene) {
+            pushPatternUndo("Szene ${i + 1} leeren")
+            clearPatternLive()
+            return true
+        }
+        if (scenes[i] == null) return false
+        scenes[i] = null
+        if (queuedScene == i) queuedScene = -1
+        return true
+    }
+
+    /** DUPLICATE + Szene: Szene [a] nach [b] kopieren. */
+    fun copyScene(a: Int, b: Int): Boolean {
+        if (a !in 0 until SCENES || b !in 0 until SCENES || a == b) return false
+        if (a == curScene) storeCurrentScene()
+        val s = scenes[a] ?: return false
+        scenes[b] = s.copy()
+        if (b == curScene) {
+            pushPatternUndo("Szene kopieren")
+            applyScene(scenes[b]!!)
+        }
+        return true
+    }
+
+    private fun resetScenes() {
+        java.util.Arrays.fill(scenes, null)
+        curScene = 0
+        queuedScene = -1
+        sceneChain = false
+        sceneBarCount = 0
+    }
+
+    private fun nextScene(): Int {
+        for (k in 1..SCENES) {
+            val j = (curScene + k) % SCENES
+            if (scenes[j] != null) return j
+        }
+        return curScene
+    }
+
+    /** Pro Mischer-Block: auf jeder Eins vorgemerkte Szene starten bzw. die Kette weiterschalten. */
+    private fun sceneTick(w: Long, block: Int) {
+        if (!seqPlaying) return
+        val bar = seqBar()
+        if (bar <= 0L) return
+        val origin = seqStart()
+        val k = -Math.floorDiv(-(w - origin), bar)
+        if (k <= 0L) return
+        val f = origin + k * bar
+        if (f >= w + block) return
+        sceneBarCount++
+        if (queuedScene < 0 && sceneChain) {
+            val s = scenes[curScene]
+            if (s != null && sceneBarCount >= s.bars) {
+                val nx = nextScene()
+                if (nx != curScene) queuedScene = nx else sceneBarCount = 0
+            }
+        }
+        val q = queuedScene
+        if (q >= 0) switchScene(q)
+    }
+
+    /** Für Projekte. */
+    fun scenesToJson(): org.json.JSONObject {
+        storeCurrentScene()
+        val j = org.json.JSONObject()
+        j.put("cur", curScene)
+        j.put("chain", sceneChain)
+        val a = org.json.JSONArray()
+        for (s in scenes) a.put(s?.toJson() ?: org.json.JSONObject.NULL)
+        j.put("list", a)
+        return j
+    }
+
+    fun scenesFromJson(j: org.json.JSONObject?) {
+        resetScenes()
+        if (j == null) return
+        val a = j.optJSONArray("list") ?: return
+        for (i in 0 until min(SCENES, a.length())) {
+            val o = a.optJSONObject(i) ?: continue
+            scenes[i] = try { Scene.fromJson(o) } catch (e: Exception) { null }
+        }
+        curScene = j.optInt("cur", 0).coerceIn(0, SCENES - 1)
+        sceneChain = j.optBoolean("chain", false)
+    }
+}
+
+/** Schritte der Instrumente (ACID/DRUM) als Kopie – für Undo und Szenen. */
+class InstSnap(
+    val semi: IntArray, val gate: BooleanArray, val acc: BooleanArray, val slide: BooleanArray, val drums: Array<IntArray>
+) {
+    fun restore() {
+        val st = InstState
+        System.arraycopy(semi, 0, st.acidSemi, 0, min(semi.size, st.acidSemi.size))
+        System.arraycopy(gate, 0, st.acidGate, 0, min(gate.size, st.acidGate.size))
+        System.arraycopy(acc, 0, st.acidAcc, 0, min(acc.size, st.acidAcc.size))
+        System.arraycopy(slide, 0, st.acidSlide, 0, min(slide.size, st.acidSlide.size))
+        for (v in 0 until min(drums.size, InstState.DV)) System.arraycopy(drums[v], 0, st.drumSteps[v], 0, min(drums[v].size, InstState.STEPS))
+    }
+
+    fun copy() = InstSnap(semi.copyOf(), gate.copyOf(), acc.copyOf(), slide.copyOf(), Array(drums.size) { drums[it].copyOf() })
+
+    fun toJson(): org.json.JSONObject {
+        val j = org.json.JSONObject()
+        j.put("semi", org.json.JSONArray().apply { semi.forEach { put(it) } })
+        j.put("gate", org.json.JSONArray().apply { gate.forEach { put(it) } })
+        j.put("acc", org.json.JSONArray().apply { acc.forEach { put(it) } })
+        j.put("slide", org.json.JSONArray().apply { slide.forEach { put(it) } })
+        j.put("drums", org.json.JSONArray().apply { drums.forEach { r -> put(org.json.JSONArray().apply { r.forEach { put(it) } }) } })
+        return j
+    }
+
+    companion object {
+        fun capture(): InstSnap {
+            val st = InstState
+            return InstSnap(
+                st.acidSemi.copyOf(), st.acidGate.copyOf(), st.acidAcc.copyOf(), st.acidSlide.copyOf(),
+                Array(InstState.DV) { st.drumSteps[it].copyOf() }
+            )
+        }
+
+        fun fromJson(j: org.json.JSONObject): InstSnap {
+            val n = InstState.STEPS
+            fun ia(k: String) = IntArray(n).also { a -> j.optJSONArray(k)?.let { for (i in 0 until min(n, it.length())) a[i] = it.optInt(i) } }
+            fun ba(k: String) = BooleanArray(n).also { a -> j.optJSONArray(k)?.let { for (i in 0 until min(n, it.length())) a[i] = it.optBoolean(i) } }
+            val dr = Array(InstState.DV) { IntArray(n) }
+            j.optJSONArray("drums")?.let { d ->
+                for (v in 0 until min(InstState.DV, d.length())) d.optJSONArray(v)?.let { r -> for (i in 0 until min(n, r.length())) dr[v][i] = r.optInt(i) }
+            }
+            return InstSnap(ia("semi"), ba("gate"), ba("acc"), ba("slide"), dr)
+        }
+    }
+}
+
+/** Ein komplettes Pattern: Sequenzer-Schritte, Matrix-Noten, Matrix-Längen und Instrument-Schritte. */
+class PatternSnap(val seq: Array<FloatArray>, val notes: Array<List<FloatArray>>, val rollBars: IntArray, val inst: InstSnap) {
+    fun copy() = PatternSnap(
+        Array(seq.size) { seq[it].copyOf() }, Array(notes.size) { p -> notes[p].map { it.copyOf() } },
+        rollBars.copyOf(), inst.copy()
+    )
+
+    fun toJson(): org.json.JSONObject {
+        val j = org.json.JSONObject()
+        j.put("seq", org.json.JSONArray().apply { seq.forEach { r -> put(org.json.JSONArray().apply { r.forEach { put(it.toDouble()) } }) } })
+        j.put("notes", org.json.JSONArray().apply {
+            notes.forEach { list -> put(org.json.JSONArray().apply { list.forEach { ev -> put(org.json.JSONArray().apply { ev.forEach { put(it.toDouble()) } }) } }) }
+        })
+        j.put("rollBars", org.json.JSONArray().apply { rollBars.forEach { put(it) } })
+        j.put("inst", inst.toJson())
+        return j
+    }
+
+    companion object {
+        fun fromJson(j: org.json.JSONObject): PatternSnap {
+            val pads = Engine.PADS
+            val seq = Array(pads) { FloatArray(Engine.STEPS) }
+            j.optJSONArray("seq")?.let { a ->
+                for (p in 0 until min(pads, a.length())) a.optJSONArray(p)?.let { r -> for (k in 0 until min(Engine.STEPS, r.length())) seq[p][k] = r.optDouble(k).toFloat() }
+            }
+            val notes = Array<List<FloatArray>>(pads) { emptyList() }
+            j.optJSONArray("notes")?.let { a ->
+                for (p in 0 until min(pads, a.length())) {
+                    val l = a.optJSONArray(p) ?: continue
+                    notes[p] = (0 until l.length()).mapNotNull { q -> l.optJSONArray(q)?.let { e -> FloatArray(e.length()) { e.optDouble(it).toFloat() } } }
+                }
+            }
+            val rb = IntArray(pads) { 1 }
+            j.optJSONArray("rollBars")?.let { a -> for (p in 0 until min(pads, a.length())) rb[p] = a.optInt(p, 1) }
+            val inst = j.optJSONObject("inst")?.let { InstSnap.fromJson(it) } ?: InstSnap.capture()
+            return PatternSnap(seq, notes, rb, inst)
+        }
+    }
+}
+
+/** Eine Szene: Pattern + welche Pads stumm sind + Länge in Takten (für die Kette). */
+class Scene(val pat: PatternSnap, val mutes: BooleanArray, @Volatile var bars: Int = 4) {
+    fun copy() = Scene(pat.copy(), mutes.copyOf(), bars)
+
+    fun toJson(): org.json.JSONObject {
+        val j = pat.toJson()
+        j.put("mutes", org.json.JSONArray().apply { mutes.forEach { put(it) } })
+        j.put("bars", bars)
+        return j
+    }
+
+    companion object {
+        fun fromJson(j: org.json.JSONObject): Scene {
+            val m = BooleanArray(Engine.PADS)
+            j.optJSONArray("mutes")?.let { a -> for (p in 0 until min(Engine.PADS, a.length())) m[p] = a.optBoolean(p) }
+            return Scene(PatternSnap.fromJson(j), m, j.optInt("bars", 4))
+        }
     }
 }
