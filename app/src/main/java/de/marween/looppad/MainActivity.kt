@@ -118,7 +118,40 @@ class MainActivity : Activity() {
             animate().alpha(1f).setDuration(500L).start()
         }
         window.decorView.setBackgroundColor(bg)
-        setContentView(img)
+        val version = try {
+            packageManager.getPackageInfo(packageName, 0).versionName ?: ""
+        } catch (e: Exception) {
+            ""
+        }
+        val d = resources.displayMetrics.density
+        val credits = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER_HORIZONTAL
+            addView(TextView(this@MainActivity).apply {
+                text = "Version $version"
+                textSize = 12f
+                setTextColor(Color.WHITE)
+                gravity = Gravity.CENTER
+                typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.NORMAL)
+            })
+            addView(TextView(this@MainActivity).apply {
+                text = "Made with Claude ©marween"
+                textSize = 11f
+                setTextColor(Color.argb(200, 255, 255, 255))
+                gravity = Gravity.CENTER
+                setPadding(0, (4 * d).toInt(), 0, 0)
+            })
+            alpha = 0f
+            animate().alpha(1f).setStartDelay(300L).setDuration(600L).start()
+        }
+        val root = android.widget.FrameLayout(this).apply {
+            setBackgroundColor(bg)
+            addView(img, android.widget.FrameLayout.LayoutParams(-1, -1))
+            addView(credits, android.widget.FrameLayout.LayoutParams(-2, -2, Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL).apply {
+                bottomMargin = (48 * d).toInt()
+            })
+        }
+        setContentView(root)
         img.postDelayed({
             if (isFinishing || isDestroyed) return@postDelayed
             pads.alpha = 0f
