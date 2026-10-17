@@ -426,7 +426,12 @@ object Engine {
     // ---------------------------------------------------------------- Effekt-Ziel
 
     /** -1 = Effekt auf den ganzen Song, sonst nur auf dieses Pad. */
-    @Volatile var fxTarget = -1
+    /** Effekt je Pad an/aus (true = Pad läuft durch den Effekt). */
+    val padFx = BooleanArray(PADS) { true }
+
+    fun setAllFx(on: Boolean) {
+        for (p in 0 until PADS) padFx[p] = on
+    }
 
     // ---------------------------------------------------------------- Tastatur (Stimmen)
 
@@ -491,14 +496,14 @@ object Engine {
     /** Vorhören eines Ausschnitts (Wave-Editor). */
     fun preview(data: FloatArray): Int = startVoice(data, -1, 1.0, false)
 
-    private fun renderVoices(out: FloatArray, bus: FloatArray, tgt: Int, block: Int, w: Long) {
+    private fun renderVoices(out: FloatArray, bus: FloatArray, block: Int, w: Long) {
         synchronized(voiceLock) {
             val relStep = 1f / (0.12f * sampleRate)
             for (v in voices) {
                 if (!v.active) continue
                 val d = v.data
                 val len = d.size
-                val dst = if (v.pad >= 0 && v.pad == tgt) bus else out
+                val dst = if (v.pad >= 0 && padFx[v.pad]) bus else out
                 var peak = 0f
                 for (i in 0 until block) {
                     if (v.wait > 0) {
@@ -736,7 +741,11 @@ object Engine {
     private val songChunks = ArrayList<ShortArray>()
     private var songFrames = 0L
 
-    fun songStart() {
+    /** Song-Aufnahme ohne Effekte (trocken). */
+    @Volatile var songDry = false
+
+    fun songStart(dry: Boolean = false) {
+        songDry = dry
         synchronized(songLock) {
             songChunks.clear()
             songFrames = 0L
@@ -1234,6 +1243,7 @@ object Engine {
         Process.setThreadPriority(Process.THREAD_PRIORITY_URGENT_AUDIO)
         val out = FloatArray(block)
         val bus = FloatArray(block)
+        val dryBuf = FloatArray(block)
         val micBuf = FloatArray(block)
         micCursor = -1L
         val ts = AudioTimestamp()
@@ -1242,7 +1252,6 @@ object Engine {
             java.util.Arrays.fill(bus, 0f)
             val w = written
             runSequencer(w, block)
-            val tgt = fxTarget
             val mlen = masterLen
             for (p in 0 until PADS) {
                 val loop = loops.get(p)
@@ -1250,7 +1259,7 @@ object Engine {
                     levels[p] *= 0.9f
                     continue
                 }
-                val dst = if (p == tgt) bus else out
+                val dst = if (padFx[p]) bus else out
                 val d = loop.data
                 val len = d.size
                 if (loop.oneShot) {
@@ -1334,16 +1343,19 @@ object Engine {
                 loop.fade = fg
                 levels[p] = max(if (mute) peak * 0.25f else peak, levels[p] * 0.88f)
             }
-            renderVoices(out, bus, tgt, block, w)
+            renderVoices(out, bus, block, w)
+            if (songRecording && songDry) {
+                for (i in 0 until block) dryBuf[i] = out[i] + bus[i]
+            }
             motionTick(w, block)
             val f = fx
             if (f != null) {
                 f.process(
-                    if (tgt >= 0) bus else out, block, w, fxType, effX, effY, effTouch,
+                    bus, block, w, fxType, effX, effY, effTouch,
                     knobs[0], knobs[1], knobs[2], masterLen, masterStart, fillMic(micBuf, block)
                 )
             }
-            if (tgt >= 0) for (i in 0 until block) out[i] += bus[i]
+            for (i in 0 until block) out[i] += bus[i]
             writeOutRing(out, w, block)
             processResampleTakes(w, block)
             val vol = knobs[3] * 1.25f
@@ -1355,7 +1367,14 @@ object Engine {
                 if (a > mpeak) mpeak = a
             }
             outputLevel = max(mpeak, outputLevel * 0.9f)
-            if (songRecording) songAppend(out, block)
+            if (songRecording) {
+                if (songDry) {
+                    for (i in 0 until block) dryBuf[i] = softClip(dryBuf[i] * vol)
+                    songAppend(dryBuf, block)
+                } else {
+                    songAppend(out, block)
+                }
+            }
             var sp = scopeW
             for (i in 0 until block) {
                 scope[sp and (SCOPE - 1)] = out[i]

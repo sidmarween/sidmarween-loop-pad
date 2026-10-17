@@ -188,12 +188,17 @@ class MainActivity : Activity() {
             labels.add("🎹 Tastatur")
             actions.add { pads.openKeyboard(p) }
         }
-        if (Engine.fxTarget == p) {
-            labels.add("🎛 Effekt wieder auf den ganzen Song")
-            actions.add { Engine.fxTarget = -1; toast("Effekt wirkt auf den ganzen Song") }
-        } else {
-            labels.add("🎛 Effekt nur auf dieses Pad")
-            actions.add { Engine.fxTarget = p; toast("Effekt wirkt nur auf Pad ${p + 1}") }
+        val fxOn = Engine.padFx[p]
+        labels.add(if (fxOn) "🎛 Effekt: AN  →  Pad ohne Effekt" else "🎛 Effekt: AUS  →  Pad durch den Effekt")
+        actions.add {
+            Engine.padFx[p] = !fxOn
+            toast(if (fxOn) "Pad ${p + 1}: ohne Effekt" else "Pad ${p + 1}: mit Effekt")
+        }
+        labels.add("🎛 Effekt nur auf dieses Pad")
+        actions.add {
+            Engine.setAllFx(false)
+            Engine.padFx[p] = true
+            toast("Effekt wirkt nur auf Pad ${p + 1}")
         }
         if (has) {
             labels.add("Als WAV exportieren")
@@ -260,13 +265,19 @@ class MainActivity : Activity() {
             .setTitle("Aufnehmen")
             .setItems(arrayOf(
                 "● Pattern aufnehmen  (16 Schritte, ⚡-Pads)",
-                "● Song aufnehmen  (alles, was du hörst)"
+                "● Song aufnehmen – mit Effekten (wie du es hörst)",
+                "● Song aufnehmen – ohne Effekte (trocken)"
             )) { _, which ->
-                if (which == 0) {
-                    Engine.seqToggleRec()
-                } else {
-                    Engine.songStart()
-                    toast("Song-Aufnahme läuft – REC oder STOP beendet sie")
+                when (which) {
+                    0 -> Engine.seqToggleRec()
+                    1 -> {
+                        Engine.songStart(false)
+                        toast("Song-Aufnahme mit Effekten (${fxRoutingText()}) – REC oder STOP beendet sie")
+                    }
+                    else -> {
+                        Engine.songStart(true)
+                        toast("Song-Aufnahme ohne Effekte – REC oder STOP beendet sie")
+                    }
                 }
             }
             .setNegativeButton("Abbrechen", null)
@@ -615,28 +626,37 @@ class MainActivity : Activity() {
 
     private fun showFxList() {
         AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
-            .setTitle(if (Engine.fxTarget >= 0) "Effekt wählen · nur Pad ${Engine.fxTarget + 1}" else "Effekt wählen · ganzer Song")
+            .setTitle("Effekt wählen · ${fxRoutingText()}")
             .setSingleChoiceItems(Fx.NAMES, Engine.fxType) { d, which ->
                 Engine.selectFx(which)
                 pads.fxChosen()
                 d.dismiss()
             }
-            .setNeutralButton(if (Engine.fxTarget >= 0) "Auf ganzen Song" else "Nur auf ein Pad …") { _, _ ->
-                if (Engine.fxTarget >= 0) {
-                    Engine.fxTarget = -1
-                    toast("Effekt wirkt auf den ganzen Song")
-                } else {
-                    val names = Array(PadView.VISIBLE_PADS) { "Pad ${it + 1}" + if (Engine.hasLoop(it)) "" else " (leer)" }
-                    AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
-                        .setTitle("Effekt nur auf …")
-                        .setItems(names) { _, p ->
-                            Engine.fxTarget = p
-                            toast("Effekt wirkt nur auf Pad ${p + 1}")
-                        }
-                        .show()
-                }
-            }
+            .setNeutralButton("Pads wählen …") { _, _ -> showFxRouting() }
             .setNegativeButton("Abbrechen", null)
+            .show()
+    }
+
+    private fun fxRoutingText(): String {
+        val on = (0 until PadView.VISIBLE_PADS).count { Engine.padFx[it] }
+        return when (on) {
+            PadView.VISIBLE_PADS -> "alle Pads"
+            0 -> "kein Pad"
+            else -> "$on Pads"
+        }
+    }
+
+    /** Auswahl, welche Pads durch den Effekt laufen. */
+    private fun showFxRouting() {
+        val n = PadView.VISIBLE_PADS
+        val names = Array(n) { "Pad ${it + 1}" + if (Engine.hasLoop(it)) "" else " (leer)" }
+        val checked = BooleanArray(n) { Engine.padFx[it] }
+        AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
+            .setTitle("Effekt wirkt auf …")
+            .setMultiChoiceItems(names, checked) { _, i, c -> Engine.padFx[i] = c }
+            .setPositiveButton("Fertig", null)
+            .setNeutralButton("Alle") { _, _ -> Engine.setAllFx(true); toast("Effekt wirkt auf alle Pads") }
+            .setNegativeButton("Keins") { _, _ -> Engine.setAllFx(false); toast("Effekt aus für alle Pads") }
             .show()
     }
 

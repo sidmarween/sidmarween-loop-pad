@@ -27,9 +27,11 @@ Das **Display** in der Kopfzeile zeigt den aktuellen Effekt, die X/Y-Werte und d
 
 Im Display rechts auf **BPM / TEMPO ▸** tippen: Tempo 60–200 BPM (Regler, −/+, **Tap-Tempo**), **Metronom** an/aus, oder **Automatisch** (erster Loop bestimmt das Tempo). Ein festes Tempo gilt für neue Aufnahmen (werden auf Takte gerundet), Sequenzer, Delay/Stutter und Metronom.
 
-## Effekt-Ziel
+## Effekt pro Pad
 
-Der Effekt wirkt auf den **ganzen Song** oder **nur auf ein Pad**: im •••-Menü des Pads „Effekt nur auf dieses Pad“ oder in der Effektliste (Display links antippen) „Nur auf ein Pad …“. Das Display zeigt das Ziel (→ALLE / →P3).
+Jedes Pad hat einen eigenen Effekt-Schalter: im •••-Menü „Effekt: AN/AUS“ (oder „Effekt nur auf dieses Pad“). In der Effektliste (Display links antippen) unter „Pads wählen …“ alle auf einmal ankreuzen. Pads ohne Effekt zeigen unten rechts ein durchgestrichenes **FX**; das Display zeigt das Ziel (→ALLE, →P3, →5P, →AUS). Auch 🎹-Tastatur und Sequenzer-Noten folgen der Einstellung ihres Pads.
+
+**Song-Aufnahme**: beim REC wählen – **mit Effekten** (genau wie du es hörst, je Pad wie eingestellt) oder **ohne Effekte** (trocken).
 
 ## 🎹 Tastatur
 

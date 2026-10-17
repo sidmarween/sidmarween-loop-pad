@@ -532,6 +532,7 @@ class PadView(context: Context) : View(context) {
             drawMore(canvas, i)
             drawKeyButton(canvas, i)
             drawInputBadge(canvas, i)
+            drawFxBadge(canvas, i)
         }
         drawSequencer(canvas)
         drawShocks(canvas, dt)
@@ -1165,6 +1166,34 @@ class PadView(context: Context) : View(context) {
         textPaint.textSize = dp(9f)
         textPaint.color = alpha(BRAND_ORANGE, 0.8f)
         canvas.drawText("© marween", w / 2f, height - insetBottom - dp(2f), textPaint)
+    }
+
+    /** Zeigt am Pad, ob es durch den Effekt läuft (FX) oder trocken bleibt (durchgestrichen). */
+    private fun drawFxBadge(canvas: Canvas, i: Int) {
+        val r = padRects[i]
+        if (r.width() <= 0f) return
+        val on = Engine.padFx[i]
+        val all = (0 until VISIBLE_PADS).all { Engine.padFx[it] }
+        if (on && all) return
+        val cols = overlayColors()
+        val h = min(dp(16f), r.width() * 0.18f)
+        val w = h * 1.7f
+        tmpRect.set(r.right - w - dp(5f), r.bottom - h - dp(5f), r.right - dp(5f), r.bottom - dp(5f))
+        val rr = h / 2f
+        fillPaint.shader = null
+        fillPaint.color = if (on) cols[2] else alpha(cols[0], 0.8f)
+        canvas.drawRoundRect(tmpRect, rr, rr, fillPaint)
+        strokePaint.strokeWidth = dp(1f)
+        strokePaint.color = if (on) Color.WHITE else alpha(cols[1], 0.5f)
+        canvas.drawRoundRect(tmpRect, rr, rr, strokePaint)
+        textPaint.textSize = h * 0.62f
+        textPaint.color = if (on) Color.WHITE else alpha(cols[1], 0.7f)
+        canvas.drawText("FX", tmpRect.centerX(), tmpRect.centerY() + h * 0.22f, textPaint)
+        if (!on) {
+            strokePaint.strokeWidth = dp(1.4f)
+            strokePaint.color = alpha(cols[1], 0.8f)
+            canvas.drawLine(tmpRect.left + dp(3f), tmpRect.bottom - dp(3f), tmpRect.right - dp(3f), tmpRect.top + dp(3f), strokePaint)
+        }
     }
 
     /** Kleines Eingangs-Symbol oben links am Pad (🎙 Mikro / 〰 Wave). */
@@ -3390,7 +3419,17 @@ class PadView(context: Context) : View(context) {
 
     // ================================================================ Effekt-Ziel
 
-    private fun fxTargetLabel(): String = if (Engine.fxTarget >= 0) "→P${Engine.fxTarget + 1}" else "→ALLE"
+    private fun fxTargetLabel(): String {
+        var on = 0
+        var last = -1
+        for (p in 0 until VISIBLE_PADS) if (Engine.padFx[p]) { on++; last = p }
+        return when (on) {
+            VISIBLE_PADS -> "→ALLE"
+            0 -> "→AUS"
+            1 -> "→P${last + 1}"
+            else -> "→${on}P"
+        }
+    }
 
     // ================================================================ Tastatur
 

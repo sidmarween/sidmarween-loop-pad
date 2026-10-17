@@ -43,7 +43,6 @@ object Projects {
         j.put("masterLen", Engine.masterFrames())
         j.put("bpm", Engine.fixedBpm.toDouble())
         j.put("fxType", Engine.fxType)
-        j.put("fxTarget", Engine.fxTarget)
         val kn = JSONArray()
         for (v in Engine.knobs) kn.put(v.toDouble())
         j.put("knobs", kn)
@@ -58,6 +57,7 @@ object Projects {
             o.put("bars", sv.bars.toDouble())
             o.put("semi", sv.semi)
             o.put("src", Engine.padSource[p])
+            o.put("fx", Engine.padFx[p])
             val na = JSONArray()
             for (ev in Engine.getNotes(p)) {
                 val e = JSONArray()
@@ -132,7 +132,10 @@ object Projects {
         val kn = j.optJSONArray("knobs")
         if (kn != null) for (k in 0 until min(4, kn.length())) Engine.knobs[k] = kn.getDouble(k).toFloat()
         Engine.metronome = j.optBoolean("metronome", false)
-        Engine.fxTarget = j.optInt("fxTarget", -1)
+        val oldTarget = j.optInt("fxTarget", -1)
+        for (p in 0 until Engine.PADS) {
+            Engine.padFx[p] = if (p < pa.length()) pa.getJSONObject(p).optBoolean("fx", oldTarget < 0 || oldTarget == p) else true
+        }
     }
 
     fun delete(dir: File) {
