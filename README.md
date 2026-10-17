@@ -27,6 +27,10 @@ Das **Display** in der Kopfzeile zeigt den aktuellen Effekt, die X/Y-Werte und d
 
 Im Display rechts auf **BPM / TEMPO ▸** tippen: Tempo 60–200 BPM (Regler, −/+, **Tap-Tempo**), **Metronom** an/aus, oder **Automatisch** (erster Loop bestimmt das Tempo). Ein festes Tempo gilt für neue Aufnahmen (werden auf Takte gerundet), Sequenzer, Delay/Stutter und Metronom.
 
+## Effekt-Kette (bis zu 3 Effekte)
+
+Oben links auf der XY-Fläche: drei Plätze **1 › 2 › 3**. Antippen wählt den Platz – Effekt-Knopf, Effektliste und die Regler MIX/P1/P2 gelten dann für diesen Platz (jeder Platz merkt sich seine Werte). Den gewählten Platz nochmal antippen schaltet ihn an/aus. Die Effekte laufen nacheinander (z. B. FILTER › DELAY › HALL), die XY-Fläche steuert alle aktiven gleichzeitig. Die Kette wird im Projekt gespeichert.
+
 ## Effekt pro Pad
 
 Jedes Pad hat einen eigenen Effekt-Schalter: im •••-Menü „Effekt: AN/AUS“ (oder „Effekt nur auf dieses Pad“). In der Effektliste (Display links antippen) unter „Pads wählen …“ alle auf einmal ankreuzen. Pads ohne Effekt zeigen unten rechts ein durchgestrichenes **FX**; das Display zeigt das Ziel (→ALLE, →P3, →5P, →AUS). Auch 🎹-Tastatur und Sequenzer-Noten folgen der Einstellung ihres Pads.

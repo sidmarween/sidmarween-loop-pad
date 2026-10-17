@@ -881,20 +881,57 @@ object Engine {
     private var lastWritten = 0L
 
     // Effekte: Typ, XY-Position der Touch-Fläche, Regler MIX / P1 / P2 / VOL
-    private var fx: Fx? = null
+    private var fxs: Array<Fx>? = null
     private var fxRate = 0
-    @Volatile var fxType = 0
-        private set
     @Volatile var fxX = 0.5f
     @Volatile var fxY = 0.5f
     @Volatile var fxTouch = false
+    /** Regler: MIX / P1 / P2 des gerade bearbeiteten Kettenplatzes, VOL (global). */
     val knobs = floatArrayOf(1f, Fx.P1_DEFAULT[0], Fx.P2_DEFAULT[0], 0.8f)
+
+    // ---------------------------------------------------------------- Effekt-Kette (3 Plätze)
+    const val SLOTS = 3
+    val slotType = intArrayOf(0, Fx.DELAY, Fx.REVERB)
+    val slotOn = booleanArrayOf(true, false, false)
+    /** MIX / P1 / P2 je Platz (der bearbeitete Platz nutzt live die Regler oben). */
+    val slotKnobs = Array(SLOTS) { s -> floatArrayOf(1f, Fx.P1_DEFAULT[slotType[s]], Fx.P2_DEFAULT[slotType[s]]) }
+    @Volatile var editSlot = 0
+        private set
+
+    /** Effekt des gerade bearbeiteten Kettenplatzes. */
+    val fxType: Int get() = slotType[editSlot]
 
     fun selectFx(type: Int) {
         val t = Math.floorMod(type, Fx.COUNT)
         knobs[1] = Fx.P1_DEFAULT[t]
         knobs[2] = Fx.P2_DEFAULT[t]
-        fxType = t
+        slotType[editSlot] = t
+        slotOn[editSlot] = true
+    }
+
+    /** Wechselt den bearbeiteten Kettenplatz (Regler-Werte werden je Platz gemerkt). */
+    fun selectSlot(s: Int) {
+        if (s !in 0 until SLOTS || s == editSlot) return
+        for (k in 0 until 3) slotKnobs[editSlot][k] = knobs[k]
+        for (k in 0 until 3) knobs[k] = slotKnobs[s][k]
+        editSlot = s
+    }
+
+    fun toggleSlot(s: Int) {
+        if (s in 0 until SLOTS) slotOn[s] = !slotOn[s]
+    }
+
+    fun activeSlots(): Int = (0 until SLOTS).count { slotOn[it] }
+
+    /** Für Projekte: Regler eines Platzes (aktueller Stand). */
+    fun slotKnob(s: Int, k: Int): Float = if (s == editSlot) knobs[k] else slotKnobs[s][k]
+
+    fun setSlot(s: Int, type: Int, on: Boolean, mix: Float, p1: Float, p2: Float) {
+        if (s !in 0 until SLOTS) return
+        slotType[s] = Math.floorMod(type, Fx.COUNT)
+        slotOn[s] = on
+        slotKnobs[s][0] = mix; slotKnobs[s][1] = p1; slotKnobs[s][2] = p2
+        if (s == editSlot) { knobs[0] = mix; knobs[1] = p1; knobs[2] = p2 }
     }
 
     private var record: AudioRecord? = null
@@ -937,8 +974,8 @@ object Engine {
         }
         track = t
         record = r
-        if (fx == null || fxRate != sampleRate) {
-            fx = Fx(sampleRate)
+        if (fxs == null || fxRate != sampleRate) {
+            fxs = Array(SLOTS) { Fx(sampleRate) }
             fxRate = sampleRate
         }
 
@@ -1368,12 +1405,18 @@ object Engine {
                 for (i in 0 until block) dryBuf[i] = out[i] + bus[i]
             }
             motionTick(w, block)
-            val f = fx
-            if (f != null) {
-                f.process(
-                    bus, block, w, fxType, effX, effY, effTouch,
-                    knobs[0], knobs[1], knobs[2], masterLen, masterStart, fillMic(micBuf, block)
-                )
+            val chain = fxs
+            if (chain != null) {
+                val mic = fillMic(micBuf, block)
+                val es = editSlot
+                for (s in 0 until SLOTS) {
+                    if (!slotOn[s]) continue
+                    val kn = if (s == es) knobs else slotKnobs[s]
+                    chain[s].process(
+                        bus, block, w, slotType[s], effX, effY, effTouch,
+                        kn[0], kn[1], kn[2], masterLen, masterStart, mic
+                    )
+                }
             }
             for (i in 0 until block) out[i] += bus[i]
             writeOutRing(out, w, block)

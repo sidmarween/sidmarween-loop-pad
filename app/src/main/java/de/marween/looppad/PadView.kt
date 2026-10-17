@@ -61,9 +61,11 @@ class PadView(context: Context) : View(context) {
 
     private fun updateHoldRect() {
         val r = xyRect
-        val w = dp(70f)
+        val narrow = r.width() < dp(330f)
+        val w = if (narrow) (r.width() - dp(24f)) * 0.42f else dp(70f)
         val h = dp(30f)
-        holdRect.set(r.right - dp(8f) - w, r.top + dp(8f), r.right - dp(8f), r.top + dp(8f) + h)
+        val top = if (narrow) r.top + dp(44f) else r.top + dp(8f)
+        holdRect.set(r.right - dp(8f) - w, top, r.right - dp(8f), top + h)
     }
 
     private fun drawHoldButton(canvas: Canvas) {
@@ -106,7 +108,7 @@ class PadView(context: Context) : View(context) {
 
     private fun drawMotionButton(canvas: Canvas) {
         if (xyRect.width() <= 0f) return
-        val w = dp(84f)
+        val w = if (xyRect.width() < dp(330f)) (xyRect.width() - dp(24f)) * 0.58f else dp(84f)
         motRect.set(holdRect.left - dp(8f) - w, holdRect.top, holdRect.left - dp(8f), holdRect.bottom)
         val r = motRect
         val cols = overlayColors()
@@ -155,6 +157,56 @@ class PadView(context: Context) : View(context) {
         Engine.motionButton()
         performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
         burst(motRect.centerX(), motRect.centerY(), Color.rgb(230, 40, 55), 14, 180f)
+    }
+
+    private val slotRects = Array(Engine.SLOTS) { RectF() }
+
+    /** Effekt-Kette: drei Plätze oben links auf der XY-Fläche. */
+    private fun drawSlotChips(canvas: Canvas) {
+        val r = xyRect
+        if (r.width() <= 0f) return
+        val cols = overlayColors()
+        val h = dp(30f)
+        val w = if (r.width() < dp(330f)) (r.width() - dp(26f)) / 3f else min(dp(54f), (r.width() - dp(190f)) / 3f - dp(5f)).coerceAtLeast(dp(38f))
+        for (s in 0 until Engine.SLOTS) {
+            val x = r.left + dp(8f) + s * (w + dp(5f))
+            slotRects[s].set(x, r.top + dp(8f), x + w, r.top + dp(8f) + h)
+            val c = slotRects[s]
+            val on = Engine.slotOn[s]
+            val sel = Engine.editSlot == s
+            val rr = dp(7f)
+            fillPaint.shader = null
+            fillPaint.color = if (on) cols[2] else alpha(cols[0], 0.85f)
+            canvas.drawRoundRect(c, rr, rr, fillPaint)
+            strokePaint.strokeWidth = dp(if (sel) 2.5f else 1f)
+            strokePaint.color = if (sel) (if (on) Color.WHITE else cols[2]) else alpha(cols[1], 0.4f)
+            canvas.drawRoundRect(c, rr, rr, strokePaint)
+            textPaint.textSize = dp(8f)
+            textPaint.color = if (on) alpha(Color.WHITE, 0.85f) else alpha(cols[1], 0.6f)
+            textPaint.textAlign = Paint.Align.LEFT
+            canvas.drawText("${s + 1}", c.left + dp(4f), c.top + dp(10f), textPaint)
+            textPaint.textAlign = Paint.Align.CENTER
+            textPaint.textSize = dp(11f)
+            textPaint.color = if (on) Color.WHITE else alpha(cols[1], if (sel) 0.9f else 0.5f)
+            canvas.drawText(if (on) FX_CODES[Engine.slotType[s]] else "AUS", c.centerX() + dp(3f), c.centerY() + dp(5f), textPaint)
+            // Pfeil zur nächsten Station
+            if (s < Engine.SLOTS - 1) {
+                textPaint.textSize = dp(8f)
+                textPaint.color = alpha(cols[1], 0.5f)
+                canvas.drawText("›", c.right + dp(2.5f), c.centerY() + dp(3f), textPaint)
+            }
+        }
+    }
+
+    private fun slotPressed(s: Int) {
+        if (Engine.editSlot == s) {
+            Engine.toggleSlot(s)
+        } else {
+            Engine.selectSlot(s)
+        }
+        fxFlash = 1f
+        performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+        burst(slotRects[s].centerX(), slotRects[s].centerY(), overlayColors()[2], 12, 160f)
     }
 
     private fun toggleHold() {
@@ -525,6 +577,7 @@ class PadView(context: Context) : View(context) {
             xyDispY = Engine.motCurY
         }
         drawXy(canvas, dt)
+        drawSlotChips(canvas)
         drawHoldButton(canvas)
         drawMotionButton(canvas)
         for (i in 0 until VISIBLE_PADS) {
@@ -657,7 +710,7 @@ class PadView(context: Context) : View(context) {
         // Zeile 1: Nummer + Name
         textPaint.textSize = dp(9f)
         textPaint.color = alpha(txt, 0.7f)
-        val num = String.format(Locale.GERMANY, "FX %02d/%d %s %s", type + 1, Fx.COUNT, if (touching) "●" else "○", fxTargetLabel())
+        val num = String.format(Locale.GERMANY, "%d·FX %02d/%d %s %s", Engine.editSlot + 1, type + 1, Fx.COUNT, if (touching) "●" else "○", fxTargetLabel())
         canvas.drawText(num, r.left + pad, r.top + dp(13f), textPaint)
         textPaint.textAlign = Paint.Align.RIGHT
         textPaint.textSize = dp(10f)
@@ -1609,7 +1662,7 @@ class PadView(context: Context) : View(context) {
         textPaint.textAlign = Paint.Align.RIGHT
         canvas.drawText("X: ${Fx.X_LABELS[Engine.fxType]} →", r.right - dp(12f), r.bottom - dp(10f), textPaint)
         textPaint.textAlign = Paint.Align.LEFT
-        canvas.drawText("↑ Y: ${Fx.Y_LABELS[Engine.fxType]}", r.left + dp(12f), r.top + dp(18f), textPaint)
+        canvas.drawText("↑ Y: ${Fx.Y_LABELS[Engine.fxType]}", r.left + dp(12f), r.bottom - dp(10f), textPaint)
         textPaint.textAlign = Paint.Align.CENTER
     }
 
@@ -1767,6 +1820,12 @@ class PadView(context: Context) : View(context) {
                     }
                     performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
                     return true
+                }
+                for (sl in 0 until Engine.SLOTS) {
+                    if (slotRects[sl].contains(x, y) && xyRect.contains(x, y)) {
+                        slotPressed(sl)
+                        return true
+                    }
                 }
                 if (holdRect.contains(x, y) && xyRect.contains(x, y)) {
                     toggleHold()
@@ -2078,7 +2137,7 @@ class PadView(context: Context) : View(context) {
         textPaint.textAlign = Paint.Align.LEFT
         textPaint.textSize = dp(9f)
         textPaint.color = alpha(txt, 0.7f)
-        canvas.drawText(String.format(Locale.GERMANY, "FX %02d/%d %s %s", type + 1, Fx.COUNT, if (touching) "●" else "○", fxTargetLabel()), r.left + pad, r.top + dp(14f), textPaint)
+        canvas.drawText(String.format(Locale.GERMANY, "%d·FX %02d/%d %s %s", Engine.editSlot + 1, type + 1, Fx.COUNT, if (touching) "●" else "○", fxTargetLabel()), r.left + pad, r.top + dp(14f), textPaint)
         textPaint.textAlign = Paint.Align.RIGHT
         textPaint.textSize = dp(10f)
         textPaint.color = if (theme == COMIC) COMIC_MAGENTA else R_ORANGE
@@ -2596,7 +2655,7 @@ class PadView(context: Context) : View(context) {
             textPaint.textAlign = Paint.Align.RIGHT
             canvas.drawText("X: ${Fx.X_LABELS[Engine.fxType]} →", r.right - dp(16f), r.bottom - dp(12f), textPaint)
             textPaint.textAlign = Paint.Align.LEFT
-            canvas.drawText("↑ Y: ${Fx.Y_LABELS[Engine.fxType]}", r.left + dp(16f), r.top + dp(20f), textPaint)
+            canvas.drawText("↑ Y: ${Fx.Y_LABELS[Engine.fxType]}", r.left + dp(16f), r.bottom - dp(12f), textPaint)
             textPaint.textAlign = Paint.Align.CENTER
         }
     }
@@ -2850,7 +2909,7 @@ class PadView(context: Context) : View(context) {
         textPaint.textAlign = Paint.Align.LEFT
         textPaint.textSize = dp(9f)
         textPaint.color = alpha(txt, 0.65f)
-        canvas.drawText(String.format(Locale.GERMANY, "FX %02d/%d %s %s", type + 1, Fx.COUNT, if (touching) "●" else "○", fxTargetLabel()), r.left + pad, r.top + dp(14f), textPaint)
+        canvas.drawText(String.format(Locale.GERMANY, "%d·FX %02d/%d %s %s", Engine.editSlot + 1, type + 1, Fx.COUNT, if (touching) "●" else "○", fxTargetLabel()), r.left + pad, r.top + dp(14f), textPaint)
         textPaint.textAlign = Paint.Align.RIGHT
         textPaint.textSize = dp(10f)
         textPaint.color = sk.accent
@@ -3136,7 +3195,7 @@ class PadView(context: Context) : View(context) {
         textPaint.textAlign = Paint.Align.RIGHT
         canvas.drawText("X: ${Fx.X_LABELS[Engine.fxType]} →", r.right - dp(14f), r.bottom - dp(12f), textPaint)
         textPaint.textAlign = Paint.Align.LEFT
-        canvas.drawText("↑ Y: ${Fx.Y_LABELS[Engine.fxType]}", r.left + dp(14f), r.top + dp(if (sk.xyStyle == XY_STITCH) 40f else 20f), textPaint)
+        canvas.drawText("↑ Y: ${Fx.Y_LABELS[Engine.fxType]}", r.left + dp(14f), r.bottom - dp(12f), textPaint)
         textPaint.textAlign = Paint.Align.CENTER
     }
 

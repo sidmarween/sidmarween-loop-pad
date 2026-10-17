@@ -626,7 +626,7 @@ class MainActivity : Activity() {
 
     private fun showFxList() {
         AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
-            .setTitle("Effekt wählen · ${fxRoutingText()}")
+            .setTitle("Platz ${Engine.editSlot + 1} · Effekt wählen · ${fxRoutingText()}")
             .setSingleChoiceItems(Fx.NAMES, Engine.fxType) { d, which ->
                 Engine.selectFx(which)
                 pads.fxChosen()

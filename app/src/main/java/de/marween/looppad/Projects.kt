@@ -43,6 +43,17 @@ object Projects {
         j.put("masterLen", Engine.masterFrames())
         j.put("bpm", Engine.fixedBpm.toDouble())
         j.put("fxType", Engine.fxType)
+        val ch = JSONArray()
+        for (sl in 0 until Engine.SLOTS) {
+            val o = JSONObject()
+            o.put("type", Engine.slotType[sl])
+            o.put("on", Engine.slotOn[sl])
+            o.put("mix", Engine.slotKnob(sl, 0).toDouble())
+            o.put("p1", Engine.slotKnob(sl, 1).toDouble())
+            o.put("p2", Engine.slotKnob(sl, 2).toDouble())
+            ch.put(o)
+        }
+        j.put("chain", ch)
         val kn = JSONArray()
         for (v in Engine.knobs) kn.put(v.toDouble())
         j.put("knobs", kn)
@@ -128,9 +139,21 @@ object Projects {
             }
             Engine.setNotes(p, list)
         }
-        Engine.selectFx(j.optInt("fxType", 0))
-        val kn = j.optJSONArray("knobs")
-        if (kn != null) for (k in 0 until min(4, kn.length())) Engine.knobs[k] = kn.getDouble(k).toFloat()
+        val ch = j.optJSONArray("chain")
+        if (ch != null) {
+            for (sl in 0 until min(Engine.SLOTS, ch.length())) {
+                val o = ch.getJSONObject(sl)
+                Engine.setSlot(sl, o.optInt("type", 0), o.optBoolean("on", sl == 0),
+                    o.optDouble("mix", 1.0).toFloat(), o.optDouble("p1", 0.5).toFloat(), o.optDouble("p2", 0.5).toFloat())
+            }
+            val kn = j.optJSONArray("knobs")
+            if (kn != null && kn.length() >= 4) Engine.knobs[3] = kn.getDouble(3).toFloat()
+        } else {
+            Engine.selectFx(j.optInt("fxType", 0))
+            val kn = j.optJSONArray("knobs")
+            if (kn != null) for (k in 0 until min(4, kn.length())) Engine.knobs[k] = kn.getDouble(k).toFloat()
+            for (sl in 1 until Engine.SLOTS) Engine.slotOn[sl] = false
+        }
         Engine.metronome = j.optBoolean("metronome", false)
         val oldTarget = j.optInt("fxTarget", -1)
         for (p in 0 until Engine.PADS) {
