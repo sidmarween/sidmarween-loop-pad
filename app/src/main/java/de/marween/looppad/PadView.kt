@@ -5038,6 +5038,9 @@ class PadView(context: Context) : View(context) {
     private val edBtnCut = RectF()
     private val edBtnSlice = RectF()
     private val edBtnPads = RectF()
+    private val edBtnSave = RectF()
+    /** Wave-Editor: Ausschnitt bzw. Slices in die Bibliothek speichern (Pad, Audio, Slices). */
+    var onEditorSave: ((Int, FloatArray, Int) -> Unit)? = null
     private val edBtnClose = RectF()
     private var edPeaks = FloatArray(0)
     private var edDrag = 0          // 1 = Start, 2 = Ende, 3 = Slices-Regler, 4 = Takte-Regler
@@ -5077,6 +5080,7 @@ class PadView(context: Context) : View(context) {
         edBtnCut.set(edBtnPlay.right + dp(10f), by, edBtnPlay.right + dp(10f) + bw, by + bh)
         edBtnSlice.set(edBtnPlay.left, by + bh + dp(10f), edBtnPlay.right, by + 2 * bh + dp(10f))
         edBtnPads.set(edBtnCut.left, by + bh + dp(10f), edBtnCut.right, by + 2 * bh + dp(10f))
+        edBtnSave.set(edBtnPlay.left, edBtnPads.bottom + dp(10f), edBtnCut.right, edBtnPads.bottom + dp(10f) + bh)
     }
 
     private fun computePeaks() {
@@ -5149,6 +5153,9 @@ class PadView(context: Context) : View(context) {
                             Engine.applyEdit(edPad, edStart, edEnd, edSlices, edBars)
                             reloadEditor("$edSlices Slices – folgt jetzt dem Tempo")
                         }
+                    }
+                    edBtnSave.contains(x, y) -> {
+                        if (edEnd - edStart > 2) onEditorSave?.invoke(edPad, edData.copyOfRange(edStart, edEnd), edSlices)
                     }
                     edBtnPads.contains(x, y) -> {
                         val n = max(2, edSlices)
@@ -5266,10 +5273,11 @@ class PadView(context: Context) : View(context) {
         smallBtn(canvas, edBtnCut, "✂ Zuschneiden", false, cols)
         smallBtn(canvas, edBtnSlice, "🔪 Slicen (Tempo)", false, cols)
         smallBtn(canvas, edBtnPads, "⇢ Slices auf Pads", false, cols)
+        smallBtn(canvas, edBtnSave, if (edSlices > 1) "💾 In Bibliothek · Stems ($edSlices)" else "💾 In Bibliothek speichern", false, cols)
 
         textPaint.textSize = dp(10f)
         textPaint.color = alpha(cols[1], 0.65f)
-        val ty = edBtnPads.bottom + dp(22f)
+        val ty = edBtnSave.bottom + dp(22f)
         canvas.drawText("Slicen: Stücke starten auf ihrem Rasterplatz – der Loop", edRect.centerX(), ty, textPaint)
         canvas.drawText("passt sich jedem Tempo an, ohne die Tonhöhe zu ändern.", edRect.centerX(), ty + dp(14f), textPaint)
         if (edMsgT > 0f) {
@@ -5357,6 +5365,7 @@ class PadView(context: Context) : View(context) {
                 edBtnPlay.contains(x, y) -> Triple(edBtnPlay, "Hören", "Spielt den gewählten Ausschnitt einmal vor.")
                 edBtnCut.contains(x, y) -> Triple(edBtnCut, "Zuschneiden", "Behält nur den Bereich zwischen S und E und legt ihn wieder synchron aufs Pad.")
                 edBtnSlice.contains(x, y) -> Triple(edBtnSlice, "Slicen (Tempo)", "Zerlegt den Loop in Slices, die auf ihren Rasterplätzen starten – so passt er sich jedem Tempo an, ohne die Tonhöhe zu ändern.")
+                edBtnSave.contains(x, y) -> Triple(edBtnSave, "In Bibliothek speichern", "Speichert den Ausschnitt S–E als eigenes Sample in die Bibliothek – du wählst die Kategorie. Ist SLICES eingestellt, kannst du die Stücke auch als Stems speichern oder als WAV-Dateien in einen Ordner exportieren.")
                 edBtnPads.contains(x, y) -> Triple(edBtnPads, "Slices auf Pads", "Legt die Stücke als ⚡-One-Shots auf freie Pads – zum neu Anordnen im Sequenzer oder Live-Spielen.")
                 else -> Triple(edRect, "Wave-Editor", "Hier schneidest du Aufnahmen und zerlegst sie in Slices. ✕ oben rechts schließt den Editor.")
             }

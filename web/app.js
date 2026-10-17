@@ -319,8 +319,11 @@ function db() {
   if (dbP) return dbP;
   dbP = new Promise((res, rej) => {
     try {
-      const r = indexedDB.open('marvpad', 1);
-      r.onupgradeneeded = () => { const d = r.result; d.createObjectStore('projects', { keyPath: 'id' }); d.createObjectStore('recordings', { keyPath: 'id' }); };
+      const r = indexedDB.open('marvpad', 2);
+      r.onupgradeneeded = () => {
+        const d = r.result;
+        for (const n of ['projects', 'recordings', 'library']) if (!d.objectStoreNames.contains(n)) d.createObjectStore(n, { keyPath: 'id' });
+      };
       r.onsuccess = () => res(r.result);
       r.onerror = () => rej(r.error);
     } catch (e) { rej(e); }
@@ -1435,17 +1438,26 @@ async function loadInto(p, data, name, oneShot) {
   toast('Pad ' + (p + 1) + ': ' + (name || '') + ' · ' + desc + ' · antippen startet ihn auf der Eins');
 }
 let LIB = null;
+async function userLib() { try { return (await dbAll('library')).sort((a, b) => b.date - a.date); } catch (e) { return []; } }
 async function showLibrary(p) {
-  if (!LIB) { try { LIB = await (await fetch('library.json')).json(); } catch (e) { toast('Bibliothek nicht erreichbar'); return; } }
+  if (!LIB) { try { LIB = await (await fetch('library.json')).json(); } catch (e) { LIB = { categories: [], samples: [] }; toast('Mitgelieferte Sounds nicht erreichbar'); } }
   let recs = [];
   try { recs = await dbAll('recordings'); } catch (e) { /* */ }
+  const user = await userLib();
   const items = [];
   if (recs.length) items.push(['🎙 Meine Aufnahmen (' + recs.length + ')', () => showRecordings(p)]);
-  for (const c of LIB.categories) {
-    const list = LIB.samples.filter((s) => s.c === c);
-    items.push([c + ' (' + list.length + ')', () => menu(c, list.map((s) => [s.t, () => loadLibrary(p, s)]))]);
+  const cats = [...new Set(LIB.categories.concat(user.map((u) => u.cat)))];
+  for (const c of cats) {
+    const own = user.filter((u) => u.cat === c), list = LIB.samples.filter((s) => s.c === c);
+    items.push([c + ' (' + (list.length + own.length) + ')' + (own.length ? ' · ★ ' + own.length : ''), () => menu(c,
+      own.map((u) => ['★ ' + u.title + (u.oneShot ? '' : ' ∞'), () => menu('★ ' + u.title, [
+        ['▶ Auf Pad ' + (p + 1) + ' laden', () => loadInto(p, u.data, u.title, u.oneShot)],
+        ['💾 Als WAV speichern', () => saveBlob(encodeWav(u.data, u.rate || A.sr), u.title.replace(/[^\w\- ]/g, '_') + '.wav')],
+        ['🗑 Aus der Bibliothek löschen', () => confirmSheet('Löschen?', u.title, async () => { await dbDel('library', u.id); toast('Gelöscht'); })]
+      ])]).concat(list.map((s) => [s.t, () => loadLibrary(p, s)]))
+    )]);
   }
-  menu('Bibliothek → Pad ' + (p + 1), items, 'Mitgeliefert: selbst synthetisierte Sounds und die Versilian Community Sample Library (VCSL, CC0).');
+  menu('Bibliothek → Pad ' + (p + 1), items, 'Mitgeliefert: selbst synthetisierte Sounds und die Versilian Community Sample Library (VCSL, CC0). ★ = deine eigenen Samples.');
 }
 async function loadLibrary(p, s) {
   try {
@@ -1453,6 +1465,57 @@ async function loadLibrary(p, s) {
     const data = await decodeFile(await (await fetch('samples/' + s.f)).arrayBuffer());
     await loadInto(p, data, s.t + ' ' + s.f, s.o);
   } catch (e) { toast('Laden fehlgeschlagen'); }
+}
+// ------------------------------------------------------------------ Wave-Editor → Bibliothek / Stems
+function splitSlices(data, n) {
+  const out = [], fade = Math.floor(A.sr * 0.003);
+  for (let k = 0; k < n; k++) {
+    const a = Math.floor(k * data.length / n), b = Math.floor((k + 1) * data.length / n);
+    if (b - a < 2) continue;
+    const s = data.slice(a, b), f = Math.min(fade, s.length >> 2);
+    for (let i = 0; i < f; i++) { const g = i / f; s[i] *= g; s[s.length - 1 - i] *= g; }
+    out.push(s);
+  }
+  return out;
+}
+function showEditorSave(p, data, slices) {
+  const def = 'Pad ' + (p + 1) + ' · ' + new Date().toLocaleString('de-DE', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+  const items = [['💾 Ausschnitt als Sample in die Bibliothek', () => askSaveTarget('Ausschnitt speichern', def, (cat, name) => saveToLib(cat, [data], name, ED.oneShot != null ? !!ED.oneShot : true))]];
+  if (slices > 1) {
+    const stems = splitSlices(data, slices);
+    items.push(['🎚 ' + slices + ' Slices als Stems in die Bibliothek', () => askSaveTarget('Stems speichern', def, (cat, name) => saveToLib(cat, stems, name, true))]);
+    items.push(['📤 ' + slices + ' Slices als Stems exportieren (WAV-Dateien)', async () => { for (let i = 0; i < stems.length; i++) await saveBlob(encodeWav(stems[i], A.sr), def.replace(/[^\w\- ]/g, '_') + '_Stem_' + String(i + 1).padStart(2, '0') + '.wav'); }]);
+  }
+  items.push(['📤 Ausschnitt als WAV exportieren', () => saveBlob(encodeWav(data, A.sr), 'MarvPAD_Ausschnitt_' + stamp() + '.wav')]);
+  menu('Speichern · ' + (data.length / A.sr).toFixed(2).replace('.', ',') + ' s' + (slices > 1 ? ' · ' + slices + ' Slices' : ''), items);
+}
+async function askSaveTarget(title, def, done) {
+  if (!LIB) { try { LIB = await (await fetch('library.json')).json(); } catch (e) { LIB = { categories: [], samples: [] }; } }
+  const user = await userLib();
+  const cats = [...new Set(user.map((u) => u.cat).concat(LIB.categories))];
+  sheet(title, (sh) => {
+    sh.append(el('div', 'lab', 'Kategorie'));
+    const sel = el('select'); sel.id = 'libcat';
+    sel.style.cssText = 'padding:10px;border-radius:10px;border:1px solid var(--line);background:var(--panel2);color:var(--ink);font:inherit';
+    for (const c of cats) { const o = el('option', '', c); o.value = c; sel.append(o); }
+    const nw = el('option', '', '＋ Neue Kategorie …'); nw.value = '__new'; sel.append(nw);
+    const newCat = el('input'); newCat.type = 'text'; newCat.placeholder = 'Name der neuen Kategorie'; newCat.id = 'libnewcat'; newCat.hidden = true;
+    const name = el('input'); name.type = 'text'; name.value = def; name.id = 'libname';
+    for (const i of [newCat, name]) i.style.cssText = 'padding:10px;border-radius:10px;border:1px solid var(--line);background:var(--panel2);color:var(--ink);font:inherit';
+    sel.onchange = () => { newCat.hidden = sel.value !== '__new'; };
+    const ok = el('button', 'btn pri', 'Speichern');
+    ok.onclick = () => { const cat = sel.value === '__new' ? (newCat.value.trim() || '⭐ Meine Sounds') : sel.value; closeSheet(); done(cat, name.value.trim() || def); };
+    sh.append(sel, newCat, el('div', 'lab', 'Name'), name, ok);
+  });
+}
+async function saveToLib(cat, parts, name, oneShot) {
+  try {
+    for (let i = 0; i < parts.length; i++) {
+      const title = parts.length > 1 ? name + ' · Stem ' + String(i + 1).padStart(2, '0') : name;
+      await dbPut('library', { id: 'u_' + Date.now() + '_' + i, date: Date.now() + i, cat, title, oneShot: parts.length > 1 ? true : oneShot, rate: A.sr, data: parts[i] });
+    }
+    toast(parts.length > 1 ? '★ ' + parts.length + ' Stems in ' + cat + ' gespeichert' : '★ „' + name + '“ in ' + cat + ' gespeichert');
+  } catch (e) { toast('Speichern nicht möglich: ' + (e && e.message || e)); }
 }
 async function showRecordings(p) {
   let recs = [];
@@ -1715,6 +1778,7 @@ function edLayout() {
   L.kSl = rect(10, ky, kw, 70); L.kBars = rect(20 + kw, ky, kw, 70);
   const by = ky + 82, bw = (W - 50) / 4;
   L.btns = [0, 1, 2, 3].map((i) => rect(10 + i * (bw + 10), by, bw, 40));
+  L.save = rect(10, by + 50, W - 20, 40);
   return L;
 }
 function edDown(e) {
@@ -1733,6 +1797,7 @@ function edDown(e) {
   if (b === 1) { send({ t: 'edit', p, start: ED.s, end: ED.e, slices: 0, bars: ED.bars }); toast('Zugeschnitten'); setTimeout(() => { closeEditor(); openEditor(p); }, 200); }
   if (b === 2) { if (ED.slices < 2) { toast('Erst SLICES einstellen'); return; } send({ t: 'edit', p, start: ED.s, end: ED.e, slices: ED.slices, bars: ED.bars }); toast(ED.slices + ' Slices · folgen dem Tempo'); }
   if (b === 3) { send({ t: 'distribute', p, start: ED.s, end: ED.e, n: Math.max(2, ED.slices || 4) }); }
+  if (L.save.c(x, y)) showEditorSave(p, ED.data.slice(ED.s, ED.e), ED.slices);
 }
 function edMove(e) {
   if (!ED.drag) return;
@@ -1768,6 +1833,7 @@ function drawEditor() {
   knob(L.kSl, 'SLICES', ED.slices > 1 ? String(ED.slices) : 'AUS');
   knob(L.kBars, 'TAKTE', String(ED.bars).replace('.', ','));
   ['▶ HÖREN', '✂ SCHNEIDEN', '▦ SLICEN', '→ PADS'].forEach((t, i) => btnC(g, L.btns[i], t, false, acc, ink, panel));
+  btnC(g, L.save, ED.slices > 1 ? '💾 IN BIBLIOTHEK · STEMS (' + ED.slices + ')' : '💾 IN BIBLIOTHEK SPEICHERN', false, acc, ink, panel);
 }
 
 // ------------------------------------------------------------------ Info-Modus

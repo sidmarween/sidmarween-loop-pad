@@ -319,8 +319,11 @@ function db() {
   if (dbP) return dbP;
   dbP = new Promise((res, rej) => {
     try {
-      const r = indexedDB.open('marvpad', 1);
-      r.onupgradeneeded = () => { const d = r.result; d.createObjectStore('projects', { keyPath: 'id' }); d.createObjectStore('recordings', { keyPath: 'id' }); };
+      const r = indexedDB.open('marvpad', 2);
+      r.onupgradeneeded = () => {
+        const d = r.result;
+        for (const n of ['projects', 'recordings', 'library']) if (!d.objectStoreNames.contains(n)) d.createObjectStore(n, { keyPath: 'id' });
+      };
       r.onsuccess = () => res(r.result);
       r.onerror = () => rej(r.error);
     } catch (e) { rej(e); }

@@ -95,6 +95,8 @@ Unten in der Tastatur: **● REC** (Pattern oder Song), **▶** und **■**.
 
 Im •••-Menü: Start-/Endpunkt an der Wellenform ziehen, **Zuschneiden**, mit dem **SLICES**-Regler in Stücke teilen und **Slicen (Tempo)** – die Slices starten auf ihren Rasterplätzen, der Loop folgt so jedem Master-Tempo ohne Tonhöhenänderung (Länge über den **TAKTE**-Regler). **Slices auf Pads** legt die Stücke als ⚡-One-Shots auf freie Pads.
 
+**💾 In Bibliothek speichern** – der bearbeitete Ausschnitt wandert als eigenes Sample in die Bibliothek. Dabei wird eine **Kategorie** abgefragt (vorhandene oder ＋ neue) und ein Name. Ist das Sample in Slices geteilt (z. B. ein importiertes MP3), lassen sich die Slices als **Stems** speichern – in die Bibliothek („Name · Stem 01 …“) oder als einzelne WAV-Dateien in einen Ordner.
+
 ## Sequenzer
 
 Statt der unteren Pad-Reihe: 16-Schritt-Sequenzer, synchron zum Takt (ohne Takt: 120 BPM).
@@ -111,6 +113,7 @@ Im **•••**-Menü jedes Pads: **∞ LOOP** (läuft im Takt endlos, Regenbog
 ## Bibliothek
 
 „Aus Bibliothek laden" im •••-Menü, nach Kategorien: 🎙 Meine Aufnahmen · 🥁 Drums · 🪘 Percussion · 🎹 Tasten · 🎼 Melodisch · 🔊 Synth & Bass · ✨ FX · ∞ Loops (90–174 BPM) – über 90 Sounds.
+Eigene Samples aus dem Wave-Editor erscheinen mit ★ in ihrer Kategorie (laden, als WAV exportieren, löschen).
 Quellen: selbst synthetisiert (frei) und die **Versilian Community Sample Library (VCSL)**, CC0 1.0 (gemeinfrei) – https://github.com/sgossner/VCSL. Tonale Samples liegen meist auf C4 und lassen sich mit der 🎹-Tastatur spielen.
 
 ## Import / Export

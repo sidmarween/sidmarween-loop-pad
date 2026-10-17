@@ -179,6 +179,59 @@ object Projects {
         dir.deleteRecursively()
     }
 
+    // ---------------------------------------------------------------- Eigene Bibliothek (aus dem Wave-Editor)
+
+    class UserSample(val file: File, val category: String, val title: String, val oneShot: Boolean, val stem: String?)
+
+    private fun libDir(ctx: Context) = File(ctx.filesDir, "library").also { it.mkdirs() }
+    private fun indexFile(ctx: Context) = File(libDir(ctx), "index.json")
+
+    private fun readIndex(ctx: Context): JSONArray = try {
+        if (indexFile(ctx).exists()) JSONArray(indexFile(ctx).readText()) else JSONArray()
+    } catch (e: Exception) {
+        JSONArray()
+    }
+
+    /** Alle eigenen Samples (neueste zuerst). */
+    fun userSamples(ctx: Context): List<UserSample> {
+        val a = readIndex(ctx)
+        val out = ArrayList<UserSample>()
+        for (i in 0 until a.length()) {
+            val o = a.optJSONObject(i) ?: continue
+            val f = File(libDir(ctx), o.optString("file"))
+            if (!f.exists()) continue
+            out.add(UserSample(f, o.optString("cat"), o.optString("title"), o.optBoolean("oneShot", true), o.optString("stem").ifEmpty { null }))
+        }
+        return out.reversed()
+    }
+
+    fun userCategories(ctx: Context): List<String> = userSamples(ctx).map { it.category }.distinct()
+
+    /** Speichert ein Sample in die eigene Bibliothek. */
+    @Synchronized
+    fun saveUserSample(ctx: Context, category: String, title: String, data: FloatArray, rate: Int, oneShot: Boolean, stem: String? = null) {
+        val name = "u_" + System.currentTimeMillis() + "_" + (System.nanoTime() % 100000) + ".wav"
+        File(libDir(ctx), name).outputStream().use { AudioFiles.writeWav(it, data, rate) }
+        val a = readIndex(ctx)
+        val o = JSONObject()
+        o.put("file", name); o.put("cat", category); o.put("title", title); o.put("oneShot", oneShot)
+        if (stem != null) o.put("stem", stem)
+        a.put(o)
+        indexFile(ctx).writeText(a.toString())
+    }
+
+    @Synchronized
+    fun deleteUserSample(ctx: Context, s: UserSample) {
+        val a = readIndex(ctx)
+        val keep = JSONArray()
+        for (i in 0 until a.length()) {
+            val o = a.optJSONObject(i) ?: continue
+            if (o.optString("file") != s.file.name) keep.put(o)
+        }
+        indexFile(ctx).writeText(keep.toString())
+        s.file.delete()
+    }
+
     // ---------------------------------------------------------------- Mikrofon-Aufnahmen
 
     fun saveSample(ctx: Context, pad: Int, data: FloatArray, rate: Int) {

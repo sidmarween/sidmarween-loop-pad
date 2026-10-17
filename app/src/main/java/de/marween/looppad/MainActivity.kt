@@ -29,6 +29,7 @@ import android.graphics.Typeface
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlin.math.min
 
 class MainActivity : Activity() {
 
@@ -93,6 +94,7 @@ class MainActivity : Activity() {
         pads.statusColors = prefs.getBoolean("statusColors", true)
         pads.onImportMenu = { p -> showImportMenu(p) }
         pads.onPadFxEditor = { p -> showPadFxEditor(p) }
+        pads.onEditorSave = { p, data, slices -> showEditorSave(p, data, slices) }
         pads.onLaunchQuantChanged = {
             prefs.edit().putInt("launchIdx", Engine.launchIdx).apply()
             hint(if (Engine.LAUNCH_Q[Engine.launchIdx] <= 0f) "Start-Raster AUS: Loops starten/stoppen sofort"
@@ -301,30 +303,210 @@ class MainActivity : Activity() {
 
     private fun showLibrary(p: Int) {
         val recs = Projects.listSamples(this)
-        val cats = ArrayList<String>()
-        if (recs.isNotEmpty()) cats.add("🎙 Meine Aufnahmen (${recs.size})")
-        for (c in SampleLibrary.categories) cats.add("$c (${SampleLibrary.inCategory(c).size})")
-        AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
-            .setTitle("Bibliothek → Pad ${p + 1}")
-            .setItems(cats.toTypedArray()) { _, which ->
-                if (recs.isNotEmpty() && which == 0) {
-                    AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
-                        .setTitle("🎙 Meine Aufnahmen")
-                        .setItems(recs.map { Projects.sampleTitle(it) }.toTypedArray()) { _, i -> loadRecording(recs[i], p) }
-                        .setNegativeButton("Zurück") { _, _ -> showLibrary(p) }
-                        .show()
-                    return@setItems
-                }
-                val cat = SampleLibrary.categories[which - (if (recs.isNotEmpty()) 1 else 0)]
-                val list = SampleLibrary.inCategory(cat)
+        val user = Projects.userSamples(this)
+        val labels = ArrayList<String>()
+        val actions = ArrayList<() -> Unit>()
+        if (recs.isNotEmpty()) {
+            labels.add("🎙 Meine Aufnahmen (${recs.size})")
+            actions.add {
                 AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
-                    .setTitle(cat)
-                    .setItems(list.map { it.title }.toTypedArray()) { _, i -> loadLibrarySample(list[i], p) }
+                    .setTitle("🎙 Meine Aufnahmen")
+                    .setItems(recs.map { Projects.sampleTitle(it) }.toTypedArray()) { _, i -> loadRecording(recs[i], p) }
                     .setNegativeButton("Zurück") { _, _ -> showLibrary(p) }
                     .show()
             }
+        }
+        // eingebaute Kategorien + eigene Samples darin, danach rein eigene Kategorien
+        val cats = LinkedHashSet<String>(SampleLibrary.categories)
+        cats.addAll(user.map { it.category })
+        for (c in cats) {
+            val own = user.filter { it.category == c }
+            val builtIn = SampleLibrary.inCategory(c)
+            labels.add("$c (${builtIn.size + own.size})" + if (own.isNotEmpty()) " · ★ ${own.size}" else "")
+            actions.add { showLibraryCategory(p, c) }
+        }
+        AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
+            .setTitle("Bibliothek → Pad ${p + 1}")
+            .setItems(labels.toTypedArray()) { _, which -> actions[which]() }
             .setNegativeButton("Abbrechen", null)
             .show()
+    }
+
+    private fun showLibraryCategory(p: Int, cat: String) {
+        val own = Projects.userSamples(this).filter { it.category == cat }
+        val builtIn = SampleLibrary.inCategory(cat)
+        val labels = own.map { "★ " + it.title + (if (it.oneShot) "" else " ∞") } + builtIn.map { it.title }
+        AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
+            .setTitle(cat)
+            .setItems(labels.toTypedArray()) { _, i ->
+                if (i < own.size) userSampleActions(p, own[i]) else loadLibrarySample(builtIn[i - own.size], p)
+            }
+            .setNegativeButton("Zurück") { _, _ -> showLibrary(p) }
+            .show()
+    }
+
+    private fun userSampleActions(p: Int, smp: Projects.UserSample) {
+        AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
+            .setTitle("★ ${smp.title}")
+            .setItems(arrayOf("▶ Auf Pad ${p + 1} laden", "🗑 Aus der Bibliothek löschen")) { _, w ->
+                if (w == 0) loadUserSample(smp, p)
+                else confirm("Löschen?", "„${smp.title}“ wird aus deiner Bibliothek entfernt.") {
+                    Projects.deleteUserSample(this, smp)
+                    toast("Gelöscht")
+                }
+            }
+            .setNegativeButton("Zurück") { _, _ -> showLibraryCategory(p, smp.category) }
+            .show()
+    }
+
+    private fun loadUserSample(smp: Projects.UserSample, p: Int) {
+        val rate = Engine.sampleRate
+        Thread {
+            try {
+                val data = AudioFiles.decodeFile(smp.file, rate, Engine.MAX_SECONDS)
+                Engine.padOneShot[p] = smp.oneShot
+                if (smp.oneShot) {
+                    Engine.importLoop(p, data)
+                    runOnUiThread { toast("Pad ${p + 1}: ★ ${smp.title}") }
+                } else {
+                    val desc = Engine.importClip(p, data, Warp.analyze(data, rate, smp.title))
+                    runOnUiThread { hint("Pad ${p + 1}: ★ ${smp.title} · $desc · antippen startet ihn auf der Eins") }
+                }
+            } catch (e: Exception) {
+                runOnUiThread { toast("Laden fehlgeschlagen: ${e.message ?: e}") }
+            }
+        }.start()
+    }
+
+    // ---------------------------------------------------------------- Wave-Editor → Bibliothek / Stems
+
+    private var pendingStems: List<FloatArray>? = null
+    private var pendingStemName = ""
+
+    private fun showEditorSave(p: Int, data: FloatArray, slices: Int) {
+        val labels = ArrayList<String>()
+        val actions = ArrayList<() -> Unit>()
+        val defName = "Pad ${p + 1} · " + SimpleDateFormat("dd.MM. HH:mm", Locale.GERMANY).format(Date())
+        labels.add("💾 Ausschnitt als Sample in die Bibliothek")
+        actions.add { askCategory("Ausschnitt speichern") { cat -> askName(defName) { name -> saveToLibrary(cat, listOf(data), name, Engine.isOneShot(p), null) } } }
+        if (slices > 1) {
+            val stems = splitSlices(data, slices)
+            labels.add("🎚 $slices Slices als Stems in die Bibliothek")
+            actions.add { askCategory("Stems speichern") { cat -> askName(defName) { name -> saveToLibrary(cat, stems, name, true, name) } } }
+            labels.add("📤 $slices Slices als Stems exportieren (Ordner wählen)")
+            actions.add { askName(defName) { name -> exportStems(stems, name) } }
+        }
+        labels.add("📤 Ausschnitt als WAV exportieren")
+        actions.add {
+            exportData = data
+            exportRate = Engine.sampleRate
+            pickCreate("MarvPAD_Ausschnitt", REQ_EXPORT)
+        }
+        AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
+            .setTitle("Speichern · " + String.format(Locale.GERMANY, "%.2f s", data.size.toFloat() / Engine.sampleRate) + if (slices > 1) " · $slices Slices" else "")
+            .setItems(labels.toTypedArray()) { _, w -> actions[w]() }
+            .setNegativeButton("Abbrechen", null)
+            .show()
+    }
+
+    private fun splitSlices(data: FloatArray, n: Int): List<FloatArray> {
+        val out = ArrayList<FloatArray>()
+        val fade = Engine.sampleRate * 3 / 1000
+        for (k in 0 until n) {
+            val a = (k.toLong() * data.size / n).toInt()
+            val b = ((k + 1).toLong() * data.size / n).toInt()
+            if (b - a < 2) continue
+            val s = data.copyOfRange(a, b)
+            val f = min(fade, s.size / 4)
+            for (i in 0 until f) {
+                val g = i.toFloat() / f
+                s[i] *= g
+                s[s.size - 1 - i] *= g
+            }
+            out.add(s)
+        }
+        return out
+    }
+
+    /** Kategorie wählen: vorhandene (eingebaute und eigene) oder neue anlegen. */
+    private fun askCategory(title: String, onPick: (String) -> Unit) {
+        val cats = LinkedHashSet<String>()
+        cats.addAll(Projects.userCategories(this))
+        cats.addAll(SampleLibrary.categories)
+        val list = cats.toList()
+        val labels = list.map { it } + "＋ Neue Kategorie …"
+        AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
+            .setTitle("$title · Kategorie")
+            .setItems(labels.toTypedArray()) { _, w ->
+                if (w < list.size) onPick(list[w])
+                else askName("⭐ Meine Sounds", "Neue Kategorie") { c -> onPick(c.trim().ifEmpty { "⭐ Meine Sounds" }) }
+            }
+            .setNegativeButton("Abbrechen", null)
+            .show()
+    }
+
+    private fun askName(def: String, title: String = "Name", onOk: (String) -> Unit) {
+        val d = resources.displayMetrics.density
+        val input = EditText(this).apply {
+            setText(def)
+            setSelectAllOnFocus(true)
+            setTextColor(Color.WHITE)
+        }
+        val box = LinearLayout(this).apply {
+            setPadding((20 * d).toInt(), (8 * d).toInt(), (20 * d).toInt(), 0)
+            addView(input, LinearLayout.LayoutParams(-1, -2))
+        }
+        AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
+            .setTitle(title)
+            .setView(box)
+            .setPositiveButton("OK") { _, _ -> onOk(input.text.toString().trim().ifEmpty { def }) }
+            .setNegativeButton("Abbrechen", null)
+            .show()
+    }
+
+    private fun saveToLibrary(cat: String, parts: List<FloatArray>, name: String, oneShot: Boolean, stem: String?) {
+        val rate = Engine.sampleRate
+        Thread {
+            try {
+                if (parts.size == 1) Projects.saveUserSample(this, cat, name, parts[0], rate, oneShot, stem)
+                else parts.forEachIndexed { i, d -> Projects.saveUserSample(this, cat, name + " · Stem " + String.format(Locale.GERMANY, "%02d", i + 1), d, rate, true, stem) }
+                runOnUiThread { toast(if (parts.size == 1) "★ „$name“ in $cat gespeichert" else "★ ${parts.size} Stems in $cat gespeichert") }
+            } catch (e: Exception) {
+                runOnUiThread { toast("Speichern fehlgeschlagen: ${e.message ?: e}") }
+            }
+        }.start()
+    }
+
+    /** Stems als einzelne WAV-Dateien in einen gewählten Ordner. */
+    private fun exportStems(stems: List<FloatArray>, name: String) {
+        pendingStems = stems
+        pendingStemName = name
+        try {
+            @Suppress("DEPRECATION")
+            startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT_TREE), REQ_STEMS)
+        } catch (e: Exception) {
+            toast("Ordnerauswahl nicht verfügbar")
+        }
+    }
+
+    private fun writeStems(tree: Uri) {
+        val stems = pendingStems ?: return
+        pendingStems = null
+        val rate = Engine.sampleRate
+        val base = pendingStemName.replace(Regex("[^\\w\\- äöüÄÖÜß]"), "_")
+        Thread {
+            var ok = 0
+            try {
+                val dir = android.provider.DocumentsContract.buildDocumentUriUsingTree(tree, android.provider.DocumentsContract.getTreeDocumentId(tree))
+                stems.forEachIndexed { i, d ->
+                    val doc = android.provider.DocumentsContract.createDocument(contentResolver, dir, "audio/wav", base + "_Stem_" + String.format(Locale.GERMANY, "%02d", i + 1) + ".wav")
+                    if (doc != null) contentResolver.openOutputStream(doc)?.use { AudioFiles.writeWav(it, d, rate); ok++ }
+                }
+            } catch (e: Exception) {
+                runOnUiThread { toast("Export fehlgeschlagen: ${e.message ?: e}") }
+            }
+            runOnUiThread { if (ok > 0) toast("$ok Stems exportiert") }
+        }.start()
     }
 
     private fun loadLibrarySample(smp: SampleLibrary.Sample, p: Int) {
@@ -962,6 +1144,7 @@ class MainActivity : Activity() {
         if (resultCode != RESULT_OK || uri == null) return
         val pad = menuPad
         when (requestCode) {
+            REQ_STEMS -> writeStems(uri)
             REQ_IMPORT -> {
                 if (pad < 0) return
                 toast("Importiere …")
@@ -1213,5 +1396,6 @@ class MainActivity : Activity() {
         private const val REQ_SONG = 10
         private const val REQ_PATTERN = 11
         private const val REQ_COPY = 12
+        private const val REQ_STEMS = 13
     }
 }
