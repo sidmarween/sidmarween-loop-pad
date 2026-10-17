@@ -100,6 +100,9 @@ class FrameClock {
  */
 object Engine {
     const val PADS = 16
+    /** Effekt-Ketten: 16 Pads + Mikrofon (Live-Effekte). */
+    const val MIC_CHAIN = PADS
+    const val CHAINS = PADS + 1
     /** Längste Aufnahme (16 Takte bei 60 BPM passen hinein). */
     const val MAX_SECONDS = 66
     private const val MIN_HOLD_NANOS = 180_000_000L
@@ -287,6 +290,30 @@ object Engine {
     }
 
     fun masterFrames(): Long = masterLen
+
+    /** Schlag-Phase (0..1) des Master-Rasters an einem Ausgabe-Frame, oder -1 ohne Tempo. */
+    fun beatPhaseAt(frame: Long): Double {
+        val m = masterLen
+        if (m <= 0L) return -1.0
+        val beat = m / 4.0
+        val r = (frame - masterStart).toDouble() / beat
+        return r - kotlin.math.floor(r)
+    }
+
+    /** Tempo setzen und das Raster so legen, dass an [beatFrame] ein Schlag liegt (DJ-Sync ohne Pads). */
+    fun setBpmAnchored(bpm: Float, beatFrame: Long) {
+        if (masterLen > 0L) {
+            setBpm(bpm)
+            return
+        }
+        val b = bpm.coerceIn(40f, 240f)
+        fixedBpm = b
+        masterLen = (sampleRate * 240.0 / b).toLong()
+        masterStart = beatFrame
+    }
+
+    /** Ausgabe-Frame, der gerade zu hören ist. */
+    fun heardFrame(): Long = outClock.frameAt(System.nanoTime(), sampleRate)
 
     fun seqSnapshot(): Array<FloatArray> = Array(PADS) { seq[it].copyOf() }
 
@@ -653,12 +680,15 @@ object Engine {
     // ---------------------------------------------------------------- Matrix / Piano-Roll (Tastatur-Aufnahme)
 
     /** Eine Note: Position und Länge in Takten (frei, nicht zwingend auf Raster), Halbton, Lautstärke. */
-    class NoteEv(var pos: Double, var len: Double, val semi: Int, val vel: Float) {
+    class NoteEv(var pos: Double, var len: Double, var semi: Int, var vel: Float, var group: Int = 0, val id: Int = nextNoteId()) {
         /** Ausgabe-Frame, vor dem die Note nicht (nochmal) ausgelöst wird – verhindert Doppelschlag nach Live-Aufnahme. */
         @Volatile var validFrom: Long = Long.MIN_VALUE
         var startHeard: Long = 0L
     }
 
+    private var noteIds = 0
+    @Synchronized private fun nextNoteId(): Int = ++noteIds
+    private var groupIds = 0
     private val notes = Array(PADS) { ArrayList<NoteEv>() }
     private val notesLock = Any()
     /** Länge der Matrix je Pad in Takten (1, 2, 4, 8). */
@@ -708,17 +738,21 @@ object Engine {
     fun noteCount(p: Int): Int = if (p in 0 until PADS) synchronized(notesLock) { notes[p].size } else 0
 
     /** Kopie der Noten eines Pads (für Matrix-Ansicht). */
-    fun notesOf(p: Int): List<NoteEv> = synchronized(notesLock) { notes[p].map { NoteEv(it.pos, it.len, it.semi, it.vel) } }
+    fun notesOf(p: Int): List<NoteEv> = synchronized(notesLock) { notes[p].map { NoteEv(it.pos, it.len, it.semi, it.vel, it.group, it.id) } }
 
     /** Für Projekte: [Position in 1/16, Halbton, Länge in 1/16, Lautstärke] je Note. */
     fun getNotes(p: Int): List<FloatArray> = synchronized(notesLock) {
-        notes[p].map { floatArrayOf((it.pos * STEPS).toFloat(), it.semi.toFloat(), (it.len * STEPS).toFloat(), it.vel) }
+        notes[p].map { floatArrayOf((it.pos * STEPS).toFloat(), it.semi.toFloat(), (it.len * STEPS).toFloat(), it.vel, it.group.toFloat()) }
     }
 
     fun setNotes(p: Int, list: List<FloatArray>) {
         synchronized(notesLock) {
             notes[p].clear()
-            for (a in list) if (a.size >= 4) notes[p].add(NoteEv(a[0] / STEPS.toDouble(), a[2] / STEPS.toDouble(), a[1].toInt(), a[3]))
+            for (a in list) if (a.size >= 4) {
+                val g = if (a.size >= 5) a[4].toInt() else 0
+                if (g > groupIds) groupIds = g
+                notes[p].add(NoteEv(a[0] / STEPS.toDouble(), a[2] / STEPS.toDouble(), a[1].toInt(), a[3], g))
+            }
         }
     }
 
@@ -741,12 +775,89 @@ object Engine {
         hit != null
     }
 
-    /** Nachträglich quantisieren: Positionen und Längen aufs Raster (q Teilungen pro Takt). */
-    fun quantizeNotes(p: Int, q: Int) {
+    // ---------------------------------------------------------------- Piano-Roll bearbeiten (Auswahl, Kopieren, Gruppen)
+
+    /** Noten mit diesen IDs (Kopien). */
+    fun notesById(p: Int, ids: Set<Int>): List<NoteEv> = synchronized(notesLock) {
+        notes[p].filter { it.id in ids }.map { NoteEv(it.pos, it.len, it.semi, it.vel, it.group, it.id) }
+    }
+
+    /** Verschiebt Noten um dPos Takte und dSemi Halbtöne (mit Umbruch am Ende der Matrix). */
+    fun moveNotes(p: Int, ids: Set<Int>, dPos: Double, dSemi: Int) {
+        synchronized(notesLock) {
+            val bars = rollBars[p].toDouble()
+            for (n in notes[p]) {
+                if (n.id !in ids) continue
+                var np = n.pos + dPos
+                np = ((np % bars) + bars) % bars
+                n.pos = np
+                n.semi = (n.semi + dSemi).coerceIn(-48, 48)
+            }
+        }
+    }
+
+    /** Länge einer Note ändern (in Takten). */
+    fun setNoteLen(p: Int, id: Int, len: Double) {
+        synchronized(notesLock) { notes[p].firstOrNull { it.id == id }?.len = max(1.0 / 64, len) }
+    }
+
+    fun setNoteVel(p: Int, ids: Set<Int>, vel: Float) {
+        synchronized(notesLock) { for (n in notes[p]) if (n.id in ids) n.vel = vel.coerceIn(0.05f, 1f) }
+    }
+
+    fun deleteNotes(p: Int, ids: Set<Int>) {
+        synchronized(notesLock) { notes[p].removeAll { it.id in ids } }
+    }
+
+    /** Fügt Noten ein (Positionen in Takten) und liefert ihre neuen IDs. Gruppen bleiben als neue Gruppen erhalten. */
+    fun addNotes(p: Int, list: List<NoteEv>): Set<Int> {
+        val out = HashSet<Int>()
+        synchronized(notesLock) {
+            val bars = rollBars[p].toDouble()
+            val gmap = HashMap<Int, Int>()
+            for (n in list) {
+                if (n.pos < 0 || n.pos >= bars) continue
+                val g = if (n.group > 0) gmap.getOrPut(n.group) { ++groupIds } else 0
+                notes[p].removeAll { abs(it.pos - n.pos) < 1e-6 && it.semi == n.semi }
+                val ev = NoteEv(n.pos, min(n.len, bars - n.pos).coerceAtLeast(1.0 / 64), n.semi, n.vel, g)
+                notes[p].add(ev)
+                out.add(ev.id)
+            }
+        }
+        return out
+    }
+
+    /** Gruppieren: alle gleiche Gruppe – oder (wenn schon eine Gruppe) auflösen. Liefert true = gruppiert. */
+    fun toggleGroup(p: Int, ids: Set<Int>): Boolean {
+        synchronized(notesLock) {
+            val sel = notes[p].filter { it.id in ids }
+            if (sel.isEmpty()) return false
+            val g0 = sel[0].group
+            val same = g0 > 0 && sel.all { it.group == g0 } && notes[p].none { it.group == g0 && it.id !in ids }
+            return if (same) {
+                for (n in sel) n.group = 0
+                false
+            } else {
+                val g = ++groupIds
+                for (n in sel) n.group = g
+                true
+            }
+        }
+    }
+
+    /** IDs aller Noten derselben Gruppen (Auswahl erweitert sich auf ganze Gruppen). */
+    fun expandGroups(p: Int, ids: Set<Int>): Set<Int> = synchronized(notesLock) {
+        val gs = notes[p].filter { it.id in ids && it.group > 0 }.map { it.group }.toSet()
+        if (gs.isEmpty()) ids else ids + notes[p].filter { it.group in gs }.map { it.id }
+    }
+
+    /** Nachträglich quantisieren: Positionen und Längen aufs Raster (q Teilungen pro Takt) – nur [ids], wenn angegeben. */
+    fun quantizeNotes(p: Int, q: Int, ids: Set<Int>? = null) {
         if (q <= 0) return
         synchronized(notesLock) {
             val bars = rollBars[p].toDouble()
             for (n in notes[p]) {
+                if (ids != null && n.id !in ids) continue
                 n.pos = qPos(n.pos, q)
                 if (n.pos >= bars) n.pos -= bars
                 n.len = qLen(n.len, q)
@@ -1158,6 +1269,53 @@ object Engine {
 
     private var record: AudioRecord? = null
     private var track: AudioTrack? = null
+
+    // ---------------------------------------------------------------- Latenz
+    /** 0 = Auto (so klein wie möglich, wächst nur bei Aussetzern), 1 = Minimal, 2 = Ausgewogen, 3 = Stabil. */
+    @Volatile var latencyMode = 0
+    val LATENCY_NAMES = arrayOf("AUTO – so klein wie möglich", "MINIMAL – 2 Puffer", "AUSGEWOGEN – 4 Puffer", "STABIL – 8 Puffer")
+    /** Hardware-Puffergröße (Frames), aktuelle Ausgabe-Puffergröße und Aussetzer. */
+    @Volatile var burstFrames = 256
+        private set
+    @Volatile var outBufferFrames = 0
+        private set
+    @Volatile var underruns = 0
+        private set
+    @Volatile var fastPath = false
+        private set
+
+    /** Geschätzte Ausgabe-Latenz in Millisekunden (Puffer der App). */
+    fun outputLatencyMs(): Float = if (sampleRate > 0) outBufferFrames * 1000f / sampleRate else 0f
+
+    // ---------------------------------------------------------------- Live-Mikrofon (Mithören mit Effekten)
+    /** Mikrofon live hören. */
+    @Volatile var monitorOn = false
+    /** Lautstärke beim Mithören. */
+    @Volatile var monitorGain = 0.9f
+    /** true = zusätzlich durch die XY-Master-Effekte (Effekt-Bus). */
+    @Volatile var monitorMaster = false
+    @Volatile var monitorLevel = 0f
+    private var monCursor = -1L
+
+    /** Liefert die neuesten Mikrofon-Samples mit so wenig Verzögerung wie möglich. */
+    private fun fillMonitor(dst: FloatArray, n: Int): Boolean {
+        val c = captured
+        val lag = max(n.toLong(), burstFrames.toLong())
+        if (monCursor < 0 || monCursor + n > c || c - monCursor > lag * 6 + n) monCursor = c - n - lag
+        if (monCursor < 0) {
+            java.util.Arrays.fill(dst, 0, n, 0f)
+            monCursor += n
+            return false
+        }
+        var idx = (monCursor % ringSize).toInt()
+        for (i in 0 until n) {
+            dst[i] = ring[idx]
+            idx++
+            if (idx == ringSize) idx = 0
+        }
+        monCursor += n
+        return true
+    }
     private var recordThread: Thread? = null
     private var mixThread: Thread? = null
 
@@ -1169,7 +1327,9 @@ object Engine {
         error = null
         val am = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
         sampleRate = am.getProperty(AudioManager.PROPERTY_OUTPUT_SAMPLE_RATE)?.toIntOrNull() ?: 48000
-        val burst = am.getProperty(AudioManager.PROPERTY_OUTPUT_FRAMES_PER_BUFFER)?.toIntOrNull() ?: 256
+        val burst = (am.getProperty(AudioManager.PROPERTY_OUTPUT_FRAMES_PER_BUFFER)?.toIntOrNull() ?: 256).coerceIn(32, 2048)
+        burstFrames = burst
+        underruns = 0
         val unprocessed = am.getProperty(AudioManager.PROPERTY_SUPPORT_AUDIO_SOURCE_UNPROCESSED) == "true"
 
         val newSize = sampleRate * (MAX_SECONDS + 2)
@@ -1178,7 +1338,7 @@ object Engine {
         if (outRing.size != newSize) outRing = FloatArray(newSize)
 
         val t: AudioTrack = try {
-            buildTrack()
+            buildTrack(burst)
         } catch (e: Exception) {
             error = e.message ?: e.toString()
             return
@@ -1209,7 +1369,7 @@ object Engine {
         if (fxs == null || fxRate != sampleRate) {
             fxs = Array(SLOTS) { Fx(sampleRate) }
             fxRate = sampleRate
-            for (p in 0 until PADS) for (sl in 0 until 3) if (pfxInst[p][sl] != null) pfxInst[p][sl] = Fx(sampleRate)
+            for (p in 0 until CHAINS) for (sl in 0 until 3) if (pfxInst[p][sl] != null) pfxInst[p][sl] = Fx(sampleRate)
         }
 
         captured = 0L
@@ -1234,7 +1394,7 @@ object Engine {
         repeatAllUp()
         lastWritten = 0L
 
-        val block = max(64, min(burst, t.bufferSizeInFrames / 2))
+        val block = max(32, min(burst, t.bufferSizeInFrames / 2))
         running = true
         try {
             t.play()
@@ -1245,7 +1405,7 @@ object Engine {
             releaseDevices()
             return
         }
-        recordThread = Thread({ recordLoop(r) }, "LoopPad-Record").also { it.start() }
+        recordThread = Thread({ recordLoop(r, burst) }, "LoopPad-Record").also { it.start() }
         mixThread = Thread({ mixLoop(t, block) }, "LoopPad-Mix").also { it.start() }
     }
 
@@ -1274,8 +1434,10 @@ object Engine {
         track = null
     }
 
-    private fun buildTrack(): AudioTrack {
-        val minBuf = AudioTrack.getMinBufferSize(sampleRate, AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_FLOAT)
+    private fun bufferBursts(): Int = when (latencyMode) { 1 -> 2; 2 -> 4; 3 -> 8; else -> 2 }
+
+    private fun buildTrack(burst: Int): AudioTrack {
+        val minBuf = AudioTrack.getMinBufferSize(sampleRate, AudioFormat.CHANNEL_OUT_STEREO, AudioFormat.ENCODING_PCM_FLOAT)
         val t = AudioTrack.Builder()
             .setAudioAttributes(
                 AudioAttributes.Builder()
@@ -1287,10 +1449,10 @@ object Engine {
                 AudioFormat.Builder()
                     .setEncoding(AudioFormat.ENCODING_PCM_FLOAT)
                     .setSampleRate(sampleRate)
-                    .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
+                    .setChannelMask(AudioFormat.CHANNEL_OUT_STEREO)
                     .build()
             )
-            .setBufferSizeInBytes(max(minBuf, 4 * 256 * 4))
+            .setBufferSizeInBytes(max(minBuf, 8 * burst * 8))
             .setTransferMode(AudioTrack.MODE_STREAM)
             .setPerformanceMode(AudioTrack.PERFORMANCE_MODE_LOW_LATENCY)
             .build()
@@ -1298,6 +1460,10 @@ object Engine {
             t.release()
             throw IllegalStateException("Audioausgabe konnte nicht gestartet werden")
         }
+        // Puffer so klein wie möglich: wenige Hardware-Bursts (niedrige Latenz beim Antippen)
+        try { t.setBufferSizeInFrames(burst * bufferBursts()) } catch (ignored: Exception) {}
+        outBufferFrames = t.bufferSizeInFrames
+        fastPath = try { t.performanceMode == AudioTrack.PERFORMANCE_MODE_LOW_LATENCY } catch (e: Throwable) { false }
         return t
     }
 
@@ -1313,7 +1479,7 @@ object Engine {
                     .setChannelMask(AudioFormat.CHANNEL_IN_MONO)
                     .build()
             )
-            .setBufferSizeInBytes(max(minBuf * 2, 8192))
+            .setBufferSizeInBytes(max(minBuf, 4096))
             .build()
         if (rec.state != AudioRecord.STATE_INITIALIZED) {
             rec.release()
@@ -1324,9 +1490,10 @@ object Engine {
 
     // ---------------------------------------------------------------- Aufnahme
 
-    private fun recordLoop(rec: AudioRecord) {
+    private fun recordLoop(rec: AudioRecord, burst: Int) {
         Process.setThreadPriority(Process.THREAD_PRIORITY_URGENT_AUDIO)
-        val chunk = ShortArray(256)
+        // kleine Lesehappen = Mikrofon sofort im Ringpuffer (Live-Effekte, Overdub)
+        val chunk = ShortArray(burst.coerceIn(64, 512))
         val ts = AudioTimestamp()
         while (running) {
             val n = try { rec.read(chunk, 0, chunk.size) } catch (ignored: Exception) { -1 }
@@ -1560,7 +1727,16 @@ object Engine {
         val instScratch = FloatArray(block)
         val padBufs = Array(PADS) { FloatArray(block) }
         val chainNow = BooleanArray(PADS)
+        val monBuf = FloatArray(block)
+        val djL = FloatArray(block)
+        val djR = FloatArray(block)
+        val cue = FloatArray(block)
+        val mono = FloatArray(block)
+        val stereo = FloatArray(block * 2)
+        var lastUnder = try { t.underrunCount } catch (e: Throwable) { 0 }
+        var blocks = 0
         micCursor = -1L
+        monCursor = -1L
         val ts = AudioTimestamp()
         while (running) {
             java.util.Arrays.fill(out, 0f)
@@ -1598,7 +1774,11 @@ object Engine {
                 val d = loop.data
                 val len = d.size
                 if (loop.oneShot) {
-                    val ss = loop.shotStart
+                    var ss = loop.shotStart
+                    if (ss == SHOT_NOW) {
+                        ss = w
+                        loop.shotStart = w
+                    }
                     var peak = 0f
                     if (ss != Long.MIN_VALUE && len > 1) {
                         val rate = loop.rate
@@ -1681,6 +1861,34 @@ object Engine {
             renderVoices(out, bus, block, w, chainNow, padBufs)
             // Effekt-Kette je Pad (bis zu 3 Effekte), danach in den Mix
             val micP = fillMic(micBuf, block)
+            // Live-Mikrofon: sofort hören, mit eigener Effekt-Kette (bis zu 3) und/oder über die XY-Effekte
+            if (monitorOn) {
+                if (fillMonitor(monBuf, block)) {
+                    val g = monitorGain
+                    for (i in 0 until block) monBuf[i] *= g
+                    if (padChainActive(MIC_CHAIN)) {
+                        for (sl in 0 until 3) {
+                            val ty = pfxType[MIC_CHAIN][sl]
+                            val fx = pfxInst[MIC_CHAIN][sl] ?: continue
+                            if (ty < 0) continue
+                            val pr = pfxPar[MIC_CHAIN][sl]
+                            fx.process(monBuf, block, w, ty, pr[0], pr[1], true, pr[2], pr[3], pr[4], masterLen, masterStart, micP)
+                        }
+                    }
+                    var mp = 0f
+                    val dst = if (monitorMaster) bus else out
+                    for (i in 0 until block) {
+                        val v = monBuf[i]
+                        dst[i] += v
+                        val a = abs(v)
+                        if (a > mp) mp = a
+                    }
+                    monitorLevel = max(mp, monitorLevel * 0.9f)
+                }
+            } else {
+                monCursor = -1L
+                monitorLevel *= 0.9f
+            }
             for (p in 0 until PADS) {
                 if (!chainNow[p]) continue
                 val pb = padBufs[p]
@@ -1717,15 +1925,44 @@ object Engine {
                 }
             }
             for (i in 0 until block) out[i] += bus[i]
-            writeOutRing(out, w, block)
+            // DJ-Decks (Stereo) – laufen am Master vorbei, haben eigene EQs/Filter/Effekte
+            val djOn = Dj.render(djL, djR, cue, block, w)
+            if (djOn) {
+                for (i in 0 until block) mono[i] = out[i] + (djL[i] + djR[i]) * 0.5f
+                writeOutRing(mono, w, block)
+            } else {
+                writeOutRing(out, w, block)
+            }
             processResampleTakes(w, block)
             val vol = knobs[3] * 1.25f
             var mpeak = 0f
-            for (i in 0 until block) {
-                val y = softClip(out[i] * vol)
-                out[i] = y
-                val a = abs(y)
-                if (a > mpeak) mpeak = a
+            if (djOn) {
+                // Stereo: Pads (mono) + Decks; mit Split-Cue links Master (mono), rechts Vorhören
+                val split = Dj.splitCue
+                val cg = Dj.cueGain
+                for (i in 0 until block) {
+                    val m = out[i]
+                    var l = softClip((m + djL[i]) * vol)
+                    var r = softClip((m + djR[i]) * vol)
+                    if (split) {
+                        val mm = (l + r) * 0.5f
+                        l = mm
+                        r = softClip(cue[i] * cg)
+                    }
+                    stereo[2 * i] = l
+                    stereo[2 * i + 1] = r
+                    val y = (l + r) * 0.5f
+                    out[i] = y
+                    val a = max(abs(l), abs(r))
+                    if (a > mpeak) mpeak = a
+                }
+            } else {
+                for (i in 0 until block) {
+                    val y = softClip(out[i] * vol)
+                    out[i] = y
+                    val a = abs(y)
+                    if (a > mpeak) mpeak = a
+                }
             }
             outputLevel = max(mpeak, outputLevel * 0.9f)
             if (songRecording) {
@@ -1743,16 +1980,56 @@ object Engine {
             }
             scopeW = sp
 
-            if (metronome && transport && (countTo == Long.MIN_VALUE || w >= countTo)) addClicks(out, w, block)
-            if (countTo != Long.MIN_VALUE) countClicks(out, w, block)
+            val splitNow = djOn && Dj.splitCue
+            if (splitNow) java.util.Arrays.fill(mono, 0f)
+            val clickTo = if (splitNow) mono else out
+            if (metronome && transport && (countTo == Long.MIN_VALUE || w >= countTo)) addClicks(clickTo, w, block)
+            if (countTo != Long.MIN_VALUE) countClicks(clickTo, w, block)
+            if (djOn) {
+                if (Dj.splitCue) {
+                    // Klick nur auf dem Vorhör-Kanal
+                    for (i in 0 until block) stereo[2 * i + 1] = softClip(stereo[2 * i + 1] + mono[i])
+                } else {
+                    for (i in 0 until block) {
+                        val c = out[i] - (stereo[2 * i] + stereo[2 * i + 1]) * 0.5f
+                        if (c != 0f) {
+                            stereo[2 * i] += c
+                            stereo[2 * i + 1] += c
+                        }
+                    }
+                }
+            } else {
+                for (i in 0 until block) {
+                    val y = out[i]
+                    stereo[2 * i] = y
+                    stereo[2 * i + 1] = y
+                }
+            }
             var off = 0
-            while (off < block && running) {
-                val r = try { t.write(out, off, block - off, AudioTrack.WRITE_BLOCKING) } catch (ignored: Exception) { -1 }
+            val total = block * 2
+            while (off < total && running) {
+                val r = try { t.write(stereo, off, total - off, AudioTrack.WRITE_BLOCKING) } catch (ignored: Exception) { -1 }
                 if (r <= 0) {
                     Thread.sleep(5)
                     break
                 }
                 off += r
+            }
+            // Auto-Latenz: nur bei Aussetzern den Puffer um einen Burst vergrößern
+            if (++blocks % 32 == 0) {
+                val u = try { t.underrunCount } catch (e: Throwable) { 0 }
+                if (u > lastUnder) {
+                    underruns += u - lastUnder
+                    lastUnder = u
+                    if (latencyMode == 0) {
+                        val cur = t.bufferSizeInFrames
+                        val cap = burstFrames * 8
+                        if (cur < cap) {
+                            try { t.setBufferSizeInFrames(min(cap, cur + burstFrames)) } catch (ignored: Exception) {}
+                        }
+                    }
+                }
+                outBufferFrames = t.bufferSizeInFrames
             }
             written = w + block
             updateOutClock(t, ts)
@@ -1798,7 +2075,10 @@ object Engine {
     // ---------------------------------------------------------------- Steuerung (UI-Thread)
 
     /** Gibt true zurück, wenn ein ONE SHOT angeschlagen wurde (keine Aufnahme). */
-    fun padDown(p: Int): Boolean {
+    /** Marke: ONE SHOT startet im nächsten berechneten Block (kein abgeschnittener Anschlag). */
+    const val SHOT_NOW = Long.MAX_VALUE - 7
+
+    fun padDown(p: Int, velocity: Float = 1f): Boolean {
         if (!running) return false
         val existing = takes.get(p)
         if (existing != null) {
@@ -1827,8 +2107,8 @@ object Engine {
                 // Liegt der Rasterpunkt noch vor uns, spielt ihn gleich der Sequenzer – kein Doppelschlag
                 if (f >= written) return true
             }
-            loop.shotGain = 1f
-            loop.shotStart = written
+            loop.shotGain = velocity
+            loop.shotStart = SHOT_NOW
             return true
         }
         val now = System.nanoTime()
@@ -2032,9 +2312,58 @@ object Engine {
         val l = loops.get(p) ?: return -1f
         val ss = l.shotStart
         if (!l.oneShot || ss == Long.MIN_VALUE || l.data.isEmpty()) return -1f
+        if (ss == SHOT_NOW) return 0f
         val rel = outClock.frameAt(System.nanoTime(), sampleRate) - ss
         if (rel < 0 || rel >= l.data.size) return -1f
         return rel.toFloat() / l.data.size
+    }
+
+    /** Loops starten schon beim Berühren (nicht erst beim Loslassen). */
+    @Volatile var instantStart = true
+    /** Auch Stoppen beim Berühren (dann kein Overdub per Halten auf laufenden Loops). */
+    @Volatile var instantStop = false
+
+    /** Ergebnis von [liveDown]: Bit 1 = ONE SHOT angeschlagen, Bit 2 = Loop beim Berühren gestartet/gestoppt. */
+    const val LIVE_SHOT = 1
+    const val LIVE_LAUNCHED = 2
+
+    /**
+     * Pad gedrückt (Touch oder MIDI) – reagiert sofort: ONE SHOTS klingen im nächsten Block,
+     * gestoppte Loops starten beim Berühren (im Start-Raster bzw. phasenrichtig im Takt).
+     */
+    fun liveDown(p: Int, velocity: Float = 1f): Int {
+        val l = loops.get(p)
+        val wasMuted = l != null && !l.oneShot && (l.muted || !seqPlaying) && l.pendAt == Long.MIN_VALUE
+        val wasPlaying = l != null && !l.oneShot && !l.muted && seqPlaying && l.pendAt == Long.MIN_VALUE
+        val existing = takes.get(p)
+        if (padDown(p, velocity)) return LIVE_SHOT
+        if (existing != null || takes.get(p)?.let { it.live } == true) return 0
+        if (l != null && instantStart && wasMuted) {
+            launchToggle(p)
+            return LIVE_LAUNCHED
+        }
+        if (l != null && instantStop && wasPlaying) {
+            takes.set(p, null)
+            launchToggle(p)
+            return LIVE_LAUNCHED
+        }
+        return 0
+    }
+
+    /** Pad losgelassen (Touch oder MIDI). Liefert true, wenn es ein kurzer Tipp war. */
+    fun liveUp(p: Int, launchedOnDown: Boolean): Boolean {
+        val hadLoop = hasLoop(p)
+        if (launchedOnDown) {
+            // schon beim Berühren gestartet: ein kurzer Tipp rastet keinen Overdub ein
+            val t = takes.get(p) ?: return true
+            if (!t.live && !t.released && !t.latched && System.nanoTime() - t.downNanos < MIN_HOLD_NANOS) {
+                takes.compareAndSet(p, t, null)
+                return true
+            }
+        }
+        val tap = padUp(p)
+        if (tap && hadLoop && !launchedOnDown) launchToggle(p)
+        return tap
     }
 
     /** Gibt true zurück, wenn es nur ein kurzer Tipp war (keine Aufnahme). */
@@ -2879,19 +3208,19 @@ object Engine {
     // ================================================================ Effekte je Pad (bis zu 3 pro Pad)
 
     /** Effekt-Kette des Pads an/aus (kleiner FX-Knopf am Pad). */
-    val padChainOn = BooleanArray(PADS)
+    val padChainOn = BooleanArray(CHAINS)
     /** Effekt je Platz (-1 = leer). */
-    val pfxType = Array(PADS) { IntArray(3) { -1 } }
+    val pfxType = Array(CHAINS) { IntArray(3) { -1 } }
     /** X, Y, MIX, P1, P2 je Platz. */
-    val pfxPar = Array(PADS) { Array(3) { floatArrayOf(0.5f, 0.5f, 1f, 0.5f, 0.5f) } }
-    private val pfxInst = Array(PADS) { arrayOfNulls<Fx>(3) }
+    val pfxPar = Array(CHAINS) { Array(3) { floatArrayOf(0.5f, 0.5f, 1f, 0.5f, 0.5f) } }
+    private val pfxInst = Array(CHAINS) { arrayOfNulls<Fx>(3) }
 
-    fun padChainActive(p: Int): Boolean = p in 0 until PADS && padChainOn[p] && pfxType[p].any { it >= 0 }
+    fun padChainActive(p: Int): Boolean = p in 0 until CHAINS && padChainOn[p] && pfxType[p].any { it >= 0 }
 
     fun padFxCount(p: Int): Int = pfxType[p].count { it >= 0 }
 
     fun setPadFxType(p: Int, slot: Int, type: Int) {
-        if (p !in 0 until PADS || slot !in 0 until 3) return
+        if (p !in 0 until CHAINS || slot !in 0 until 3) return
         if (type < 0) {
             pfxType[p][slot] = -1
             pfxInst[p][slot] = null
@@ -2906,7 +3235,7 @@ object Engine {
 
     fun padFxToJson(): org.json.JSONArray {
         val a = org.json.JSONArray()
-        for (p in 0 until PADS) {
+        for (p in 0 until CHAINS) {
             val o = org.json.JSONObject()
             o.put("on", padChainOn[p])
             val sl = org.json.JSONArray()
@@ -2923,12 +3252,12 @@ object Engine {
     }
 
     fun padFxFromJson(a: org.json.JSONArray?) {
-        for (p in 0 until PADS) {
+        for (p in 0 until CHAINS) {
             padChainOn[p] = false
             for (k in 0 until 3) setPadFxType(p, k, -1)
         }
         if (a == null) return
-        for (p in 0 until min(PADS, a.length())) {
+        for (p in 0 until min(CHAINS, a.length())) {
             val o = a.optJSONObject(p) ?: continue
             padChainOn[p] = o.optBoolean("on", false)
             val sl = o.optJSONArray("slots") ?: continue

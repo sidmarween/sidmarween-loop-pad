@@ -455,6 +455,8 @@ class PadView(context: Context) : View(context) {
     private val flash = FloatArray(Engine.PADS)
     private val pointerPad = HashMap<Int, Int>()
     private val shotPointers = HashSet<Int>()
+    /** Pointer, deren Loop schon beim Berühren gestartet/gestoppt wurde. */
+    private val launchedPointers = HashSet<Int>()
     private val lastTap = LongArray(Engine.PADS)
     /** Alter Lösch-Modus = jetzt ERASE in der Funktionsleiste. */
     private var clearMode: Boolean
@@ -2441,6 +2443,8 @@ class PadView(context: Context) : View(context) {
 
     @SuppressLint("ClickableViewAccessibility")
     override fun onTouchEvent(e: MotionEvent): Boolean {
+        // Touch-Ereignisse sofort zustellen statt im Bildtakt gesammelt (spart bis zu 16 ms)
+        if (e.actionMasked == MotionEvent.ACTION_DOWN) try { requestUnbufferedDispatch(e) } catch (ignored: Throwable) {}
         if (infoMode && message == null && (e.actionMasked == MotionEvent.ACTION_DOWN || e.actionMasked == MotionEvent.ACTION_POINTER_DOWN)) {
             val ix = e.getX(e.actionIndex)
             val iy = e.getY(e.actionIndex)
@@ -2676,7 +2680,9 @@ class PadView(context: Context) : View(context) {
                 }
                 pointerPad[id] = p
                 downXY[id] = floatArrayOf(x, y)
-                val shot = Engine.padDown(p)
+                val res = Engine.liveDown(p)
+                val shot = (res and Engine.LIVE_SHOT) != 0
+                if ((res and Engine.LIVE_LAUNCHED) != 0) launchedPointers.add(id) else launchedPointers.remove(id)
                 if (shot) {
                     shotPointers.add(id)
                     // Note Repeat: gehaltenes ⚡-Pad wiederholt im Raster
@@ -2814,7 +2820,7 @@ class PadView(context: Context) : View(context) {
                     Engine.repeatPadUp(p)
                     return true
                 }
-                release(p, e.getX(idx), e.getY(idx))
+                release(p, e.getX(idx), e.getY(idx), launchedPointers.remove(upId))
             }
             MotionEvent.ACTION_CANCEL -> {
                 instRelease()
@@ -2843,19 +2849,19 @@ class PadView(context: Context) : View(context) {
                 for ((pid, pad) in pointerPad) if (!shotPointers.contains(pid)) held.add(pad)
                 pointerPad.clear()
                 shotPointers.clear()
-                for (p in held) release(p, padRects[p].centerX(), padRects[p].centerY())
+                for (p in held) release(p, padRects[p].centerX(), padRects[p].centerY(), false)
+                launchedPointers.clear()
             }
         }
         return true
     }
 
-    private fun release(p: Int, x: Float, y: Float) {
+    private fun release(p: Int, x: Float, y: Float, launchedOnDown: Boolean) {
         val hadLoop = Engine.hasLoop(p)
-        val tap = Engine.padUp(p)
+        val tap = Engine.liveUp(p, launchedOnDown)
         if (tap) {
-            if (hadLoop) {
+            if (hadLoop && !launchedOnDown) {
                 // Antippen startet/stoppt den Loop – quantisiert auf das Start-Raster (Ableton-Prinzip)
-                Engine.launchToggle(p)
                 flash[p] = 1f
                 burst(x, y, padAccent(p), 18, 200f)
             }
@@ -4378,8 +4384,18 @@ class PadView(context: Context) : View(context) {
     private val kbHeld = HashSet<Int>()
     private var kbLastSemi = 0
 
+    /** MIDI: Pad kurz aufleuchten lassen. */
+    fun midiFlash(p: Int) {
+        if (p in 0 until VISIBLE_PADS) flash[p] = 1f
+    }
+
     fun openKeyboard(p: Int) {
         kbPad = p
+        Midi.openRollPad = p
+        mxSel.clear()
+        mxInsert = -1.0
+        mxZoom = 1f
+        mxScroll = 0.0
         kbTake = false
         kbLastSemi = Engine.padSemi[p]
         layoutKeyboard()
@@ -4404,20 +4420,29 @@ class PadView(context: Context) : View(context) {
         val toolTop = kbClose.bottom + dp(8f)
         val th = dp(30f)
         val inner = RectF(kbRect.left + dp(8f), toolTop, kbRect.right - dp(8f), toolTop + th)
-        val n = 4
         val gap = dp(6f)
-        val bw = (inner.width() - (n - 1) * gap) / n
-        mxBars.set(inner.left, inner.top, inner.left + bw, inner.bottom)
-        mxRaster.set(mxBars.right + gap, inner.top, mxBars.right + gap + bw, inner.bottom)
-        mxQuant.set(mxRaster.right + gap, inner.top, mxRaster.right + gap + bw, inner.bottom)
-        mxClear.set(mxQuant.right + gap, inner.top, inner.right, inner.bottom)
+        fun row(rs: Array<RectF>, r: RectF) {
+            val bw = (r.width() - (rs.size - 1) * gap) / rs.size
+            for (i in rs.indices) rs[i].set(r.left + i * (bw + gap), r.top, r.left + i * (bw + gap) + bw, r.bottom)
+        }
+        var gridTop = inner.bottom + dp(8f)
+        if (songView) {
+            row(arrayOf(mxBars, mxRaster, mxQuant, mxClear), inner)
+            for (r in mxEditBtns) r.setEmpty()
+        } else {
+            // Zeile 1: Länge, Raster, Werkzeug, Zoom, Leeren · Zeile 2: Bearbeiten
+            row(arrayOf(mxBars, mxRaster, mxMode, mxZoomOut, mxZoomIn, mxClear), inner)
+            val r2 = RectF(inner.left, inner.bottom + dp(6f), inner.right, inner.bottom + dp(6f) + th)
+            row(mxEditBtns, r2)
+            gridTop = r2.bottom + dp(8f)
+        }
         // Hauptbereich: links Klaviatur (bzw. Spurnamen), rechts Matrix
-        kbKeysRect.set(kbRect.left + dp(8f), inner.bottom + dp(8f), kbRect.right - dp(8f), kbTakeBtn.top - dp(8f))
+        kbKeysRect.set(kbRect.left + dp(8f), gridTop, kbRect.right - dp(8f), kbTakeBtn.top - dp(8f))
         val km = kbKeysRect
-        val keyW = max(dp(52f), km.width() * 0.17f)
+        val keyW = max(dp(46f), km.width() * 0.15f)
         kbPiano.set(km.left, km.top, km.left + keyW, km.bottom)
         mxGrid.set(kbPiano.right + dp(3f), km.top, km.right, km.bottom)
-        mxRows = (km.height() / dp(15f)).toInt().coerceIn(12, 36)
+        mxRows = (km.height() / (dp(15f) * mxRowZoom)).toInt().coerceIn(6, 72)
     }
 
     private fun closeKeyboard() {
@@ -4427,6 +4452,7 @@ class PadView(context: Context) : View(context) {
         kbHeld.clear()
         songPaintPointer = -1
         kbPad = -1
+        Midi.openRollPad = -1
     }
 
     private val noteNames = arrayOf("C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "H")
@@ -4481,7 +4507,7 @@ class PadView(context: Context) : View(context) {
                 if (!kbRect.contains(x, y)) return false
                 layoutKeyboard()
                 if (songView && songTouchDown(id, x, y)) return true
-                if (!songView && matrixTouch(x, y)) return true
+                if (!songView && matrixTouch(id, x, y)) return true
                 when {
                     kbMatrixBtn.contains(x, y) -> {
                         songView = !songView
@@ -4514,6 +4540,10 @@ class PadView(context: Context) : View(context) {
             }
             MotionEvent.ACTION_MOVE -> {
                 var used = false
+                if (mxPtr >= 0 && !songView) {
+                    mxGridMove(e)
+                    used = true
+                }
                 for (pi in 0 until e.pointerCount) {
                     val id = e.getPointerId(pi)
                     if (id == songPaintPointer) {
@@ -4537,6 +4567,10 @@ class PadView(context: Context) : View(context) {
                     songPaintPointer = -1
                     return true
                 }
+                if (id == mxPtr || id == mxPtr2) {
+                    mxGridUp(id)
+                    return true
+                }
                 if (kbPointers.containsKey(id)) {
                     kbNoteOff(id)
                     return true
@@ -4546,6 +4580,9 @@ class PadView(context: Context) : View(context) {
             MotionEvent.ACTION_CANCEL -> {
                 for (id in ArrayList(kbPointers.keys)) kbNoteOff(id)
                 songPaintPointer = -1
+                mxDrag = MX_NONE
+                mxPtr = -1
+                mxPtr2 = -1
                 return false
             }
         }
@@ -4644,15 +4681,356 @@ class PadView(context: Context) : View(context) {
     private fun layoutMatrix() = layoutKeyboard()
 
     /** Halbton der obersten Zeile. */
-    private fun mxTopSemi(): Int = -12 + kbOctave * 12 + mxRows - 1
+    private fun mxTopSemi(): Int = -12 + kbOctave * 12 + mxSemiOff + mxRows - 1
 
-    private fun matrixTouch(x: Float, y: Float): Boolean {
+    // ---- Zoom, Auswahl, Zwischenablage
+    private val mxMode = RectF()
+    private val mxZoomOut = RectF()
+    private val mxZoomIn = RectF()
+    private val mxAll = RectF()
+    private val mxCopy = RectF()
+    private val mxPaste = RectF()
+    private val mxDel = RectF()
+    private val mxGroup = RectF()
+    private val mxEditBtns = arrayOf(mxAll, mxCopy, mxPaste, mxDel, mxGroup, mxQuant)
+    /** false = ✏ Stift (setzen/löschen/ziehen), true = ⬚ Auswahl (markieren, Rahmen ziehen, verschieben). */
+    private var mxSelMode = false
+    /** Horizontaler Zoom (1 = ganze Matrix sichtbar) und Startposition der Ansicht in Takten. */
+    private var mxZoom = 1f
+    private var mxScroll = 0.0
+    /** Zeilenhöhe (vertikaler Zoom) und Verschiebung in Halbtönen. */
+    private var mxRowZoom = 1f
+    private var mxSemiOff = 0
+    private val mxSel = HashSet<Int>()
+    private var mxClip: List<Engine.NoteEv> = emptyList()
+    private var mxClipSpan = 0.0
+    /** Einfügemarke in Takten (-1 = keine). */
+    private var mxInsert = -1.0
+
+    private val MX_NONE = 0
+    private val MX_MOVE = 1
+    private val MX_RESIZE = 2
+    private val MX_RUBBER = 3
+    private val MX_PINCH = 4
+    private var mxDrag = MX_NONE
+    private var mxPtr = -1
+    private var mxPtr2 = -1
+    private var mxDownX = 0f
+    private var mxDownY = 0f
+    private var mxMoved = false
+    private var mxNoteId = -1
+    private var mxNoteLen0 = 0.0
+    private var mxNotePos0 = 0.0
+    private var mxAppliedPos = 0.0
+    private var mxAppliedSemi = 0
+    private var mxTapRemoves = false
+    private var mxNewNote = false
+    private val mxRubber = RectF()
+    private var pz0 = 1f
+    private var pzRow0 = 1f
+    private var pzScroll0 = 0.0
+    private var pzSemi0 = 0
+    private var pzSpanX0 = 0f
+    private var pzSpanY0 = 0f
+    private var pzFocusPos0 = 0.0
+    private var pzFocusY0 = 0f
+
+    private fun mxBarsOf(): Int = Engine.rollBars[kbPad]
+    private fun mxView(): Double = mxBarsOf() / mxZoom.toDouble()
+    private fun clampScroll() {
+        val bars = mxBarsOf().toDouble()
+        mxScroll = mxScroll.coerceIn(0.0, max(0.0, bars - mxView()))
+    }
+    private fun posToX(pos: Double): Float = mxGrid.left + ((pos - mxScroll) / mxView()).toFloat() * mxGrid.width()
+    private fun xToPos(x: Float): Double = mxScroll + ((x - mxGrid.left) / mxGrid.width()).toDouble() * mxView()
+    private fun rowH(): Float = mxGrid.height() / mxRows
+    private fun yToSemi(y: Float): Int = mxTopSemi() - ((y - mxGrid.top) / rowH()).toInt().coerceIn(0, mxRows - 1)
+    private fun semiToY(semi: Int): Float = mxGrid.top + (mxTopSemi() - semi) * rowH()
+    private fun mxQ(): Int = if (Engine.rollQuant > 0) Engine.rollQuant else 16
+    private fun snap(pos: Double): Double { val q = mxQ(); return kotlin.math.floor(pos * q + 1e-9) / q }
+    private fun snapRound(d: Double): Double { val q = mxQ(); return kotlin.math.round(d * q) / q.toDouble() }
+
+    private fun noteAt(x: Float, y: Float): Engine.NoteEv? {
+        val semi = yToSemi(y)
+        val pos = xToPos(x)
+        val slack = (mxView() * dp(4f) / mxGrid.width())
+        return Engine.notesOf(kbPad).lastOrNull { it.semi == semi && pos >= it.pos - slack && pos < it.pos + it.len + slack }
+    }
+
+    private fun setZoom(z: Float, focusPos: Double? = null) {
+        val fp = focusPos ?: (mxScroll + mxView() / 2)
+        val frac = (fp - mxScroll) / mxView()
+        mxZoom = z.coerceIn(1f, 32f)
+        mxScroll = fp - frac * mxView()
+        clampScroll()
+    }
+
+    private fun mxGridDown(id: Int, x: Float, y: Float) {
+        val p = kbPad
+        if (mxPtr >= 0 && mxPtr != id) {
+            // zweiter Finger: Zoom (auseinander/zusammen) und Verschieben – solange noch nichts verschoben wurde
+            if (mxDrag == MX_MOVE && mxMoved || mxDrag == MX_RESIZE && mxMoved) return
+            if (mxDrag == MX_RESIZE && mxNewNote) Engine.deleteNotes(p, setOf(mxNoteId))
+            mxPtr2 = id
+            mxDrag = MX_PINCH
+            pzSpanX0 = -1f
+            return
+        }
+        mxPtr = id
+        mxDownX = x
+        mxDownY = y
+        mxMoved = false
+        mxNewNote = false
+        mxAppliedPos = 0.0
+        mxAppliedSemi = 0
+        val hit = noteAt(x, y)
+        if (hit != null) {
+            val x1 = posToX(hit.pos + hit.len)
+            val edge = max(dp(12f), (x1 - posToX(hit.pos)) * 0.25f)
+            if (!mxSelMode && x > x1 - edge) {
+                mxDrag = MX_RESIZE
+                mxNoteId = hit.id
+                mxNoteLen0 = hit.len
+                mxNotePos0 = hit.pos
+                return
+            }
+            mxDrag = MX_MOVE
+            mxNoteId = hit.id
+            if (mxSelMode) {
+                if (hit.id in mxSel) mxTapRemoves = true
+                else {
+                    mxTapRemoves = false
+                    mxSel.addAll(Engine.expandGroups(p, setOf(hit.id)))
+                }
+            } else {
+                // Stift: Note (bzw. Auswahl, wenn sie dazugehört) ziehen; antippen löscht
+                mxTapRemoves = true
+                if (hit.id !in mxSel) {
+                    mxSel.clear()
+                    mxSel.addAll(Engine.expandGroups(p, setOf(hit.id)))
+                }
+            }
+            val v = Engine.noteOn(p, hit.semi)
+            postDelayed({ Engine.noteOff(v) }, 160L)
+            return
+        }
+        if (mxSelMode) {
+            mxDrag = MX_RUBBER
+            mxRubber.set(x, y, x, y)
+            return
+        }
+        // Stift auf leerem Feld: Note setzen, nach rechts ziehen = länger
+        val q = mxQ()
+        val pos = snap(xToPos(x).coerceIn(0.0, mxBarsOf() - 1e-6))
+        val semi = yToSemi(y)
+        Engine.pushPatternUndo("Note")
+        val ids = Engine.addNotes(p, listOf(Engine.NoteEv(pos, 1.0 / q, semi, 1f)))
+        mxSel.clear()
+        mxDrag = MX_RESIZE
+        mxNewNote = true
+        mxNoteId = ids.firstOrNull() ?: -1
+        mxNoteLen0 = 1.0 / q
+        mxNotePos0 = pos
+        val v = Engine.noteOn(p, semi)
+        postDelayed({ Engine.noteOff(v) }, 180L)
+        performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+    }
+
+    private fun mxGridMove(e: MotionEvent) {
+        val p = kbPad
+        if (mxDrag == MX_PINCH) {
+            val i1 = e.findPointerIndex(mxPtr)
+            val i2 = e.findPointerIndex(mxPtr2)
+            if (i1 < 0 || i2 < 0) return
+            val x1 = e.getX(i1); val y1 = e.getY(i1); val x2 = e.getX(i2); val y2 = e.getY(i2)
+            val sx = abs(x2 - x1); val sy = abs(y2 - y1)
+            val fx = (x1 + x2) / 2; val fy = (y1 + y2) / 2
+            if (pzSpanX0 < 0f) {
+                pzSpanX0 = sx; pzSpanY0 = sy
+                pz0 = mxZoom; pzRow0 = mxRowZoom
+                pzScroll0 = mxScroll; pzSemi0 = mxSemiOff
+                pzFocusPos0 = xToPos(fx)
+                pzFocusY0 = fy
+                return
+            }
+            if (pzSpanX0 > dp(40f)) mxZoom = (pz0 * sx / pzSpanX0).coerceIn(1f, 32f)
+            if (pzSpanY0 > dp(40f)) {
+                mxRowZoom = (pzRow0 * sy / pzSpanY0).coerceIn(0.5f, 3f)
+                layoutKeyboard()
+            }
+            // Position unter den Fingern bleibt stehen (Verschieben mit zwei Fingern)
+            val frac = ((fx - mxGrid.left) / mxGrid.width()).toDouble()
+            mxScroll = pzFocusPos0 - frac * mxView()
+            clampScroll()
+            mxSemiOff = (pzSemi0 + ((fy - pzFocusY0) / rowH()).toInt()).coerceIn(-36, 36)
+            return
+        }
+        val i = e.findPointerIndex(mxPtr)
+        if (i < 0) return
+        val x = e.getX(i); val y = e.getY(i)
+        if (!mxMoved && abs(x - mxDownX) < dp(6f) && abs(y - mxDownY) < dp(6f)) return
+        if (!mxMoved) {
+            mxMoved = true
+            if (mxDrag == MX_MOVE) Engine.pushPatternUndo("Noten verschieben")
+            else if (mxDrag == MX_RESIZE && !mxNewNote) Engine.pushPatternUndo("Notenlänge")
+        }
+        when (mxDrag) {
+            MX_MOVE -> {
+                val ids = if (mxSel.isNotEmpty()) mxSel.toSet() else setOf(mxNoteId)
+                val dPos = snapRound(((x - mxDownX) / mxGrid.width()).toDouble() * mxView())
+                val dSemi = -kotlin.math.round((y - mxDownY) / rowH()).toInt()
+                val stepPos = dPos - mxAppliedPos
+                val stepSemi = dSemi - mxAppliedSemi
+                if (abs(stepPos) > 1e-9 || stepSemi != 0) {
+                    Engine.moveNotes(p, ids, stepPos, stepSemi)
+                    mxAppliedPos = dPos
+                    if (stepSemi != 0) {
+                        mxAppliedSemi = dSemi
+                        Engine.notesById(p, setOf(mxNoteId)).firstOrNull()?.let { n ->
+                            val v = Engine.noteOn(p, n.semi)
+                            postDelayed({ Engine.noteOff(v) }, 120L)
+                        }
+                    }
+                }
+            }
+            MX_RESIZE -> {
+                val q = mxQ()
+                val end = max(mxNotePos0 + 1.0 / q, kotlin.math.ceil(xToPos(x) * q - 1e-6) / q)
+                Engine.setNoteLen(p, mxNoteId, min(end, mxBarsOf().toDouble()) - mxNotePos0)
+            }
+            MX_RUBBER -> {
+                mxRubber.set(min(mxDownX, x), min(mxDownY, y), max(mxDownX, x), max(mxDownY, y))
+                val a = xToPos(mxRubber.left); val b = xToPos(mxRubber.right)
+                val sTop = yToSemi(mxRubber.top); val sBot = yToSemi(mxRubber.bottom)
+                val ids = Engine.notesOf(p).filter { it.pos < b && it.pos + it.len > a && it.semi in sBot..sTop }.map { it.id }.toSet()
+                mxSel.clear()
+                mxSel.addAll(Engine.expandGroups(p, ids))
+            }
+        }
+    }
+
+    private fun mxGridUp(id: Int) {
+        val p = kbPad
+        if (mxDrag == MX_PINCH) {
+            if (id == mxPtr || id == mxPtr2) {
+                mxDrag = MX_NONE
+                mxPtr = -1
+                mxPtr2 = -1
+            }
+            return
+        }
+        if (id != mxPtr) return
+        if (!mxMoved) {
+            when (mxDrag) {
+                MX_MOVE -> if (mxTapRemoves) {
+                    if (mxSelMode) {
+                        mxSel.removeAll(Engine.expandGroups(p, setOf(mxNoteId)))
+                    } else {
+                        Engine.pushPatternUndo("Note löschen")
+                        Engine.deleteNotes(p, setOf(mxNoteId))
+                        mxSel.remove(mxNoteId)
+                    }
+                }
+                MX_RUBBER -> {
+                    // Tipp ins Leere: Auswahl aufheben, Einfügemarke setzen
+                    mxSel.clear()
+                    mxInsert = snap(xToPos(mxDownX).coerceIn(0.0, mxBarsOf() - 1e-6))
+                }
+                MX_RESIZE -> if (!mxNewNote) {
+                    Engine.pushPatternUndo("Note löschen")
+                    Engine.deleteNotes(p, setOf(mxNoteId))
+                }
+            }
+        }
+        mxDrag = MX_NONE
+        mxPtr = -1
+    }
+
+    private fun mxEditButton(x: Float, y: Float): Boolean {
+        val p = kbPad
+        val cols = overlayColors()
+        when {
+            mxMode.contains(x, y) -> {
+                mxSelMode = !mxSelMode
+                hint(if (mxSelMode) "⬚ Auswahl: Noten antippen oder Rahmen ziehen, markierte Noten verschieben · ins Leere tippen = Einfügemarke"
+                     else "✏ Stift: leeres Feld setzt eine Note (ziehen = länger), Note antippen löscht, Note ziehen verschiebt")
+            }
+            mxZoomIn.contains(x, y) -> { setZoom(mxZoom * 2f); hint("Zoom ${zoomLabel()} · zwei Finger: zoomen und verschieben") }
+            mxZoomOut.contains(x, y) -> { setZoom(mxZoom / 2f); hint("Zoom ${zoomLabel()}") }
+            mxAll.contains(x, y) -> {
+                val all = Engine.notesOf(p).map { it.id }
+                if (all.isNotEmpty() && mxSel.containsAll(all)) mxSel.clear() else { mxSel.clear(); mxSel.addAll(all) }
+            }
+            mxCopy.contains(x, y) -> {
+                val sel = Engine.notesById(p, mxSel)
+                if (sel.isEmpty()) { hint("Erst Noten markieren (⬚ Auswahl oder ALLE)"); return true }
+                val start = sel.minOf { it.pos }
+                val end = sel.maxOf { it.pos + it.len }
+                mxClip = sel.map { Engine.NoteEv(it.pos - start, it.len, it.semi, it.vel, it.group) }
+                // Länge auf ganze Schläge aufrunden – Einfügen setzt nahtlos dahinter
+                mxClipSpan = max(0.25, kotlin.math.ceil((end - start) * 4 - 1e-6) / 4)
+                mxInsert = start + mxClipSpan
+                if (mxInsert >= mxBarsOf()) mxInsert = 0.0
+                hint("${sel.size} Noten kopiert · EINF. setzt sie an der Einfügemarke ein")
+                burst(mxCopy.centerX(), mxCopy.centerY(), cols[2], 14, 160f)
+            }
+            mxPaste.contains(x, y) -> {
+                if (mxClip.isEmpty()) { hint("Zwischenablage leer – erst KOPIE"); return true }
+                val at = if (mxInsert >= 0) mxInsert else 0.0
+                Engine.pushPatternUndo("Einfügen")
+                val ids = Engine.addNotes(p, mxClip.map { Engine.NoteEv(it.pos + at, it.len, it.semi, it.vel, it.group) })
+                mxSel.clear()
+                mxSel.addAll(ids)
+                mxInsert = at + mxClipSpan
+                if (mxInsert >= mxBarsOf()) mxInsert = 0.0
+                if (ids.size < mxClip.size) hint("${ids.size} von ${mxClip.size} Noten eingefügt – der Rest liegt hinter dem Ende (TAKTE erhöhen)")
+                burst(mxPaste.centerX(), mxPaste.centerY(), cols[2], 14, 160f)
+            }
+            mxDel.contains(x, y) -> {
+                if (mxSel.isEmpty()) { hint("Nichts markiert"); return true }
+                Engine.pushPatternUndo("Noten löschen")
+                Engine.deleteNotes(p, mxSel)
+                mxSel.clear()
+                burst(mxDel.centerX(), mxDel.centerY(), Color.rgb(230, 40, 55), 14, 160f)
+            }
+            mxGroup.contains(x, y) -> {
+                if (mxSel.size < 2) { hint("Mindestens zwei Noten markieren"); return true }
+                Engine.pushPatternUndo("Gruppe")
+                val g = Engine.toggleGroup(p, mxSel)
+                hint(if (g) "${mxSel.size} Noten gruppiert – sie werden immer zusammen markiert und verschoben" else "Gruppe aufgelöst")
+            }
+            mxQuant.contains(x, y) -> {
+                val q = mxQ()
+                Engine.pushPatternUndo("Quantisieren")
+                if (mxSel.isNotEmpty()) {
+                    Engine.quantizeNotes(p, q, mxSel.toSet())
+                    hint("${mxSel.size} markierte Noten auf 1/$q quantisiert")
+                } else {
+                    Engine.quantizeNotes(p, q)
+                    hint("Alle Noten auf 1/$q quantisiert")
+                }
+                // IDs nach dem Entfernen von Doppelten bereinigen
+                val alive = Engine.notesOf(p).map { it.id }.toSet()
+                mxSel.retainAll(alive)
+                performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+                burst(mxQuant.centerX(), mxQuant.centerY(), cols[2], 18, 200f)
+            }
+            else -> return false
+        }
+        performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+        return true
+    }
+
+    private fun zoomLabel(): String = if (mxZoom < 1.05f) "1×" else String.format(Locale.GERMANY, "%.0f×", mxZoom)
+
+    private fun matrixTouch(id: Int, x: Float, y: Float): Boolean {
         val p = kbPad
         when {
             mxBars.contains(x, y) -> {
-                val nb = when (Engine.rollBars[p]) { 1 -> 2; 2 -> 4; 4 -> 8; else -> 1 }
+                val nb = when (Engine.rollBars[p]) { 1 -> 2; 2 -> 4; 4 -> 8; 8 -> 16; else -> 1 }
                 Engine.pushPatternUndo("Matrix-Länge")
                 Engine.setRollBars(p, nb)
+                clampScroll()
                 return true
             }
             mxRaster.contains(x, y) -> {
@@ -4660,38 +5038,19 @@ class PadView(context: Context) : View(context) {
                 Engine.rollQuant = rasterSteps[(i + 1) % rasterSteps.size]
                 return true
             }
-            mxQuant.contains(x, y) -> {
-                val q = if (Engine.rollQuant > 0) Engine.rollQuant else 16
-                Engine.pushPatternUndo("Quantisieren")
-                Engine.quantizeNotes(p, q)
-                performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
-                burst(mxQuant.centerX(), mxQuant.centerY(), overlayColors()[2], 18, 200f)
-                return true
-            }
             mxClear.contains(x, y) -> {
                 Engine.pushPatternUndo("Matrix leeren")
                 Engine.clearNotes(p)
+                mxSel.clear()
                 burst(mxClear.centerX(), mxClear.centerY(), Color.rgb(230, 40, 55), 18, 200f)
                 return true
             }
             mxGrid.contains(x, y) -> {
-                val g = mxGrid
-                val bars = Engine.rollBars[p]
-                val q = if (Engine.rollQuant > 0) Engine.rollQuant else 16
-                val posRaw = ((x - g.left) / g.width()).coerceIn(0f, 0.9999f) * bars
-                val pos = kotlin.math.floor(posRaw * q.toDouble()) / q
-                val row = ((y - g.top) / (g.height() / mxRows)).toInt().coerceIn(0, mxRows - 1)
-                val semi = mxTopSemi() - row
-                Engine.pushPatternUndo("Note")
-                if (Engine.removeNoteAt(p, posRaw.toDouble(), semi)) return true
-                Engine.toggleNote(p, pos, semi, 1.0 / q)
-                val v = Engine.noteOn(p, semi)
-                postDelayed({ Engine.noteOff(v) }, 180L)
-                performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+                mxGridDown(id, x, y)
                 return true
             }
         }
-        return false
+        return mxEditButton(x, y)
     }
 
     /** Senkrechte Klaviatur links neben der Matrix. */
@@ -4740,16 +5099,28 @@ class PadView(context: Context) : View(context) {
     private fun drawMatrix(canvas: Canvas, cols: IntArray) {
         val p = kbPad
         val bars = Engine.rollBars[p]
+        clampScroll()
         smallBtn(canvas, mxBars, "$bars TAKT" + if (bars > 1) "E" else "", false, cols)
         smallBtn(canvas, mxRaster, "▦ ${rasterLabel()}", Engine.rollQuant > 0, cols)
-        smallBtn(canvas, mxQuant, "QUANT.", false, cols)
+        smallBtn(canvas, mxMode, if (mxSelMode) "⬚ AUSWAHL" else "✏ STIFT", mxSelMode, cols)
+        smallBtn(canvas, mxZoomOut, "🔍−", false, cols)
+        smallBtn(canvas, mxZoomIn, "🔍+ " + zoomLabel(), mxZoom > 1.05f, cols)
         smallBtn(canvas, mxClear, "LEEREN", false, cols)
+        val hasSel = mxSel.isNotEmpty()
+        smallBtn(canvas, mxAll, "ALLE", false, cols)
+        smallBtn(canvas, mxCopy, "KOPIE", false, cols)
+        smallBtn(canvas, mxPaste, if (mxClip.isNotEmpty()) "EINF. ${mxClip.size}" else "EINF.", false, cols)
+        smallBtn(canvas, mxDel, if (hasSel) "LÖSCH ${mxSel.size}" else "LÖSCH", false, cols)
+        smallBtn(canvas, mxGroup, "GRUPPE", false, cols)
+        smallBtn(canvas, mxQuant, if (hasSel) "QUANT ${mxSel.size}" else "QUANT.", false, cols)
         drawPianoKeys(canvas, cols)
         val g = mxGrid
         fillPaint.shader = null
         fillPaint.color = Color.rgb(30, 31, 37)
         canvas.drawRect(g, fillPaint)
-        val rowH = g.height() / mxRows
+        canvas.save()
+        canvas.clipRect(g)
+        val rowH = rowH()
         val top = mxTopSemi()
         for (row in 0 until mxRows) {
             val semi = top - row
@@ -4762,16 +5133,24 @@ class PadView(context: Context) : View(context) {
             strokePaint.color = Color.argb(if (Math.floorMod(semi, 12) == 0) 80 else 26, 255, 255, 255)
             canvas.drawLine(g.left, y0 + rowH, g.right, y0 + rowH, strokePaint)
         }
-        val total = bars * 16
-        val colW = g.width() / total
+        // Rasterlinien im sichtbaren Ausschnitt (feiner, je weiter hineingezoomt)
+        val view = mxView()
+        val colW16 = g.width() / (view * 16).toFloat()
+        val div = when {
+            colW16 > dp(26f) -> 64
+            colW16 > dp(12f) -> 32
+            else -> 16
+        }
+        val first = kotlin.math.floor(mxScroll * div).toInt()
+        val last = kotlin.math.ceil((mxScroll + view) * div).toInt()
         val q = Engine.rollQuant
-        for (c in 0..total) {
-            val x = g.left + c * colW
+        for (c in first..last) {
+            val x = posToX(c.toDouble() / div)
             val (wdt, a) = when {
-                c % 16 == 0 -> dp(1.6f) to 150
-                c % 4 == 0 -> dp(1f) to 80
-                q > 0 && (c * q) % 16 == 0 -> dp(0.8f) to 45
-                colW > dp(5f) -> dp(0.5f) to 22
+                c % div == 0 -> dp(1.6f) to 150
+                (c * 4) % div == 0 -> dp(1f) to 80
+                q > 0 && (c * q) % div == 0 -> dp(0.8f) to 45
+                g.width() / (view * div).toFloat() > dp(5f) -> dp(0.5f) to 22
                 else -> 0f to 0
             }
             if (a == 0) continue
@@ -4779,37 +5158,91 @@ class PadView(context: Context) : View(context) {
             strokePaint.color = Color.argb(a, 255, 255, 255)
             canvas.drawLine(x, g.top, x, g.bottom, strokePaint)
         }
-        // Taktnummern
+        // Taktnummern (bei Zoom auch Schläge)
         textPaint.textSize = dp(8.5f)
         textPaint.color = alpha(cols[1], 0.55f)
         textPaint.textAlign = Paint.Align.LEFT
-        for (b in 0 until bars) canvas.drawText("${b + 1}", g.left + b * 16 * colW + dp(2f), g.top + dp(9f), textPaint)
+        val showBeats = g.width() / (view * 4).toFloat() > dp(28f)
+        val b0 = kotlin.math.floor(mxScroll * 4).toInt()
+        val b1 = kotlin.math.ceil((mxScroll + view) * 4).toInt()
+        for (bt in b0..b1) {
+            if (bt % 4 != 0 && !showBeats) continue
+            val label = if (bt % 4 == 0) "${bt / 4 + 1}" else "${bt / 4 + 1}.${bt % 4 + 1}"
+            canvas.drawText(label, posToX(bt / 4.0) + dp(2f), g.top + dp(9f), textPaint)
+        }
         textPaint.textAlign = Paint.Align.CENTER
         val acc = cols[2]
-        for (ev in Engine.notesOf(p)) {
+        val list = Engine.notesOf(p)
+        for (ev in list) {
             val row = top - ev.semi
-            val x0 = g.left + (ev.pos / bars).toFloat() * g.width()
-            val x1 = min(g.right, g.left + ((ev.pos + ev.len) / bars).toFloat() * g.width())
+            val x0 = posToX(ev.pos)
+            val x1 = posToX(ev.pos + ev.len)
+            if (x1 < g.left || x0 > g.right) continue
+            val sel = ev.id in mxSel
             if (row < 0 || row >= mxRows) {
                 textPaint.textSize = dp(9f)
-                textPaint.color = acc
+                textPaint.color = if (sel) Color.WHITE else acc
                 canvas.drawText(if (row < 0) "▲" else "▼", x0 + dp(4f), if (row < 0) g.top + dp(9f) else g.bottom - dp(2f), textPaint)
                 continue
             }
             val y0 = g.top + row * rowH
             tmpRect.set(x0 + dp(0.5f), y0 + dp(0.5f), max(x0 + dp(3f), x1 - dp(0.5f)), y0 + rowH - dp(0.5f))
-            fillPaint.color = alpha(acc, 0.35f + 0.65f * ev.vel)
+            val gc = if (ev.group > 0) Color.HSVToColor(floatArrayOf((ev.group * 67f) % 360f, 0.55f, 1f)) else Color.WHITE
+            fillPaint.color = if (sel) blend(acc, Color.WHITE, 0.55f) else alpha(acc, 0.35f + 0.65f * ev.vel)
             canvas.drawRoundRect(tmpRect, dp(2f), dp(2f), fillPaint)
-            strokePaint.strokeWidth = dp(1f)
-            strokePaint.color = Color.WHITE
+            strokePaint.strokeWidth = dp(if (sel) 2.2f else 1f)
+            strokePaint.color = if (sel) Color.WHITE else gc
             canvas.drawRoundRect(tmpRect, dp(2f), dp(2f), strokePaint)
+            if (ev.group > 0) {
+                // Gruppe: farbiger Balken unten an der Note
+                fillPaint.color = gc
+                canvas.drawRect(tmpRect.left, tmpRect.bottom - max(dp(2f), rowH * 0.18f), tmpRect.right, tmpRect.bottom, fillPaint)
+            }
+            if (!mxSelMode && tmpRect.width() > dp(18f)) {
+                // Griff zum Verlängern
+                strokePaint.strokeWidth = dp(1.2f)
+                strokePaint.color = Color.argb(150, 0, 0, 0)
+                val hx = tmpRect.right - dp(4f)
+                canvas.drawLine(hx, tmpRect.top + rowH * 0.25f, hx, tmpRect.bottom - rowH * 0.25f, strokePaint)
+            }
+        }
+        // Einfügemarke
+        if (mxInsert >= 0) {
+            val x = posToX(mxInsert)
+            strokePaint.strokeWidth = dp(2f)
+            strokePaint.color = Color.rgb(255, 210, 40)
+            var yy = g.top
+            while (yy < g.bottom) {
+                canvas.drawLine(x, yy, x, min(g.bottom, yy + dp(6f)), strokePaint)
+                yy += dp(10f)
+            }
+            dotPaint.color = Color.rgb(255, 210, 40)
+            canvas.drawCircle(x, g.top + dp(3f), dp(3.5f), dotPaint)
+        }
+        // Auswahlrahmen
+        if (mxDrag == MX_RUBBER && mxMoved) {
+            fillPaint.color = alpha(acc, 0.18f)
+            canvas.drawRect(mxRubber, fillPaint)
+            strokePaint.strokeWidth = dp(1.4f)
+            strokePaint.color = acc
+            canvas.drawRect(mxRubber, strokePaint)
         }
         val pr = Engine.rollProgress(p)
         if (pr >= 0f) {
-            val x = g.left + g.width() * pr
+            val x = posToX(pr.toDouble() * bars)
             strokePaint.strokeWidth = dp(2f)
             strokePaint.color = if (Engine.seqRecording) Color.rgb(230, 40, 55) else Color.WHITE
             canvas.drawLine(x, g.top, x, g.bottom, strokePaint)
+        }
+        canvas.restore()
+        // Bildlaufleiste beim Zoomen
+        if (mxZoom > 1.05f) {
+            val a0 = (mxScroll / bars).toFloat()
+            val a1 = ((mxScroll + view) / bars).toFloat()
+            fillPaint.color = alpha(cols[1], 0.15f)
+            canvas.drawRect(g.left, g.bottom - dp(3f), g.right, g.bottom, fillPaint)
+            fillPaint.color = acc
+            canvas.drawRect(g.left + g.width() * a0, g.bottom - dp(3f), g.left + g.width() * a1, g.bottom, fillPaint)
         }
         strokePaint.strokeWidth = dp(1f)
         strokePaint.color = alpha(cols[1], 0.4f)
@@ -4818,7 +5251,7 @@ class PadView(context: Context) : View(context) {
             textPaint.textSize = dp(9f)
             textPaint.color = Color.rgb(255, 80, 90)
             textPaint.textAlign = Paint.Align.RIGHT
-            canvas.drawText("● REC · ${rasterLabel()}", g.right - dp(4f), g.bottom - dp(4f), textPaint)
+            canvas.drawText("● REC · ${rasterLabel()}", g.right - dp(4f), g.bottom - dp(6f), textPaint)
             textPaint.textAlign = Paint.Align.CENTER
         }
     }
@@ -5043,6 +5476,21 @@ class PadView(context: Context) : View(context) {
     var onEditorSave: ((Int, FloatArray, Int) -> Unit)? = null
     private val edBtnClose = RectF()
     private var edPeaks = FloatArray(0)
+    // Lupe / Zoom: sichtbarer Bereich (Frames) und Werkzeuge
+    private var edV0 = 0
+    private var edV1 = 0
+    private var edSnap = true
+    private val edZoomOut = RectF()
+    private val edZoomIn = RectF()
+    private val edToS = RectF()
+    private val edToE = RectF()
+    private val edSnapBtn = RectF()
+    private var edLoupeX = -1f
+    private var edPanX = 0f
+    private var edPanV0 = 0
+    private var edPinch0 = 0f
+    private var edPinchV0 = 0
+    private var edPinchV1 = 0
     private var edDrag = 0          // 1 = Start, 2 = Ende, 3 = Slices-Regler, 4 = Takte-Regler
     private var edDragY = 0f
     private var edDragVal = 0f
@@ -5056,6 +5504,9 @@ class PadView(context: Context) : View(context) {
         edData = d
         edStart = 0
         edEnd = d.size
+        edV0 = 0
+        edV1 = d.size
+        edNorm = 0f
         edSlices = max(1, Engine.padSlices(p))
         edBars = if (Engine.padSlices(p) > 1) Engine.padBars(p) else Engine.suggestBars(d.size)
         edMsg = ""
@@ -5068,7 +5519,12 @@ class PadView(context: Context) : View(context) {
         edRect.set(m, insetTop + m, width - m, height - insetBottom - m)
         val hh = dp(40f)
         edBtnClose.set(edRect.right - dp(10f) - hh, edRect.top + dp(10f), edRect.right - dp(10f), edRect.top + dp(10f) + hh)
-        edWave.set(edRect.left + dp(12f), edBtnClose.bottom + dp(14f), edRect.right - dp(12f), edBtnClose.bottom + dp(14f) + edRect.height() * 0.38f)
+        val ty = edBtnClose.bottom + dp(8f)
+        val tg = dp(6f)
+        val tbw = (edRect.width() - dp(24f) - 4 * tg) / 5f
+        val tools = arrayOf(edZoomOut, edZoomIn, edToS, edToE, edSnapBtn)
+        for (i in tools.indices) tools[i].set(edRect.left + dp(12f) + i * (tbw + tg), ty, edRect.left + dp(12f) + i * (tbw + tg) + tbw, ty + dp(32f))
+        edWave.set(edRect.left + dp(12f), ty + dp(32f) + dp(10f), edRect.right - dp(12f), ty + dp(42f) + edRect.height() * 0.32f)
         val ks = dp(96f)
         val ky = edWave.bottom + dp(52f)
         edKnobSlices.set(edRect.centerX() - ks - dp(20f), ky, edRect.centerX() - dp(20f), ky + ks)
@@ -5088,9 +5544,11 @@ class PadView(context: Context) : View(context) {
         edPeaks = FloatArray(cols)
         val d = edData
         if (d.isEmpty()) return
-        val per = max(1, d.size / cols)
+        if (edV1 <= edV0) { edV0 = 0; edV1 = d.size }
+        val span = edV1 - edV0
+        val per = max(1, span / cols)
         for (c in 0 until cols) {
-            val a = (c.toLong() * d.size / cols).toInt()
+            val a = edV0 + (c.toLong() * span / cols).toInt()
             var mx = 0f
             var i = a
             val e = min(d.size, a + per)
@@ -5101,16 +5559,57 @@ class PadView(context: Context) : View(context) {
             }
             edPeaks[c] = mx
         }
-        var norm = 0f
-        for (v in edPeaks) if (v > norm) norm = v
-        if (norm > 0f) for (c in edPeaks.indices) edPeaks[c] = edPeaks[c] / norm
+        // Normierung auf die ganze Datei, damit die Höhe beim Zoomen gleich bleibt
+        if (edNorm <= 0f) {
+            var mx = 0f
+            var i = 0
+            val st = max(1, d.size / 20000)
+            while (i < d.size) { val v = abs(d[i]); if (v > mx) mx = v; i += st }
+            edNorm = max(1e-4f, mx)
+        }
+        for (c in edPeaks.indices) edPeaks[c] = min(1f, edPeaks[c] / edNorm)
+    }
+
+    private var edNorm = 0f
+
+    /** Zoom so setzen, dass [center] in der Mitte liegt; [span] = sichtbare Frames. */
+    private fun edSetView(center: Int, span0: Int) {
+        val n = edData.size
+        val minSpan = max(64, Engine.sampleRate / 400)
+        val span = span0.coerceIn(min(n, minSpan), n)
+        var a = center - span / 2
+        a = a.coerceIn(0, max(0, n - span))
+        edV0 = a
+        edV1 = a + span
+        computePeaks()
+    }
+
+    private fun edZoomLabel(): String {
+        val z = edData.size.toFloat() / max(1, edV1 - edV0)
+        return if (z < 1.05f) "1×" else if (z < 10f) String.format(Locale.GERMANY, "%.1f×", z) else "${z.toInt()}×"
+    }
+
+    /** Nächster Nulldurchgang (gegen Knackser beim Schneiden). */
+    private fun zeroCross(f: Int): Int {
+        val d = edData
+        if (d.size < 4) return f
+        val r = min(Engine.sampleRate / 200, max(32, (edV1 - edV0) / 200))
+        var best = f
+        var bd = Int.MAX_VALUE
+        for (i in max(1, f - r)..min(d.size - 1, f + r)) {
+            if ((d[i - 1] <= 0f && d[i] > 0f) || (d[i - 1] >= 0f && d[i] < 0f)) {
+                val dd = abs(i - f)
+                if (dd < bd) { bd = dd; best = i }
+            }
+        }
+        return best
     }
 
     private fun xToFrame(x: Float): Int =
-        (((x - edWave.left) / edWave.width()).coerceIn(0f, 1f) * edData.size).toInt()
+        edV0 + (((x - edWave.left) / edWave.width()).coerceIn(0f, 1f) * (edV1 - edV0)).toInt()
 
     private fun frameToX(f: Int): Float =
-        edWave.left + edWave.width() * (if (edData.isEmpty()) 0f else f.toFloat() / edData.size)
+        edWave.left + edWave.width() * (if (edV1 <= edV0) 0f else (f - edV0).toFloat() / (edV1 - edV0))
 
     private fun edToast(m: String) {
         edMsg = m
@@ -5128,11 +5627,41 @@ class PadView(context: Context) : View(context) {
                         if (edPreview >= 0) Engine.noteOff(edPreview)
                         edPad = -1
                     }
+                    e.actionMasked == MotionEvent.ACTION_POINTER_DOWN && e.pointerCount == 2 && (edWave.contains(x, y) || edDrag in 1..2 || edDrag == 5) -> {
+                        // zwei Finger: Lupe aufziehen / zusammenschieben
+                        edDrag = 6
+                        edLoupeX = -1f
+                        edPinch0 = abs(e.getX(0) - e.getX(1))
+                        edPinchV0 = edV0
+                        edPinchV1 = edV1
+                    }
                     edWave.contains(x, y) || (y > edWave.bottom && y < edWave.bottom + dp(30f) && x >= edWave.left && x <= edWave.right) -> {
                         val sx = frameToX(edStart)
                         val ex = frameToX(edEnd)
-                        edDrag = if (abs(x - sx) <= abs(x - ex)) 1 else 2
-                        moveMarker(x)
+                        val zoomed = edV1 - edV0 < edData.size
+                        val near = dp(36f)
+                        edDrag = when {
+                            abs(x - sx) <= near && abs(x - sx) <= abs(x - ex) -> 1
+                            abs(x - ex) <= near -> 2
+                            zoomed -> 5
+                            abs(x - sx) <= abs(x - ex) -> 1
+                            else -> 2
+                        }
+                        if (edDrag == 5) {
+                            edPanX = x
+                            edPanV0 = edV0
+                        } else {
+                            edLoupeX = x
+                            moveMarker(x)
+                        }
+                    }
+                    edZoomIn.contains(x, y) -> edSetView((edV0 + edV1) / 2, (edV1 - edV0) / 2)
+                    edZoomOut.contains(x, y) -> edSetView((edV0 + edV1) / 2, (edV1 - edV0) * 2)
+                    edToS.contains(x, y) -> edSetView(edStart, min(edV1 - edV0, max(Engine.sampleRate / 10, (edEnd - edStart) / 8)))
+                    edToE.contains(x, y) -> edSetView(edEnd, min(edV1 - edV0, max(Engine.sampleRate / 10, (edEnd - edStart) / 8)))
+                    edSnapBtn.contains(x, y) -> {
+                        edSnap = !edSnap
+                        edToast(if (edSnap) "Marker rasten auf Nulldurchgänge (kein Knacksen)" else "Marker frei")
                     }
                     edKnobSlices.contains(x, y) -> { edDrag = 3; edDragY = y; edDragVal = edSlices.toFloat() }
                     edKnobBars.contains(x, y) -> { edDrag = 4; edDragY = y; edDragVal = barOptions.indexOfFirst { it == edBars }.coerceAtLeast(0).toFloat() }
@@ -5169,7 +5698,26 @@ class PadView(context: Context) : View(context) {
                 val x = e.getX(0)
                 val y = e.getY(0)
                 when (edDrag) {
-                    1, 2 -> moveMarker(x)
+                    1, 2 -> {
+                        edLoupeX = x
+                        moveMarker(x)
+                    }
+                    5 -> {
+                        val span = edV1 - edV0
+                        val nv0 = (edPanV0 - ((x - edPanX) / edWave.width() * span).toInt()).coerceIn(0, max(0, edData.size - span))
+                        if (nv0 != edV0) {
+                            edV0 = nv0
+                            edV1 = nv0 + span
+                            computePeaks()
+                        }
+                    }
+                    6 -> if (e.pointerCount >= 2 && edPinch0 > dp(20f)) {
+                        val d1 = abs(e.getX(0) - e.getX(1))
+                        val span0 = edPinchV1 - edPinchV0
+                        val cx = (e.getX(0) + e.getX(1)) / 2f
+                        val fc = edPinchV0 + ((cx - edWave.left) / edWave.width()).coerceIn(0f, 1f) * span0
+                        edSetView(fc.toInt(), (span0 * edPinch0 / max(dp(10f), d1)).toInt())
+                    }
                     3 -> edSlices = (edDragVal + (edDragY - y) / dp(12f)).toInt().coerceIn(1, 32)
                     4 -> edBars = barOptions[(edDragVal + (edDragY - y) / dp(30f)).toInt().coerceIn(0, barOptions.size - 1)]
                 }
@@ -5177,15 +5725,57 @@ class PadView(context: Context) : View(context) {
             MotionEvent.ACTION_UP, MotionEvent.ACTION_POINTER_UP, MotionEvent.ACTION_CANCEL -> {
                 if (edDrag == 1 || edDrag == 2) edBars = Engine.suggestBars(edEnd - edStart)
                 edDrag = 0
+                edLoupeX = -1f
             }
         }
     }
 
     private fun moveMarker(x: Float) {
-        val f = xToFrame(x)
+        var f = xToFrame(x)
+        if (edSnap) f = zeroCross(f)
         val minLen = Engine.sampleRate / 50
         if (edDrag == 1) edStart = f.coerceIn(0, max(0, edEnd - minLen))
         else if (edDrag == 2) edEnd = f.coerceIn(min(edData.size, edStart + minLen), edData.size)
+    }
+
+    /** Runde Lupe über dem Finger: ±8 ms um den Marker, mit Nulllinie. */
+    private fun drawLoupe(canvas: Canvas, f: Int, acc: Int) {
+        val w = edWave
+        val r = dp(52f)
+        val cx = edLoupeX.coerceIn(w.left + r, w.right - r)
+        val cy = w.top - r * 0.2f
+        val d = edData
+        val half = max(48, Engine.sampleRate / 125)
+        canvas.save()
+        val clip = Path()
+        clip.addCircle(cx, cy, r, Path.Direction.CW)
+        canvas.clipPath(clip)
+        fillPaint.color = Color.rgb(10, 11, 14)
+        canvas.drawCircle(cx, cy, r, fillPaint)
+        strokePaint.strokeWidth = dp(0.8f)
+        strokePaint.color = Color.argb(70, 255, 255, 255)
+        canvas.drawLine(cx - r, cy, cx + r, cy, strokePaint)
+        val path = Path()
+        val steps = (2 * r).toInt()
+        for (px in 0..steps) {
+            val ff = (f - half + px.toLong() * 2 * half / steps).toInt()
+            val v = if (ff in d.indices) (d[ff] / edNorm).coerceIn(-1f, 1f) else 0f
+            val yy = cy - v * r * 0.8f
+            if (px == 0) path.moveTo(cx - r + px, yy) else path.lineTo(cx - r + px, yy)
+        }
+        strokePaint.strokeWidth = dp(1.8f)
+        strokePaint.color = acc
+        canvas.drawPath(path, strokePaint)
+        strokePaint.strokeWidth = dp(1.5f)
+        strokePaint.color = Color.WHITE
+        canvas.drawLine(cx, cy - r, cx, cy + r, strokePaint)
+        canvas.restore()
+        strokePaint.strokeWidth = dp(2.5f)
+        strokePaint.color = acc
+        canvas.drawCircle(cx, cy, r, strokePaint)
+        textPaint.textSize = dp(9f)
+        textPaint.color = Color.WHITE
+        canvas.drawText(String.format(Locale.GERMANY, "%.3f s", f.toFloat() / Engine.sampleRate), cx, cy + r - dp(8f), textPaint)
     }
 
     private fun reloadEditor(msg: String) {
@@ -5194,6 +5784,9 @@ class PadView(context: Context) : View(context) {
             edData = d
             edStart = 0
             edEnd = d.size
+            edV0 = 0
+            edV1 = d.size
+            edNorm = 0f
             computePeaks()
         }
         edToast(msg)
@@ -5226,13 +5819,52 @@ class PadView(context: Context) : View(context) {
         val sx = frameToX(edStart)
         val ex = frameToX(edEnd)
         val mid = w.centerY()
+        smallBtn(canvas, edZoomOut, "🔍−", false, cols)
+        smallBtn(canvas, edZoomIn, "🔍+ " + edZoomLabel(), edV1 - edV0 < edData.size, cols)
+        smallBtn(canvas, edToS, "⌖ S", false, cols)
+        smallBtn(canvas, edToE, "⌖ E", false, cols)
+        smallBtn(canvas, edSnapBtn, "0-SNAP", edSnap, cols)
+        canvas.save()
+        canvas.clipRect(w.left, w.top, w.right, w.bottom + dp(24f))
         val n = edPeaks.size
+        val span = max(1, edV1 - edV0)
+        val fine = span < w.width() * 3
         strokePaint.strokeWidth = dp(1.6f)
-        for (c in 0 until n) {
-            val x = w.left + w.width() * c / n
-            val hgt = edPeaks[c] * w.height() * 0.46f
-            strokePaint.color = if (x in sx..ex) acc else Color.argb(90, 200, 200, 210)
-            canvas.drawLine(x, mid - hgt, x, mid + hgt, strokePaint)
+        if (fine) {
+            // stark vergrößert: echte Wellenform als Linie
+            val path = Path()
+            val d = edData
+            val steps = w.width().toInt()
+            for (px in 0..steps) {
+                val f = (edV0 + px.toLong() * span / steps).toInt().coerceIn(0, d.size - 1)
+                val yy = mid - (d[f] / edNorm).coerceIn(-1f, 1f) * w.height() * 0.46f
+                if (px == 0) path.moveTo(w.left + px, yy) else path.lineTo(w.left + px, yy)
+            }
+            strokePaint.color = acc
+            canvas.drawPath(path, strokePaint)
+            strokePaint.strokeWidth = dp(0.6f)
+            strokePaint.color = Color.argb(70, 255, 255, 255)
+            canvas.drawLine(w.left, mid, w.right, mid, strokePaint)
+        } else {
+            for (c in 0 until n) {
+                val x = w.left + w.width() * c / n
+                val hgt = edPeaks[c] * w.height() * 0.46f
+                strokePaint.color = if (x in sx..ex) acc else Color.argb(90, 200, 200, 210)
+                canvas.drawLine(x, mid - hgt, x, mid + hgt, strokePaint)
+            }
+        }
+        // Bildlauf-Anzeige
+        if (span < edData.size) {
+            val a0 = edV0.toFloat() / edData.size
+            val a1 = edV1.toFloat() / edData.size
+            fillPaint.color = Color.argb(60, 255, 255, 255)
+            canvas.drawRect(w.left, w.top, w.right, w.top + dp(3f), fillPaint)
+            fillPaint.color = acc
+            canvas.drawRect(w.left + w.width() * a0, w.top, w.left + w.width() * a1, w.top + dp(3f), fillPaint)
+            // abgedunkelt außerhalb der Auswahl
+            fillPaint.color = Color.argb(90, 0, 0, 0)
+            if (sx > w.left) canvas.drawRect(w.left, w.top + dp(3f), min(sx, w.right), w.bottom, fillPaint)
+            if (ex < w.right) canvas.drawRect(max(ex, w.left), w.top + dp(3f), w.right, w.bottom, fillPaint)
         }
         // Slice-Linien
         if (edSlices > 1) {
@@ -5245,6 +5877,7 @@ class PadView(context: Context) : View(context) {
         }
         // Marker
         for ((x, lab) in arrayOf(sx to "S", ex to "E")) {
+            if (x < w.left - dp(1f) || x > w.right + dp(1f)) continue
             strokePaint.strokeWidth = dp(2.5f)
             strokePaint.color = Color.WHITE
             canvas.drawLine(x, w.top, x, w.bottom, strokePaint)
@@ -5259,10 +5892,13 @@ class PadView(context: Context) : View(context) {
             textPaint.color = Color.WHITE
             canvas.drawText(lab, x, w.bottom + dp(19f), textPaint)
         }
+        canvas.restore()
+        // Lupe beim Ziehen eines Markers: stark vergrößerter Ausschnitt um den Marker
+        if (edLoupeX >= 0f && (edDrag == 1 || edDrag == 2)) drawLoupe(canvas, if (edDrag == 1) edStart else edEnd, acc)
         val secs = (edEnd - edStart).toFloat() / Engine.sampleRate
         textPaint.textSize = dp(11f)
         textPaint.color = alpha(cols[1], 0.8f)
-        canvas.drawText(String.format(Locale.GERMANY, "Auswahl %.2fs · Marker an Wellenform ziehen", secs), edRect.centerX(), w.bottom + dp(42f), textPaint)
+        canvas.drawText(String.format(Locale.GERMANY, "Auswahl %.3fs · Marker ziehen · 2 Finger = Lupe", secs), edRect.centerX(), w.bottom + dp(42f), textPaint)
 
         // Regler
         editorKnob(canvas, edKnobSlices, (edSlices - 1) / 31f, "SLICES", if (edSlices <= 1) "AUS" else "$edSlices", cols)
@@ -5359,6 +5995,9 @@ class PadView(context: Context) : View(context) {
         // ---- Wave-Editor
         if (edPad >= 0) {
             return when {
+                edZoomIn.contains(x, y) || edZoomOut.contains(x, y) -> Triple(RectF(edZoomOut.left, edZoomOut.top, edZoomIn.right, edZoomIn.bottom), "Lupe / Zoom", "Vergrößert die Wellenform bis auf einzelne Samples. Auch mit zwei Fingern in der Wellenform aufziehen. Vergrößert: mit einem Finger abseits der Marker verschieben.")
+                edToS.contains(x, y) || edToE.contains(x, y) -> Triple(RectF(edToS.left, edToS.top, edToE.right, edToE.bottom), "Zum Marker", "Springt mit der Lupe direkt an den Start- (S) bzw. Endpunkt (E) – zum genauen Schneiden.")
+                edSnapBtn.contains(x, y) -> Triple(edSnapBtn, "0-SNAP", "Marker rasten auf den nächsten Nulldurchgang der Welle ein – so knackt der Schnitt nicht.")
                 edWave.contains(x, y) || (y > edWave.bottom && y < edWave.bottom + dp(30f)) -> Triple(edWave, "Wellenform", "Zeigt das Audio des Pads. Die Marker S (Start) und E (Ende) an der Wellenform ziehen, um den Ausschnitt zu wählen. Weiße Linien zeigen die Slices.")
                 edKnobSlices.contains(x, y) -> Triple(edKnobSlices, "SLICES", "Hoch/runter ziehen: teilt den Ausschnitt in 2–32 gleich lange Stücke. AUS = nicht slicen.")
                 edKnobBars.contains(x, y) -> Triple(edKnobBars, "TAKTE", "Wie viele Takte der gesliceten Loop lang ist (¼ bis 8). Die Slices verteilen sich darauf und folgen jedem Tempo.")
@@ -5387,8 +6026,15 @@ class PadView(context: Context) : View(context) {
                 when {
                     mxBars.contains(x, y) -> return Triple(mxBars, "Takte", "Länge der Matrix für dieses Pad: 1, 2, 4 oder 8 Takte. Die Noten laufen in dieser Länge als Schleife.")
                     mxRaster.contains(x, y) -> return Triple(mxRaster, "Raster", "Raster für die Aufnahme: frei (genau wie gespielt), 1/4, 1/8, 1/16 oder 1/32. Wird schon beim Einspielen angewendet.")
-                    mxQuant.contains(x, y) -> return Triple(mxQuant, "Quantisieren", "Setzt alle vorhandenen Noten nachträglich auf das gewählte Raster.")
+                    mxQuant.contains(x, y) -> return Triple(mxQuant, "Quantisieren", "Setzt die markierten Noten (oder, wenn nichts markiert ist, alle) auf das gewählte Raster.")
                     mxClear.contains(x, y) -> return Triple(mxClear, "Leeren", "Löscht alle Noten dieses Pads.")
+                    mxMode.contains(x, y) -> return Triple(mxMode, "Werkzeug", "✏ STIFT: leeres Feld setzt eine Note (nach rechts ziehen = länger), Note antippen löscht, Note ziehen verschiebt, rechten Rand ziehen ändert die Länge. ⬚ AUSWAHL: Noten antippen markiert, Rahmen ziehen markiert mehrere, markierte Noten ziehen verschiebt sie, ins Leere tippen setzt die Einfügemarke.")
+                    mxZoomIn.contains(x, y) || mxZoomOut.contains(x, y) -> return Triple(RectF(mxZoomOut.left, mxZoomOut.top, mxZoomIn.right, mxZoomIn.bottom), "Zoom", "Hinein- und herauszoomen bis 32×. Mit zwei Fingern in der Matrix: auseinander/zusammen = Zoom (waagrecht Zeit, senkrecht Tonhöhe), gemeinsam ziehen = verschieben.")
+                    mxAll.contains(x, y) -> return Triple(mxAll, "Alle", "Markiert alle Noten (nochmal = Auswahl aufheben).")
+                    mxCopy.contains(x, y) -> return Triple(mxCopy, "Kopieren", "Kopiert die markierten Noten in die Zwischenablage. Die Einfügemarke springt direkt dahinter.")
+                    mxPaste.contains(x, y) -> return Triple(mxPaste, "Einfügen", "Setzt die kopierten Noten an der gelben Einfügemarke ein (in ⬚ AUSWAHL ins Leere tippen setzt sie). Mehrmals drücken reiht sie aneinander.")
+                    mxDel.contains(x, y) -> return Triple(mxDel, "Löschen", "Löscht die markierten Noten.")
+                    mxGroup.contains(x, y) -> return Triple(mxGroup, "Gruppieren", "Fasst die markierten Noten zu einer Gruppe zusammen (farbiger Balken) – sie werden dann immer gemeinsam markiert, verschoben und kopiert. Nochmal drücken löst die Gruppe auf.")
                     kbPiano.contains(x, y) -> return Triple(kbPiano, "Klaviatur", "Wie in Ableton links an der Seite: Tasten spielen das Pad-Sample in dieser Tonhöhe. Mehrere Finger = Akkord, auf- und abwischen wechselt den Ton. Bei REC landen die Töne in der Matrix.")
                     mxGrid.contains(x, y) -> return Triple(mxGrid, "Matrix (Piano-Roll)", "Tonhöhe senkrecht (passend zur Klaviatur links), Zeit waagrecht. Leeres Feld antippen setzt eine Note, eine Note antippen löscht sie. Die Linie ist die Abspielposition.")
                 }

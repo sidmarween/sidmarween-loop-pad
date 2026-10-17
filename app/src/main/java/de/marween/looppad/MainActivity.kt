@@ -34,7 +34,26 @@ import kotlin.math.min
 class MainActivity : Activity() {
 
     private lateinit var pads: PadView
+    private lateinit var dj: DjView
+    private var djMode = false
+    private var djDeck = 0
     private var askedOnce = false
+
+    /** Die aktive Oberfläche: Pads oder DJ-Controller. */
+    private fun mainView(): View = if (djMode) dj else pads
+
+    private fun switchMode(toDj: Boolean) {
+        if (toDj == djMode && mainView().parent != null) return
+        djMode = toDj
+        getSharedPreferences("marvpad", MODE_PRIVATE).edit().putBoolean("djMode", toDj).apply()
+        val v = mainView()
+        v.alpha = 0f
+        setContentView(v)
+        hideSystemBars()
+        v.requestApplyInsets()
+        v.animate().alpha(1f).setDuration(250L).start()
+        if (toDj) hint("🎧 DJ-Modus: oben Track antippen zum Laden · ▦ PADS wechselt zurück")
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -105,8 +124,34 @@ class MainActivity : Activity() {
         pads.infoMode = getSharedPreferences("marvpad", MODE_PRIVATE).getBoolean("info", false)
         Engine.outKey = prefs.getString("outDev", null)
         Engine.inKey = prefs.getString("inDev", null)
+        // Latenz & Live-Reaktion
+        Engine.latencyMode = prefs.getInt("latency", 0)
+        Engine.instantStart = prefs.getBoolean("instantStart", true)
+        Engine.instantStop = prefs.getBoolean("instantStop", false)
+        Engine.monitorGain = prefs.getFloat("monGain", 0.9f)
+        Engine.monitorMaster = prefs.getBoolean("monMaster", false)
+        // DJ-Controller
+        dj = DjView(this)
+        dj.skinIdx = prefs.getInt("djSkin", 15)
+        dj.onLoad = { k -> showDeckLoad(k) }
+        dj.onMenu = { showMainMenu() }
+        dj.onTempo = { showTempo() }
+        dj.onPadsMode = { switchMode(false) }
+        dj.onHint = { hint(it) }
+        dj.onSkinMenu = { showDesigns() }
+        djMode = prefs.getBoolean("djMode", false)
+        // MIDI
+        Midi.load(prefs)
+        Midi.onHint = { m -> runOnUiThread { hint(m) } }
+        Midi.onPad = { p, on -> if (on) runOnUiThread { pads.midiFlash(p); dj.flashSampler(p) } }
+        try { Midi.start(this) } catch (e: Throwable) {}
+        // Gleichmäßige CPU-Leistung (weniger Aussetzer bei kleinen Puffern)
+        try {
+            val pm = getSystemService(POWER_SERVICE) as android.os.PowerManager
+            if (pm.isSustainedPerformanceModeSupported) window.setSustainedPerformanceMode(true)
+        } catch (ignored: Throwable) {}
         registerUsbWatcher()
-        if (savedInstanceState == null) showSplash() else setContentView(pads)
+        if (savedInstanceState == null) showSplash() else setContentView(mainView())
         hideSystemBars()
     }
 
@@ -157,10 +202,11 @@ class MainActivity : Activity() {
         setContentView(root)
         img.postDelayed({
             if (isFinishing || isDestroyed) return@postDelayed
-            pads.alpha = 0f
-            setContentView(pads)
+            val v = mainView()
+            v.alpha = 0f
+            setContentView(v)
             hideSystemBars()
-            pads.animate().alpha(1f).setDuration(350L).start()
+            v.animate().alpha(1f).setDuration(350L).start()
         }, 4000L)
     }
 
@@ -642,9 +688,18 @@ class MainActivity : Activity() {
                 "🔌 Audio-Geräte (USB-Interface, Kopfhörer …)",
                 "🎨 Design wählen",
                 if (Engine.tapOverdub) "👆 Tipp auf laufenden Loop: ● OVERDUB (→ auf Stopp)" else "👆 Tipp auf laufenden Loop: ■ STOPP (→ auf Overdub)",
-                (if (pads.statusColors) "☑" else "☐") + " 🚦 Status-Farben (Rot Aufnahme · Grün Play · Gelb Overdub)"
+                (if (pads.statusColors) "☑" else "☐") + " 🚦 Status-Farben (Rot Aufnahme · Grün Play · Gelb Overdub)",
+                String.format(Locale.GERMANY, "⚡ Latenz & Live-Reaktion (%.0f ms)", Engine.outputLatencyMs()),
+                (if (Engine.monitorOn) "☑" else "☐") + " 🎙 Live-Mikrofon mit Effekten …",
+                "🎹 MIDI (" + (if (Midi.deviceNames.isEmpty()) "kein Gerät" else Midi.deviceNames.joinToString(", ")) + ")",
+                if (djMode) "▦ Zurück zum Pad-Modus" else "🎧 DJ-Modus (zwei Decks, Crossfader)"
             )) { _, which ->
                 when (which) {
+                    7 -> showDesigns()
+                    10 -> showLatency()
+                    11 -> showMonitor()
+                    12 -> showMidi()
+                    13 -> switchMode(!djMode)
                     8 -> {
                         Engine.tapOverdub = !Engine.tapOverdub
                         getSharedPreferences("marvpad", MODE_PRIVATE).edit().putBoolean("tapOverdub", Engine.tapOverdub).apply()
@@ -1057,14 +1112,460 @@ class MainActivity : Activity() {
     }
 
     private fun showDesigns() {
+        val n = PadView.DESIGN_NAMES.size
+        val names = PadView.DESIGN_NAMES.map { "▦ $it" } + DjView.SKINS.map { "🎧 DJ · ${it.name}" }
+        val cur = if (djMode) n + dj.skinIdx else pads.theme
         AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
-            .setTitle("Design wählen")
-            .setSingleChoiceItems(PadView.DESIGN_NAMES, pads.theme) { d, which ->
-                pads.theme = which
-                getSharedPreferences("marvpad", MODE_PRIVATE).edit().putInt("design", which).apply()
+            .setTitle("Design wählen · ▦ Pads · 🎧 DJ-Modus")
+            .setSingleChoiceItems(names.toTypedArray(), cur) { d, which ->
+                val prefs = getSharedPreferences("marvpad", MODE_PRIVATE)
+                if (which < n) {
+                    pads.theme = which
+                    prefs.edit().putInt("design", which).apply()
+                    switchMode(false)
+                } else {
+                    dj.skinIdx = which - n
+                    prefs.edit().putInt("djSkin", which - n).apply()
+                    switchMode(true)
+                }
                 d.dismiss()
             }
             .setNegativeButton("Abbrechen", null)
+            .show()
+    }
+
+    // ================================================================ DJ: Tracks laden
+
+    private fun showDeckLoad(k: Int) {
+        val dd = Dj.decks[k]
+        val items = arrayListOf(
+            "📂 Datei (MP3, WAV, M4A, OGG …)",
+            "📚 Bibliothek (Loops & eigene Samples)",
+            "🎙 Meine Aufnahmen",
+            "▦ Von einem Pad übernehmen"
+        )
+        if (dd.loaded()) {
+            items.add(String.format(Locale.GERMANY, "🎚 Tempo/Raster korrigieren (%.1f BPM)", dd.bpm))
+            items.add("⏏ Auswerfen")
+        }
+        AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
+            .setTitle("Deck ${"AB"[k]} laden")
+            .setItems(items.toTypedArray()) { _, w ->
+                when (w) {
+                    0 -> {
+                        djDeck = k
+                        val i = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+                            addCategory(Intent.CATEGORY_OPENABLE)
+                            type = "audio/*"
+                        }
+                        try { startActivityForResult(i, REQ_DECK) } catch (e: Exception) { toast("Kein Dateimanager gefunden") }
+                    }
+                    1 -> deckFromLibrary(k)
+                    2 -> {
+                        val files = Projects.listSamples(this)
+                        if (files.isEmpty()) { toast("Noch keine Aufnahmen"); return@setItems }
+                        AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
+                            .setTitle("Aufnahme → Deck ${"AB"[k]}")
+                            .setItems(files.map { Projects.sampleTitle(it) }.toTypedArray()) { _, i ->
+                                val f = files[i]
+                                loadDeckMono(k, Projects.sampleTitle(f), f.name) { AudioFiles.decodeFile(f, Engine.sampleRate, 600) }
+                            }
+                            .show()
+                    }
+                    3 -> {
+                        val used = (0 until PadView.VISIBLE_PADS).filter { Engine.hasLoop(it) }
+                        if (used.isEmpty()) { toast("Alle Pads sind leer"); return@setItems }
+                        AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
+                            .setTitle("Pad → Deck ${"AB"[k]}")
+                            .setItems(used.map { "Pad ${it + 1}" }.toTypedArray()) { _, i ->
+                                val p = used[i]
+                                val data = Engine.loopData(p) ?: return@setItems
+                                loadDeckMono(k, "Pad ${p + 1}", null) { data.copyOf() }
+                            }
+                            .show()
+                    }
+                    4 -> fixDeckTempo(k)
+                    5 -> {
+                        dd.playing = false
+                        dd.data = null
+                        dd.len = 0
+                        dd.title = ""
+                    }
+                }
+            }
+            .setNegativeButton("Abbrechen", null)
+            .show()
+    }
+
+    private fun fixDeckTempo(k: Int) {
+        val dd = Dj.decks[k]
+        AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
+            .setTitle(String.format(Locale.GERMANY, "Deck %s · %.1f BPM", "AB"[k], dd.bpm))
+            .setItems(arrayOf("× 2 (doppelt)", "÷ 2 (halb)", "Tempo eingeben …", "Schlag 1 = aktuelle Position (Raster setzen)")) { _, w ->
+                when (w) {
+                    0 -> dd.bpm = dd.bpm * 2f
+                    1 -> dd.bpm = dd.bpm / 2f
+                    2 -> askName(String.format(Locale.US, "%.1f", dd.bpm), "Tempo (BPM)") { t ->
+                        t.replace(',', '.').toFloatOrNull()?.let { v -> if (v in 40f..240f) dd.bpm = v }
+                    }
+                    else -> {
+                        dd.grid = dd.pos
+                        dd.cuePoint = dd.pos
+                        hint("Raster gesetzt: Schlag 1 liegt jetzt hier")
+                    }
+                }
+                if (dd.sync) dd.syncReq = true
+            }
+            .show()
+    }
+
+    private fun deckFromLibrary(k: Int) {
+        val user = Projects.userSamples(this)
+        val cats = (SampleLibrary.categories + user.map { it.category }).distinct()
+        AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
+            .setTitle("Bibliothek → Deck ${"AB"[k]}")
+            .setItems(cats.toTypedArray()) { _, ci ->
+                val cat = cats[ci]
+                val own = user.filter { it.category == cat }
+                val lib = SampleLibrary.samples.filter { it.category == cat }
+                val labels = own.map { "★ " + it.title } + lib.map { it.title }
+                AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
+                    .setTitle(cat)
+                    .setItems(labels.toTypedArray()) { _, i ->
+                        if (i < own.size) {
+                            val u = own[i]
+                            loadDeckMono(k, u.title, u.file.name) { AudioFiles.decodeFile(u.file, Engine.sampleRate, 600) }
+                        } else {
+                            val smp = lib[i - own.size]
+                            loadDeckMono(k, smp.title, smp.file) { AudioFiles.decodeAsset(this, smp.file, Engine.sampleRate, 600) }
+                        }
+                    }
+                    .show()
+            }
+            .show()
+    }
+
+    private fun loadDeckMono(k: Int, title: String, file: String?, get: () -> FloatArray) {
+        val dd = Dj.decks[k]
+        dd.loading = true
+        Thread {
+            try {
+                val data = get()
+                val rate = Engine.sampleRate
+                // kurze Loops: Tempo wie beim Pad-Import (Länge + Rhythmus), lange Tracks: eigene Analyse
+                val nameBpm = Warp.bpmFromName("$title ${file ?: ""}") ?: if (data.size < rate * 30) Warp.analyze(data, rate, title).bpm else null
+                Dj.load(dd, Dj.fromMono(data, rate), title, nameBpm)
+                runOnUiThread { hint(String.format(Locale.GERMANY, "Deck %s: %s · %.1f BPM", "AB"[k], title, dd.bpm)) }
+            } catch (e: Throwable) {
+                runOnUiThread { toast("Laden fehlgeschlagen: ${e.message ?: e}") }
+            } finally {
+                dd.loading = false
+            }
+        }.start()
+    }
+
+    private fun loadDeckUri(k: Int, uri: Uri) {
+        val dd = Dj.decks[k]
+        dd.loading = true
+        val name = displayName(uri) ?: "Track"
+        hint("Deck ${"AB"[k]}: lade $name …")
+        Thread {
+            try {
+                val t = Dj.decode(this, uri)
+                Dj.load(dd, t, name.substringBeforeLast('.'), Warp.bpmFromName(name))
+                runOnUiThread { hint(String.format(Locale.GERMANY, "Deck %s: %s · %.1f BPM · %s", "AB"[k], name, dd.bpm, Dj.fmt(dd.seconds()))) }
+            } catch (e: OutOfMemoryError) {
+                runOnUiThread { toast("Track zu groß für den Speicher") }
+            } catch (e: Throwable) {
+                runOnUiThread { toast("Laden fehlgeschlagen: ${e.message ?: e}") }
+            } finally {
+                dd.loading = false
+            }
+        }.start()
+    }
+
+    // ================================================================ Latenz, Live-Mikrofon, MIDI
+
+    private fun dialogBox(): Pair<LinearLayout, android.widget.ScrollView> {
+        val pad = (16 * resources.displayMetrics.density).toInt()
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(pad, pad / 2, pad, pad / 2)
+        }
+        return box to android.widget.ScrollView(this).apply { addView(box) }
+    }
+
+    private fun note(box: LinearLayout, t: String, col: Int = Color.rgb(170, 170, 170)): TextView {
+        val tv = TextView(this).apply {
+            text = t
+            textSize = 12f
+            setTextColor(col)
+            setPadding(0, 6, 0, 10)
+        }
+        box.addView(tv)
+        return tv
+    }
+
+    private fun check(box: LinearLayout, label: String, on: Boolean, f: (Boolean) -> Unit): CheckBox {
+        val cb = CheckBox(this).apply {
+            text = label
+            isChecked = on
+            setTextColor(Color.WHITE)
+            setOnCheckedChangeListener { _, c -> f(c) }
+        }
+        box.addView(cb)
+        return cb
+    }
+
+    private fun bluetoothOut(): Boolean {
+        val am = getSystemService(AUDIO_SERVICE) as AudioManager
+        return am.getDevices(AudioManager.GET_DEVICES_OUTPUTS).any {
+            it.type == AudioDeviceInfo.TYPE_BLUETOOTH_A2DP || it.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO ||
+                (Build.VERSION.SDK_INT >= 31 && (it.type == AudioDeviceInfo.TYPE_BLE_HEADSET || it.type == AudioDeviceInfo.TYPE_BLE_SPEAKER))
+        }
+    }
+
+    private fun headphonesOut(): Boolean {
+        val am = getSystemService(AUDIO_SERVICE) as AudioManager
+        return am.getDevices(AudioManager.GET_DEVICES_OUTPUTS).any {
+            it.type == AudioDeviceInfo.TYPE_WIRED_HEADPHONES || it.type == AudioDeviceInfo.TYPE_WIRED_HEADSET ||
+                it.type == AudioDeviceInfo.TYPE_USB_HEADSET || it.type == AudioDeviceInfo.TYPE_USB_DEVICE ||
+                it.type == AudioDeviceInfo.TYPE_BLUETOOTH_A2DP || (Build.VERSION.SDK_INT >= 31 && it.type == AudioDeviceInfo.TYPE_BLE_HEADSET)
+        }
+    }
+
+    private fun showLatency() {
+        val prefs = getSharedPreferences("marvpad", MODE_PRIVATE)
+        val (box, scroll) = dialogBox()
+        val sr = Engine.sampleRate.toFloat()
+        note(box, String.format(
+            Locale.GERMANY,
+            "Hardware-Puffer: %d Frames (%.1f ms)\nAusgabe-Puffer der App: %d Frames (%.1f ms)\nSchneller Audio-Pfad: %s · Aussetzer bisher: %d",
+            Engine.burstFrames, Engine.burstFrames * 1000f / sr, Engine.outBufferFrames, Engine.outputLatencyMs(),
+            if (Engine.fastPath) "ja" else "nein", Engine.underruns
+        ), Color.WHITE)
+        if (bluetoothOut()) note(box, "⚠ Bluetooth-Kopfhörer/-Lautsprecher verbunden: Bluetooth verzögert um 150–300 ms – das kann keine App ausgleichen. Für Live: Kabel-Kopfhörer oder USB-Audio.", Color.rgb(255, 150, 60))
+        val group = android.widget.RadioGroup(this)
+        Engine.LATENCY_NAMES.forEachIndexed { i, n ->
+            group.addView(android.widget.RadioButton(this).apply {
+                id = 1000 + i
+                text = n
+                setTextColor(Color.WHITE)
+            })
+        }
+        group.check(1000 + Engine.latencyMode)
+        group.setOnCheckedChangeListener { _, id ->
+            Engine.latencyMode = id - 1000
+            prefs.edit().putInt("latency", Engine.latencyMode).apply()
+            scheduleAudioRestart()
+        }
+        box.addView(group)
+        note(box, "AUTO startet mit dem kleinsten Puffer und vergrößert ihn nur, wenn es knackst.")
+        check(box, "Loops starten schon beim Berühren (nicht erst beim Loslassen)", Engine.instantStart) {
+            Engine.instantStart = it
+            prefs.edit().putBoolean("instantStart", it).apply()
+        }
+        check(box, "Loops auch beim Berühren stoppen (Overdub dann per Halten auf einem gestoppten Loop)", Engine.instantStop) {
+            Engine.instantStop = it
+            prefs.edit().putBoolean("instantStop", it).apply()
+        }
+        check(box, "Start-Raster AUS – Loops reagieren sofort (phasenrichtig im Takt)", Engine.LAUNCH_Q[Engine.launchIdx] <= 0f) {
+            if (it) {
+                prefs.edit().putInt("launchIdxBefore", Engine.launchIdx).putInt("launchIdx", 0).apply()
+                Engine.launchIdx = 0
+            } else {
+                Engine.launchIdx = prefs.getInt("launchIdxBefore", 3).coerceIn(1, Engine.LAUNCH_Q.size - 1)
+                prefs.edit().putInt("launchIdx", Engine.launchIdx).apply()
+            }
+        }
+        note(box, "ONE SHOTS und Noten klingen immer im nächsten Audio-Block (wenige Millisekunden). Touch-Ereignisse werden ohne Bildtakt-Verzögerung zugestellt.")
+        AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
+            .setTitle("⚡ Latenz & Live-Reaktion")
+            .setView(scroll)
+            .setPositiveButton("Fertig", null)
+            .show()
+    }
+
+    private fun showMonitor() {
+        val prefs = getSharedPreferences("marvpad", MODE_PRIVATE)
+        val (box, scroll) = dialogBox()
+        if (!headphonesOut()) note(box, "⚠ Kein Kopfhörer erkannt – über den Lautsprecher pfeift es (Rückkopplung). Bitte Kopfhörer anschließen.", Color.rgb(255, 150, 60))
+        else if (bluetoothOut()) note(box, "⚠ Bluetooth verzögert die Stimme hörbar – für Live-Gesang Kabel-Kopfhörer nutzen.", Color.rgb(255, 150, 60))
+        check(box, "🎙 Mikrofon live hören", Engine.monitorOn) { Engine.monitorOn = it }
+        val lab = note(box, "", Color.WHITE)
+        fun show() { lab.text = "Lautstärke: ${(Engine.monitorGain * 100).toInt()} %" }
+        show()
+        box.addView(SeekBar(this).apply {
+            max = 150
+            progress = (Engine.monitorGain * 100).toInt()
+            setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                override fun onProgressChanged(sb: SeekBar?, pr: Int, fromUser: Boolean) {
+                    if (!fromUser) return
+                    Engine.monitorGain = pr / 100f
+                    show()
+                }
+                override fun onStartTrackingTouch(sb: SeekBar?) {}
+                override fun onStopTrackingTouch(sb: SeekBar?) { prefs.edit().putFloat("monGain", Engine.monitorGain).apply() }
+            })
+        })
+        check(box, "Zusätzlich durch die XY-Effekte (Effekt-Fläche spielen, während du singst)", Engine.monitorMaster) {
+            Engine.monitorMaster = it
+            prefs.edit().putBoolean("monMaster", it).apply()
+        }
+        box.addView(Button(this).apply {
+            text = "✨ Effekte fürs Mikrofon (bis zu 3) …  " + (if (Engine.padChainActive(Engine.MIC_CHAIN)) "AN · ${Engine.padFxCount(Engine.MIC_CHAIN)}" else "aus")
+            setOnClickListener { showPadFxEditor(Engine.MIC_CHAIN) }
+        })
+        note(box, "Mit Effekten aufnehmen: Pad-Eingang auf WAVE stellen (REC-Menü) – dann landet die Stimme samt Effekten im Pad. Der Song-Rekorder nimmt sie ebenfalls mit.")
+        AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
+            .setTitle("🎙 Live-Mikrofon")
+            .setView(scroll)
+            .setPositiveButton("Fertig", null)
+            .show()
+    }
+
+    private fun showMidi() {
+        val prefs = getSharedPreferences("marvpad", MODE_PRIVATE)
+        val (box, scroll) = dialogBox()
+        val status = note(box, "", Color.WHITE)
+        val live = note(box, "", Color.rgb(120, 220, 255))
+        val ticker = object : Runnable {
+            override fun run() {
+                status.text = if (Midi.deviceNames.isEmpty()) "Kein MIDI-Gerät verbunden – Controller per USB (OTG-Adapter) anschließen oder eine MIDI-App starten."
+                              else "Verbunden: " + Midi.deviceNames.joinToString(", ")
+                live.text = if (Midi.lastEvent.isEmpty()) "Letztes Ereignis: –" else "Letztes Ereignis: ${Midi.lastEvent}"
+                live.postDelayed(this, 250L)
+            }
+        }
+        ticker.run()
+        check(box, "MIDI an", Midi.enabled) { Midi.enabled = it }
+        fun chName(c: Int) = if (c == 0) "Omni (alle)" else "$c"
+        val chBtn = Button(this)
+        fun chLabel() { chBtn.text = "Pad-Kanal: ${chName(Midi.channel)}" }
+        chLabel()
+        chBtn.setOnClickListener {
+            val names = Array(17) { chName(it) }
+            AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK).setTitle("MIDI-Kanal der Pads")
+                .setSingleChoiceItems(names, Midi.channel) { d, w -> Midi.channel = w; chLabel(); d.dismiss() }.show()
+        }
+        box.addView(chBtn)
+        val baseBtn = Button(this)
+        fun baseLabel() { baseBtn.text = "Pad-Noten ab ${Midi.noteName(Midi.padBase)} (${Midi.padBase}) …" }
+        baseLabel()
+        baseBtn.setOnClickListener {
+            val opts = (24..84).toList()
+            AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK).setTitle("Pad 1 = Note …")
+                .setSingleChoiceItems(opts.map { "${Midi.noteName(it)} ($it)" + if (it == 36) " · MPC/Maschine" else if (it == 48) " · Keyboard C3" else "" }.toTypedArray(), opts.indexOf(Midi.padBase)) { d, w ->
+                    Midi.padBase = opts[w]
+                    for (i in 0 until 12) Midi.padNotes[i] = -1
+                    baseLabel()
+                    d.dismiss()
+                }.show()
+        }
+        box.addView(baseBtn)
+        box.addView(Button(this).apply {
+            text = "🎓 Pad-Noten einzeln lernen …"
+            setOnClickListener { midiLearnPads() }
+        })
+        check(box, "Anschlagdynamik (leise/laut wie gespielt)", Midi.velocity) { Midi.velocity = it }
+        val keysBtn = Button(this)
+        fun keysLabel() {
+            keysBtn.text = "Tastatur-Kanal: " + (if (Midi.keysChannel == 0) "aus" else "${Midi.keysChannel}") + " · spielt " + (if (Midi.keysPad < 0) "das Piano-Roll-Pad" else "Pad ${Midi.keysPad + 1}")
+        }
+        keysLabel()
+        keysBtn.setOnClickListener {
+            val names = arrayOf("aus") + Array(16) { "Kanal ${it + 1}" }
+            AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK).setTitle("Kanal für die Tastatur (chromatisch, C4 = Originalton)")
+                .setSingleChoiceItems(names, Midi.keysChannel) { d, w ->
+                    Midi.keysChannel = w
+                    d.dismiss()
+                    val pn = arrayOf("Pad aus der offenen Piano-Roll") + Array(PadView.VISIBLE_PADS) { "Pad ${it + 1}" }
+                    AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK).setTitle("Welches Pad spielt die Tastatur?")
+                        .setItems(pn) { _, p -> Midi.keysPad = p - 1; keysLabel() }.show()
+                    keysLabel()
+                }.show()
+        }
+        box.addView(keysBtn)
+        box.addView(Button(this).apply {
+            text = "🎛 Regler & Fader zuordnen (CC lernen) …"
+            setOnClickListener { midiCcMap() }
+        })
+        check(box, "MIDI-Clock empfangen – Tempo folgt dem Gerät", Midi.clockIn) { Midi.clockIn = it }
+        check(box, "Start/Stopp empfangen", Midi.transportIn) { Midi.transportIn = it }
+        check(box, "MIDI-Clock + Start/Stopp senden (Drumcomputer, Synths synchron)", Midi.clockOut) { Midi.clockOut = it }
+        check(box, "Programmwechsel startet Szene 1–8", Midi.programScenes) { Midi.programScenes = it }
+        box.addView(Button(this).apply {
+            text = "🔌 Geräte an/aus …"
+            setOnClickListener {
+                val all = Midi.allDevices()
+                if (all.isEmpty()) { toast("Kein MIDI-Gerät gefunden"); return@setOnClickListener }
+                val on = BooleanArray(all.size) { all[it] !in Midi.disabled }
+                AlertDialog.Builder(this@MainActivity, AlertDialog.THEME_DEVICE_DEFAULT_DARK).setTitle("MIDI-Geräte")
+                    .setMultiChoiceItems(all.toTypedArray(), on) { _, w, c -> on[w] = c }
+                    .setPositiveButton("OK") { _, _ ->
+                        Midi.disabled.clear()
+                        for (i in all.indices) if (!on[i]) Midi.disabled.add(all[i])
+                        Midi.reopen()
+                    }.show()
+            }
+        })
+        AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
+            .setTitle("🎹 MIDI")
+            .setView(scroll)
+            .setPositiveButton("Fertig", null)
+            .setOnDismissListener {
+                live.removeCallbacks(ticker)
+                Midi.learnPad = -1
+                Midi.learnCc = -1
+                Midi.save(prefs)
+            }
+            .show()
+    }
+
+    private fun midiLearnPads() {
+        val labels = Array(PadView.VISIBLE_PADS + 1) { i ->
+            if (i == PadView.VISIBLE_PADS) "↺ Alle zurücksetzen (Grundton + Pad)" else {
+                val n = Midi.padNote(i)
+                "Pad ${i + 1}: " + if (n < 0) "–" else "${Midi.noteName(n)} ($n)"
+            }
+        }
+        AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
+            .setTitle("Pad antippen, dann Taste am Controller drücken")
+            .setItems(labels) { _, w ->
+                if (w == PadView.VISIBLE_PADS) {
+                    for (i in 0 until 12) Midi.padNotes[i] = -1
+                    toast("Pad-Noten zurückgesetzt")
+                } else {
+                    Midi.learnPad = w
+                    hint("Pad ${w + 1}: jetzt eine Taste/ein Pad am Controller drücken …")
+                }
+            }
+            .setNegativeButton("Fertig", null)
+            .show()
+    }
+
+    private fun midiCcMap() {
+        val labels = Array(Midi.TARGETS.size) { i -> Midi.TARGETS[i] + ": " + (if (Midi.ccMap[i] < 0) "–" else "CC ${Midi.ccMap[i]}") }
+        AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
+            .setTitle("Ziel wählen")
+            .setItems(labels) { _, t ->
+                AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
+                    .setTitle(Midi.TARGETS[t])
+                    .setItems(arrayOf("🎓 Lernen – jetzt Regler am Controller bewegen", "Nummer eingeben …", "Zuordnung löschen")) { _, a ->
+                        when (a) {
+                            0 -> {
+                                Midi.learnCc = t
+                                hint("${Midi.TARGETS[t]}: Regler am Controller bewegen …")
+                            }
+                            1 -> askName(if (Midi.ccMap[t] >= 0) "${Midi.ccMap[t]}" else "", "CC-Nummer (0–127)") { v ->
+                                v.trim().toIntOrNull()?.let { n -> if (n in 0..127) Midi.ccMap[t] = n }
+                            }
+                            else -> Midi.ccMap[t] = -1
+                        }
+                    }
+                    .show()
+            }
+            .setNegativeButton("Fertig", null)
             .show()
     }
 
@@ -1145,6 +1646,7 @@ class MainActivity : Activity() {
         val pad = menuPad
         when (requestCode) {
             REQ_STEMS -> writeStems(uri)
+            REQ_DECK -> loadDeckUri(djDeck, uri)
             REQ_IMPORT -> {
                 if (pad < 0) return
                 toast("Importiere …")
@@ -1269,6 +1771,8 @@ class MainActivity : Activity() {
     // ---------------------------------------------------------------- Effekte je Pad
 
     /** Bis zu drei Effekte für ein Pad wählen und einstellen. */
+    private fun chainName(p: Int): String = if (p == Engine.MIC_CHAIN) "Mikrofon" else "Pad ${p + 1}"
+
     private fun showPadFxEditor(p: Int) {
         val d = resources.displayMetrics.density
         val pad = (16 * d).toInt()
@@ -1278,14 +1782,14 @@ class MainActivity : Activity() {
         }
         val scroll = android.widget.ScrollView(this).apply { addView(box) }
         val master = CheckBox(this).apply {
-            text = "Effekte für Pad ${p + 1} an"
+            text = "Effekte für ${chainName(p)} an"
             isChecked = Engine.padChainOn[p]
             setTextColor(Color.WHITE)
             setOnCheckedChangeListener { _, c -> Engine.padChainOn[p] = c }
         }
         box.addView(master)
         box.addView(TextView(this).apply {
-            text = "Die Effekte laufen nacheinander (1 › 2 › 3) nur auf diesem Pad – auch bei Noten aus der Piano-Roll. Der kleine FX-Knopf am Pad schaltet sie an/aus."
+            text = if (p == Engine.MIC_CHAIN) "Die Effekte liegen live auf deiner Stimme (1 › 2 › 3), solange „Mikrofon live hören“ an ist." else "Die Effekte laufen nacheinander (1 › 2 › 3) nur auf diesem Pad – auch bei Noten aus der Piano-Roll. Der kleine FX-Knopf am Pad schaltet sie an/aus."
             textSize = 12f
             setTextColor(Color.rgb(170, 170, 170))
             setPadding(0, 0, 0, pad / 2)
@@ -1307,7 +1811,7 @@ class MainActivity : Activity() {
                 setOnClickListener {
                     val names = arrayOf("— leer —") + Fx.NAMES
                     AlertDialog.Builder(this@MainActivity, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
-                        .setTitle("Pad ${p + 1} · Platz ${k + 1}")
+                        .setTitle("${chainName(p)} · Platz ${k + 1}")
                         .setItems(names) { _, w ->
                             Engine.setPadFxType(p, k, w - 1)
                             if (w > 0) {
@@ -1346,7 +1850,7 @@ class MainActivity : Activity() {
             box.addView(slotBoxes[k])
         }
         AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
-            .setTitle("✨ Effekte Pad ${p + 1}")
+            .setTitle("✨ Effekte ${chainName(p)}")
             .setView(scroll)
             .setPositiveButton("Fertig", null)
             .show()
@@ -1397,5 +1901,6 @@ class MainActivity : Activity() {
         private const val REQ_PATTERN = 11
         private const val REQ_COPY = 12
         private const val REQ_STEMS = 13
+        private const val REQ_DECK = 14
     }
 }
