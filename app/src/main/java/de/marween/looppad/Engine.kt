@@ -2422,8 +2422,10 @@ object Engine {
                         masterLen = l.data.size.toLong()
                         masterStart = written
                     }
-                    // zurückgeholte Loops wieder auf die Eins des Rasters legen
-                    if (l !== live) l.start = masterStart
+                    // zurückgeholte Loops ins Raster legen: gleiche Länge (Overdub) = gleiche Phase, sonst auf die Eins
+                    if (l !== live) {
+                        l.start = if (live != null && !live.oneShot && live.data.size == l.data.size) live.start else masterStart
+                    }
                 }
             }
             loops.set(s.p, l)

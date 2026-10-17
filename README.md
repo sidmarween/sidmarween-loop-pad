@@ -5,8 +5,21 @@ Android-App für Musiker: 16 Neon-Pads, XY-Effektfläche und Drehregler im Kaoss
 - **Aufnahme-Modus** (Schalter unten rechts): **✋ HALTEN** – nimmt auf, solange der Finger liegt; **👆 TIPPEN** – 1. Tipp startet, 2. Tipp setzt den Endpunkt. In beiden Fällen entsteht automatisch ein synchroner Loop mit **1, 2, 4, 8, 16 oder 32 Takten** – was der Haltezeit am nächsten liegt; der Start rastet auf den nächsten Taktanfang. Der erste Loop (ohne festes Tempo) wird zum Taktgeber.
 - **Pad mit Loop halten** – Overdub: nimmt zusätzlich auf den laufenden Loop drauf.
 - **Antippen** – Loop an / aus (steigt immer synchron zu den anderen Pads ein).
-- **CLEAR**, dann Pad antippen – Loop löschen.
-- **ALLE STUMM / ALLE AN** – alles auf einmal.
+- **ERASE**, dann Pad antippen – erst das Pattern des Pads, beim zweiten Tipp das Sample löschen.
+- **MUTE lange drücken** – alle Loops stumm / an.
+
+## Maschine-Workflow (Funktionsleiste & Transport)
+
+Angelehnt an Native Instruments Maschine – Leiste links und rechts vom Effekt-Knopf:
+- **SZENE** – die Pads werden zu 12 Szenen. Eine Szene speichert Sequenzer-Schritte, Matrix-Noten, ACID/DRUM-Pattern und welche Pads stumm sind. Antippen startet sie auf der nächsten Eins, eine leere Szene wird als Kopie der aktuellen angelegt. Szene lange drücken: Länge in Takten, Kette, Löschen. **SZENE lange drücken = Kette (Song-Modus)**: die Szenen laufen nacheinander.
+- **MUTE / SOLO** – Pads antippen schaltet sie stumm bzw. solo (auch ⚡-Pads im Sequenzer). SOLO lange drücken = alle Solos aus.
+- **ERASE** – Pad-Pattern bzw. Sample löschen, Sequenzer-Schritte antippen = Pattern leeren, mit SZENE: Szene löschen.
+- **DUPL** – Quell-Pad, dann Ziel-Pad antippen (Sample, Modus, Tonhöhe, Schritte, Noten). Mit SZENE: Szenen kopieren.
+- **REPEAT** – Note Repeat: gehaltenes ⚡-Pad oder DRUM-Pad wiederholt im Raster (lange drücken: 1/4, 1/8, 1/16, 1/32, 1/8T, 1/16T), bei Pattern-Aufnahme direkt ins Pattern.
+- Alle Modus-Knöpfe: antippen = einrasten, halten + Pad = nur kurz.
+- **Transport**: ▶ startet Loops, Sequenzer und Instrumente gemeinsam auf der Eins, ■ hält alles an. Eine Aufnahme auf ein Pad startet den Transport automatisch.
+- **● REC antippen** = Pattern-Aufnahme direkt (steht alles: 1 Takt Einzählen), nochmal antippen = Punch-out, alles läuft weiter. **REC lange drücken** = Song-Aufnahme, Pattern als WAV, Einzähler an/aus.
+- **↶ UNDO / ↷ REDO** – Aufnahmen, Overdubs, Löschen, Laden, Schritte, Noten und Pattern-Aufnahmen zurücknehmen bzw. wiederholen.
 
 ## Menü ☰ (oben rechts)
 
@@ -70,10 +83,9 @@ Im •••-Menü: Start-/Endpunkt an der Wellenform ziehen, **Zuschneiden**, m
 ## Sequenzer
 
 Statt der unteren Pad-Reihe: 16-Schritt-Sequenzer, synchron zum Takt (ohne Takt: 120 BPM).
-- **● REC** – Auswahl:
-  - **Pattern aufnehmen** – startet die Wiedergabe; angetippte ⚡-One-Shot-Pads landen auf dem nächsten Schritt.
-  - **Song aufnehmen** – nimmt alles auf, was du hörst (Loops, One-Shots, Sequenzer, Effekte), bis 15 Minuten. REC oder STOP beendet die Aufnahme, danach als WAV speichern.
-- **▶ PLAY** – Pattern abspielen · **■ STOP** – anhalten · **STOP halten** – Pattern leeren
+- **● REC** antippen – Pattern aufnehmen (mit Einzähler, wenn alles steht); angetippte ⚡-One-Shot-Pads landen auf dem nächsten Schritt.
+- **● REC lange drücken** – Song aufnehmen (mit oder ohne Effekte, bis 15 Minuten), Pattern als WAV speichern, Einzähler an/aus.
+- **▶ PLAY** – alles startet auf der Eins · **■ STOP** – alles anhalten · **STOP halten** – Pattern leeren
 - **Schritte antippen** – Schritt für das zuletzt gespielte ⚡-Pad an/aus
 - **Schritt hoch/runter ziehen** – Lautstärke dieses Schritts (Füllhöhe zeigt sie an)
 
