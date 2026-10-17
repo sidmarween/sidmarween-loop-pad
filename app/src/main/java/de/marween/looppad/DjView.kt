@@ -180,6 +180,8 @@ class DjView(context: Context) : View(context) {
     private val padsBtn = RectF()
     private val menuBtn = RectF()
     private val masterBtn = RectF()
+    private val setRecBtn = RectF()
+    var onSetRec: (() -> Unit)? = null
     private val masterPanel = MasterPanel(this).also { mp -> mp.onHint = { onHint?.invoke(it) } }
     private val display = RectF()
     private val lanes = arrayOf(RectF(), RectF())
@@ -224,11 +226,13 @@ class DjView(context: Context) : View(context) {
         val L = panel.left + m
         val R = panel.right - m
         var y = panel.top + dp(6f)
-        header.set(L, y, R, y + dp(40f))
-        menuBtn.set(R - dp(40f), y + dp(4f), R, y + dp(36f))
-        padsBtn.set(menuBtn.left - dp(78f), y + dp(4f), menuBtn.left - dp(6f), y + dp(36f))
-        masterBtn.set(padsBtn.left - dp(72f), y + dp(4f), padsBtn.left - dp(6f), y + dp(36f))
-        bpmChip.set(masterBtn.left - dp(92f), y + dp(4f), masterBtn.left - dp(6f), y + dp(36f))
+        header.set(L, y, R, y + dp(52f))
+        menuBtn.set(R - dp(40f), y + dp(10f), R, y + dp(42f))
+        padsBtn.set(menuBtn.left - dp(78f), y + dp(10f), menuBtn.left - dp(6f), y + dp(42f))
+        // MASTER und darunter die Set-Aufnahme
+        masterBtn.set(padsBtn.left - dp(72f), y + dp(1f), padsBtn.left - dp(6f), y + dp(25f))
+        setRecBtn.set(masterBtn.left, y + dp(27f), masterBtn.right, y + dp(51f))
+        bpmChip.set(masterBtn.left - dp(92f), y + dp(10f), masterBtn.left - dp(6f), y + dp(42f))
         y = header.bottom + dp(6f)
         val avail = panel.bottom - m - y
         // Höhenaufteilung (passt sich an kleine Displays an)
@@ -529,6 +533,19 @@ class DjView(context: Context) : View(context) {
         chip(c, bpmChip, if (b > 0f) String.format(Locale.GERMANY, "%.1f BPM", b) else "– BPM", Engine.seqPlaying)
         chip(c, padsBtn, "▦ PADS", false)
         chip(c, masterBtn, "MASTER", MasterBus.anyOn())
+        val rec = SetRecorder.recording
+        fill.shader = null
+        fill.color = if (rec) Color.rgb(200, 30, 45) else if (skin.dark) Color.argb(120, 0, 0, 0) else Color.argb(40, 0, 0, 0)
+        c.drawRoundRect(setRecBtn, dp(9f), dp(9f), fill)
+        stroke.strokeWidth = dp(1f)
+        stroke.color = if (rec) Color.rgb(255, 90, 100) else alpha(skin.ink, 0.35f)
+        c.drawRoundRect(setRecBtn, dp(9f), dp(9f), stroke)
+        val blink = rec && (SystemClock.uptimeMillis() / 500) % 2 == 0L
+        fill.color = if (rec && !blink) Color.WHITE else Color.rgb(235, 40, 55)
+        c.drawCircle(setRecBtn.left + dp(10f), setRecBtn.centerY(), dp(4f), fill)
+        text.textSize = dp(11f)
+        text.color = if (rec) Color.WHITE else skin.ink
+        c.drawText(if (rec) SetRecorder.fmt(SetRecorder.seconds()) else "REC", setRecBtn.centerX() + dp(6f), setRecBtn.centerY() + dp(4f), text)
         chip(c, menuBtn, "☰", false)
     }
 
@@ -1667,7 +1684,8 @@ class DjView(context: Context) : View(context) {
         when {
             hit(bpmChip, x, y) -> { onTempo?.invoke(); return }
             hit(padsBtn, x, y) -> { onPadsMode?.invoke(); return }
-            hit(masterBtn, x, y) -> { masterPanel.open(); haptic(); return }
+            hit(masterBtn, x, y, 0f) -> { masterPanel.open(); haptic(); return }
+            hit(setRecBtn, x, y, 0f) -> { onSetRec?.invoke(); haptic(); return }
             hit(menuBtn, x, y) -> { onMenu?.invoke(); return }
         }
         for (k in 0..1) {

@@ -417,6 +417,9 @@ class PadView(context: Context) : View(context) {
     private val designBtn = RectF()
     /** Master-Bereich (Mastering-Kette) oben im HUD. */
     private val masterBtn = RectF()
+    /** Set-Aufnahme (unter MASTER). */
+    private val setRecBtn = RectF()
+    var onSetRec: (() -> Unit)? = null
     private val masterPanel = MasterPanel(this).also { mp -> mp.onHint = { hint(it) } }
     private val seqRect = RectF()
     private val stepRects = Array(Engine.STEPS) { RectF() }
@@ -551,7 +554,8 @@ class PadView(context: Context) : View(context) {
         logoDst.set(margin, by + (topH - lh) / 2f, margin + lw, by + (topH + lh) / 2f)
         val db = dp(36f)
         designBtn.set(w - margin - db, by + (topH - db) / 2f, w - margin, by + (topH + db) / 2f)
-        masterBtn.set(designBtn.left - dp(6f) - dp(42f), designBtn.top, designBtn.left - dp(6f), designBtn.bottom)
+        masterBtn.set(designBtn.left - dp(6f) - dp(46f), by + dp(5f), designBtn.left - dp(6f), by + topH / 2f - dp(2f))
+        setRecBtn.set(masterBtn.left, by + topH / 2f + dp(2f), masterBtn.right, by + topH - dp(5f))
         displayRect.set(logoDst.right + dp(12f), by + dp(4f), masterBtn.left - dp(8f), by + topH - dp(4f))
 
         // Drehregler
@@ -976,15 +980,27 @@ class PadView(context: Context) : View(context) {
         strokePaint.strokeWidth = dp(1.5f)
         strokePaint.color = if (active) cols[2] else alpha(cols[1], 0.45f)
         canvas.drawRoundRect(r, rr, rr, strokePaint)
-        textPaint.textSize = dp(8.5f)
+        textPaint.textSize = dp(9f)
         textPaint.color = if (active) Color.WHITE else cols[1]
-        canvas.drawText("MAS", r.centerX(), r.centerY() - dp(2f), textPaint)
-        canvas.drawText("TER", r.centerX(), r.centerY() + dp(8f), textPaint)
+        canvas.drawText("MASTER", r.centerX(), r.centerY() + dp(3f), textPaint)
         if (active) {
             val gr = (MasterBus.limGr + MasterBus.compGr).coerceIn(0f, 12f) / 12f
             fillPaint.color = Color.rgb(255, 170, 40)
-            canvas.drawRect(r.left + dp(4f), r.bottom - dp(5f), r.left + dp(4f) + (r.width() - dp(8f)) * gr, r.bottom - dp(3f), fillPaint)
+            canvas.drawRect(r.left + dp(4f), r.bottom - dp(4f), r.left + dp(4f) + (r.width() - dp(8f)) * gr, r.bottom - dp(2f), fillPaint)
         }
+        // Set-Aufnahme
+        val q = setRecBtn
+        val rec = SetRecorder.recording
+        val blink = rec && (SystemClock.uptimeMillis() / 500) % 2 == 0L
+        fillPaint.color = if (rec) Color.rgb(200, 30, 45) else cols[0]
+        canvas.drawRoundRect(q, rr, rr, fillPaint)
+        strokePaint.color = if (rec) Color.rgb(255, 90, 100) else alpha(cols[1], 0.45f)
+        canvas.drawRoundRect(q, rr, rr, strokePaint)
+        dotPaint.color = if (rec && !blink) Color.WHITE else Color.rgb(235, 40, 55)
+        canvas.drawCircle(q.left + dp(8f), q.centerY(), dp(3.5f), dotPaint)
+        textPaint.textSize = dp(8.5f)
+        textPaint.color = if (rec) Color.WHITE else cols[1]
+        canvas.drawText(if (rec) SetRecorder.fmt(SetRecorder.seconds()) else "REC", q.centerX() + dp(5f), q.centerY() + dp(3f), textPaint)
     }
 
     private fun drawDesignButton(canvas: Canvas) {
@@ -2540,6 +2556,11 @@ class PadView(context: Context) : View(context) {
                 if (designBtn.contains(x, y)) {
                     performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
                     onDesignMenu?.invoke()
+                    return true
+                }
+                if (setRecBtn.contains(x, y)) {
+                    performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+                    onSetRec?.invoke()
                     return true
                 }
                 if (masterBtn.contains(x, y)) {

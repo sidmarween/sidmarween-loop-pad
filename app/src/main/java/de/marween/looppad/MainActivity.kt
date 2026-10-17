@@ -145,6 +145,8 @@ class MainActivity : Activity() {
         dj.onSkinMenu = { showDesigns() }
         dj.onSamplerLoad = { p -> showSamplerLoad(p) }
         dj.onEditSaveLib = { k -> saveDeckToLib(k) }
+        dj.onSetRec = { toggleSetRec() }
+        pads.onSetRec = { toggleSetRec() }
         djMode = prefs.getBoolean("djMode", false)
         // MIDI
         Midi.load(prefs)
@@ -262,12 +264,16 @@ class MainActivity : Activity() {
     override fun onStop() {
         // Während einer Dateiauswahl oder wenn im DJ-Modus ein Deck läuft, spielt die Musik weiter
         val djPlaying = djMode && (Dj.decks[0].playing || Dj.decks[1].playing)
-        if (!pickerOpen && !djPlaying) Engine.stop()
+        // läuft eine Set-Aufnahme, bleibt das Audio an
+        if (!pickerOpen && !djPlaying && !SetRecorder.recording) Engine.stop()
         super.onStop()
     }
 
     override fun onDestroy() {
-        if (isFinishing) Engine.stop()
+        if (isFinishing) {
+            SetRecorder.stop()
+            Engine.stop()
+        }
         super.onDestroy()
     }
 
@@ -634,6 +640,87 @@ class MainActivity : Activity() {
                 runOnUiThread { toast("Laden fehlgeschlagen: ${e.message ?: e}") }
             }
         }.start()
+    }
+
+    // ================================================================ Set-Aufnahme (Master)
+
+    private var pendingSet: java.io.File? = null
+
+    private fun toggleSetRec() {
+        if (!SetRecorder.recording) {
+            if (!Engine.running) { toast("Audio läuft nicht"); return }
+            if (SetRecorder.start(this, Engine.sampleRate)) hint("🔴 Set-Aufnahme läuft – Master in Stereo, nochmal tippen beendet")
+            else toast("Aufnahme konnte nicht gestartet werden")
+            return
+        }
+        val f = SetRecorder.stop() ?: return
+        val dur = SetRecorder.fmt(SetRecorder.seconds())
+        val lost = SetRecorder.dropped
+        AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
+            .setTitle("Set aufgenommen · $dur")
+            .setMessage(String.format(Locale.GERMANY, "%s\n%.1f MB · WAV Stereo 16 Bit", f.name, f.length() / 1048576.0) +
+                (if (lost > 0) "\n⚠ ${lost} Frames übersprungen (Speicher zu langsam)" else ""))
+            .setPositiveButton("📤 Exportieren") { _, _ -> exportSet(f) }
+            .setNeutralButton("Umbenennen") { _, _ -> renameSet(f) }
+            .setNegativeButton("Fertig", null)
+            .show()
+    }
+
+    private fun exportSet(f: java.io.File) {
+        pendingSet = f
+        val i = Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = "audio/wav"
+            putExtra(Intent.EXTRA_TITLE, f.name)
+        }
+        try { startActivityForResult(i, REQ_SET) } catch (e: Exception) { toast("Kein Dateimanager gefunden") }
+    }
+
+    private fun renameSet(f: java.io.File) {
+        askName(f.nameWithoutExtension, "Name des Sets") { n ->
+            val clean = n.replace(Regex("[^\\w\\- äöüÄÖÜß.]"), "_").trim().ifEmpty { f.nameWithoutExtension }
+            val dst = java.io.File(f.parentFile, "$clean.wav")
+            if (f.renameTo(dst)) toast("Umbenannt: ${dst.name}") else toast("Umbenennen nicht möglich")
+        }
+    }
+
+    private fun showSets() {
+        val sets = SetRecorder.list(this)
+        if (sets.isEmpty()) { toast("Noch keine Sets – oben unter MASTER auf REC tippen"); return }
+        val labels = sets.map { f ->
+            val sec = (f.length() - 44) / (Engine.sampleRate * 4.0)
+            String.format(Locale.GERMANY, "%s · %s · %.0f MB", f.nameWithoutExtension, SetRecorder.fmt(sec), f.length() / 1048576.0)
+        }
+        AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
+            .setTitle("🔴 Meine Set-Aufnahmen")
+            .setItems(labels.toTypedArray()) { _, i ->
+                val f = sets[i]
+                AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
+                    .setTitle(f.nameWithoutExtension)
+                    .setItems(arrayOf("📤 Exportieren (WAV)", "✎ Umbenennen", "🎧 In Deck A laden", "🗑 Löschen")) { _, a ->
+                        when (a) {
+                            0 -> exportSet(f)
+                            1 -> renameSet(f)
+                            2 -> {
+                                val dd = Dj.decks[0]
+                                dd.loading = true
+                                Thread {
+                                    try {
+                                        val t = Dj.decode(this, Uri.fromFile(f))
+                                        Dj.load(dd, t, f.nameWithoutExtension, null)
+                                        runOnUiThread { hint("Deck A: ${f.nameWithoutExtension}"); switchMode(true) }
+                                    } catch (e: Throwable) {
+                                        runOnUiThread { toast("Laden fehlgeschlagen: ${e.message ?: e}") }
+                                    } finally { dd.loading = false }
+                                }.start()
+                            }
+                            else -> confirm("Set löschen?", f.name) { f.delete() }
+                        }
+                    }
+                    .show()
+            }
+            .setNegativeButton("Schließen", null)
+            .show()
     }
 
     // ================================================================ ACID/DRUM: MIDI-Dateien
@@ -1085,6 +1172,7 @@ class MainActivity : Activity() {
                 String.format(Locale.GERMANY, "⚡ Latenz & Live-Reaktion (%.0f ms)", Engine.outputLatencyMs()),
                 (if (Engine.monitorOn) "☑" else "☐") + " 🎙 Live-Mikrofon mit Effekten …",
                 "🎹 MIDI (" + (if (Midi.deviceNames.isEmpty()) "kein Gerät" else Midi.deviceNames.joinToString(", ")) + ")",
+                "🔴 Meine Set-Aufnahmen (${SetRecorder.list(this).size})",
                 if (djMode) "▦ Zurück zum Pad-Modus" else "🎧 DJ-Modus (zwei Decks, Crossfader)"
             )) { _, which ->
                 when (which) {
@@ -1092,7 +1180,8 @@ class MainActivity : Activity() {
                     10 -> showLatency()
                     11 -> showMonitor()
                     12 -> showMidi()
-                    13 -> switchMode(!djMode)
+                    13 -> showSets()
+                    14 -> switchMode(!djMode)
                     8 -> {
                         Engine.tapOverdub = !Engine.tapOverdub
                         getSharedPreferences("marvpad", MODE_PRIVATE).edit().putBoolean("tapOverdub", Engine.tapOverdub).apply()
@@ -2088,6 +2177,18 @@ class MainActivity : Activity() {
             REQ_MIDI_IN -> readMidi(uri)
             REQ_INST_OUT -> writeInstMidi(uri)
             REQ_INST_IN -> readInstMidi(uri)
+            REQ_SET -> {
+                val f = pendingSet ?: return
+                toast("Exportiere …")
+                Thread {
+                    try {
+                        contentResolver.openOutputStream(uri)?.use { out -> f.inputStream().use { it.copyTo(out, 1 shl 16) } }
+                        runOnUiThread { toast("Set exportiert") }
+                    } catch (e: Exception) {
+                        runOnUiThread { toast("Export fehlgeschlagen: ${e.message ?: e}") }
+                    }
+                }.start()
+            }
             REQ_IMPORT -> {
                 if (pad < 0) return
                 toast("Importiere …")
@@ -2347,5 +2448,6 @@ class MainActivity : Activity() {
         private const val REQ_MIDI_IN = 16
         private const val REQ_INST_OUT = 17
         private const val REQ_INST_IN = 18
+        private const val REQ_SET = 19
     }
 }

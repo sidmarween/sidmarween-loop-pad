@@ -1760,6 +1760,7 @@ object Engine {
         val stereo = FloatArray(block * 2)
         val mL = FloatArray(block)
         val mR = FloatArray(block)
+        val recSt = FloatArray(block * 2)
         var lastUnder = try { t.underrunCount } catch (e: Throwable) { 0 }
         var blocks = 0
         micCursor = -1L
@@ -1975,6 +1976,8 @@ object Engine {
             for (i in 0 until block) {
                 var l = softClip(mL[i])
                 var r = softClip(mR[i])
+                recSt[2 * i] = l
+                recSt[2 * i + 1] = r
                 if (split) {
                     // Split-Cue: links Master (mono), rechts Vorhören
                     l = (l + r) * 0.5f
@@ -2003,6 +2006,8 @@ object Engine {
             }
             scopeW = sp
 
+            // Set-Aufnahme: Master (Stereo) ohne Metronom und ohne Vorhör-Kanal
+            if (SetRecorder.recording) SetRecorder.push(recSt, block)
             val splitNow = djOn && Dj.splitCue
             if (splitNow) java.util.Arrays.fill(mono, 0f)
             val clickTo = if (splitNow) mono else out
