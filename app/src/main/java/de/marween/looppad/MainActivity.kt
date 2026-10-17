@@ -117,6 +117,7 @@ class MainActivity : Activity() {
         pads.onEditorSave = { p, data, slices, cues -> showEditorSave(p, data, slices, cues) }
         pads.onRollIo = { p -> showRollIo(p) }
         pads.onInstMidi = { k -> showInstMidi(k) }
+        pads.onInstPresets = { k -> showInstPresets(k) }
         pads.onLaunchQuantChanged = {
             prefs.edit().putInt("launchIdx", Engine.launchIdx).apply()
             hint(if (Engine.LAUNCH_Q[Engine.launchIdx] <= 0f) "Start-Raster AUS: Loops starten/stoppen sofort"
@@ -721,6 +722,64 @@ class MainActivity : Activity() {
             }
             .setNegativeButton("Schließen", null)
             .show()
+    }
+
+    // ================================================================ ACID/DRUM: Presets
+
+    private fun showInstPresets(k: Int) {
+        val isAcid = k == 1
+        val genres = if (isAcid) InstPresets.ACIDS.map { it.genre }.distinct() else InstPresets.DRUMS.map { it.genre }.distinct()
+        val items = listOf("🎲 Zufall (Acid-Banger-Generator)") + genres.map { g ->
+            val n = if (isAcid) InstPresets.ACIDS.count { it.genre == g } else InstPresets.DRUMS.count { it.genre == g }
+            "$g ($n)"
+        } + listOf("📥 Eigene MIDI-Datei laden …")
+        AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
+            .setTitle(if (isAcid) "ACID 303 · Presets" else "DRUM 909 · Beats")
+            .setItems(items.toTypedArray()) { _, w ->
+                when {
+                    w == 0 -> {
+                        Engine.pushPatternUndo("Zufall")
+                        if (isAcid) InstPresets.randomAcid() else InstPresets.randomDrums()
+                        hint("🎲 Neues Zufalls-Pattern – nochmal für ein anderes")
+                    }
+                    w == items.size - 1 -> showInstMidi(k)
+                    else -> {
+                        val g = genres[w - 1]
+                        if (isAcid) {
+                            val list = InstPresets.ACIDS.filter { it.genre == g }
+                            AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK).setTitle(g)
+                                .setItems(list.map { "${it.name} · ${it.bpm} BPM" }.toTypedArray()) { _, i ->
+                                    val p = list[i]
+                                    Engine.pushPatternUndo("ACID Preset")
+                                    InstPresets.applyAcid(p)
+                                    presetTempo(p.bpm)
+                                    hint("ACID: ${p.name} – Klang-Einstellungen mitgeladen")
+                                }.show()
+                        } else {
+                            val list = InstPresets.DRUMS.filter { it.genre == g }
+                            AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK).setTitle(g)
+                                .setItems(list.map { if (it.bpm > 0) "${it.name} · ${it.bpm} BPM" else it.name }.toTypedArray()) { _, i ->
+                                    val p = list[i]
+                                    Engine.pushPatternUndo("DRUM Preset")
+                                    InstPresets.applyDrum(p)
+                                    if (p.bpm > 0) {
+                                        presetTempo(p.bpm)
+                                        if (p.swing > 0f) Engine.swing = p.swing
+                                    }
+                                    hint("DRUM: ${p.name}" + if (p.swing > 0f) " · Swing ${50 + (p.swing * 25).toInt()} %" else "")
+                                }.show()
+                        }
+                    }
+                }
+            }
+            .setNegativeButton("Abbrechen", null)
+            .show()
+    }
+
+    /** Tempo des Presets übernehmen – nur wenn noch keine Loops laufen (sonst bleibt das Master-Tempo). */
+    private fun presetTempo(bpm: Int) {
+        if (bpm <= 0) return
+        if (Engine.currentBpm() <= 0f || (0 until Engine.PADS).none { Engine.hasLoop(it) }) Engine.setBpm(bpm.toFloat())
     }
 
     // ================================================================ ACID/DRUM: MIDI-Dateien

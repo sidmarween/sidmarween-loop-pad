@@ -6488,9 +6488,12 @@ class PadView(context: Context) : View(context) {
         ed.onHint = { hint(it) }
         ed.onRec = { recPressed() }
         ed.onMidi = { k -> onInstMidi?.invoke(k) }
+        ed.onPresets = { k -> onInstPresets?.invoke(k) }
     }
     /** ACID/DRUM: Noten als MIDI-Datei laden/exportieren (1 = ACID, 2 = DRUM). */
     var onInstMidi: ((Int) -> Unit)? = null
+    /** Preset-Bibliothek für ACID (1) / DRUM (2). */
+    var onInstPresets: ((Int) -> Unit)? = null
     private val modeRects = Array(3) { RectF() }
     private val modeNames = arrayOf("🎛 EFFEKTE", "🔊 ACID 303", "🥁 DRUM 909")
 
@@ -6823,7 +6826,7 @@ class PadView(context: Context) : View(context) {
                     5 -> instEd.open(2)
                     0 -> st.drumOn = !st.drumOn
                     1 -> st.drumFx = !st.drumFx
-                    2 -> { Engine.pushPatternUndo("DRUM Preset"); st.drumApplyPreset(st.drumPreset + 1) }
+                    2 -> onInstPresets?.invoke(2)
                     3 -> if (Engine.seqPlaying) Engine.seqStop() else Engine.seqPlay()
                     4 -> { Engine.pushPatternUndo("DRUM leeren"); st.drumClear() }
                 }

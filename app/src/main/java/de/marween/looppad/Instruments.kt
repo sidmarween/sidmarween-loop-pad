@@ -46,23 +46,8 @@ object InstState {
     /** Live-Filter-Modulation vom Touchpad (−1 … +1). */
     @Volatile var acidCutMod = 0f
 
-    fun acidRandom() {
-        val scale = intArrayOf(0, 0, 3, 5, 7, 10, 12, 12, 15, 0, 7)
-        val r = java.util.Random()
-        for (k in 0 until STEPS) {
-            acidGate[k] = r.nextFloat() < 0.72f
-            acidSemi[k] = scale[r.nextInt(scale.size)] + if (r.nextFloat() < 0.15f) -12 else 0
-            acidAcc[k] = r.nextFloat() < 0.25f
-            acidSlide[k] = r.nextFloat() < 0.22f
-        }
-        acidGate[0] = true
-        java.util.Arrays.fill(acidTie, false)
-        // weitere Takte wiederholen den ersten
-        for (k in STEPS until MAX) {
-            acidGate[k] = acidGate[k % STEPS]; acidSemi[k] = acidSemi[k % STEPS]
-            acidAcc[k] = acidAcc[k % STEPS]; acidSlide[k] = acidSlide[k % STEPS]
-        }
-    }
+    /** Zufalls-Linie (Algorithmus nach „Acid Banger“, David Whiting, CC BY 4.0). */
+    fun acidRandom() = InstPresets.randomAcid()
 
     fun acidClear() {
         java.util.Arrays.fill(acidGate, false)

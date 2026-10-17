@@ -28,6 +28,8 @@ class InstEditor(private val host: View) {
     var onHint: ((String) -> Unit)? = null
     var onMidi: ((Int) -> Unit)? = null
     var onRec: (() -> Unit)? = null
+    /** Preset-Auswahl (1 = ACID, 2 = DRUM). */
+    var onPresets: ((Int) -> Unit)? = null
 
     private val d = host.resources.displayMetrics.density
     private fun dp(v: Float) = v * d
@@ -245,7 +247,7 @@ class InstEditor(private val host: View) {
         val clipN = if (kind == 1) aClip.size else dClip.size
         btn(c, bPaste, if (clipN > 0) "EINF. $clipN" else "EINF.", false, acc)
         btn(c, bDel, if (sel.isNotEmpty()) "LÖSCH ${sel.size}" else "LÖSCH", false, acc)
-        btn(c, bExtra, if (kind == 1) "⇅ HALBTON" else "▦ PRESET", false, acc)
+        btn(c, bExtra, "▦ PRESETS", false, acc)
         btn(c, bQuant, if (sel.isNotEmpty()) "QUANT ${sel.size}" else "QUANT", false, acc)
         if (sound) {
             drawSound(c, acc)
@@ -1079,11 +1081,9 @@ class InstEditor(private val host: View) {
                 if (kind == 1) for (h in sel) { if (aHead(h)) aDelete(h) } else for (key in sel) st.drumSteps[key / InstState.MAX][key % InstState.MAX] = 0
                 sel.clear()
             }
-            bExtra.contains(x, y) -> if (kind == 1) transpose() else {
-                Engine.pushPatternUndo("DRUM Preset")
-                st.drumApplyPreset(st.drumPreset + 1)
-                for (v in 0 until InstState.DV) for (k in 16 until InstState.MAX) st.drumSteps[v][k] = st.drumSteps[v][k % 16]
-                onHint?.invoke("Preset: ${st.presetNames[st.drumPreset]}")
+            bExtra.contains(x, y) -> {
+                sel.clear()
+                onPresets?.invoke(kind)
             }
             bQuant.contains(x, y) -> quantize()
             else -> return false

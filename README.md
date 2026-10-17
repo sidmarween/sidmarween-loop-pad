@@ -203,3 +203,9 @@ Auf der ACID- bzw. DRUM-Fläche **✎ EDIT**: links Klaviatur (ACID) bzw. die 11
 ## VEL – Lautstärke je Note
 
 In Piano-Roll, ACID- und DRUM-Editor liegt unter der Matrix die **VEL**-Spur: je Note ein Balken, mit dem Finger hoch/runter ziehen (über mehrere Noten wischen geht auch; markierte Noten ändern sich gemeinsam).
+
+## ▦ Presets für DRUM 909 und ACID 303
+
+Im ACID/DRUM-Editor **▦ PRESETS** (bei DRUM auch auf der Fläche): 37 Drum-Beats in 7 Gruppen (House, Techno, Trance & Hard, Electro & Bass, Breaks & DnB, Hip-Hop & Trap, Band & World, Fills) und 21 Acid-Linien (Klassisch, Dunkel, Hypnotisch, Funky, Hart, 2 Takte) mit passenden Klang-Einstellungen. Tempo und Swing werden übernommen, solange noch keine Loops laufen. Dazu ein **🎲 Zufalls-Generator** und der Import eigener MIDI-Dateien.
+
+Quellen & Lizenzen: Die Beats sind genretypische Grundmuster, die Acid-Linien eigene Kompositionen – beide für Marv PAD neu notiert. Der Zufalls-Generator folgt dem Algorithmus von **„Acid Banger“ von David Whiting** (https://github.com/vitling/acid-banger), lizenziert unter **Creative Commons Attribution 4.0** (https://creativecommons.org/licenses/by/4.0/) – nach Kotlin übertragen und an die App angepasst.
