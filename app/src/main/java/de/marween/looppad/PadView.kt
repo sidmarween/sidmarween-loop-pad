@@ -5561,7 +5561,10 @@ class PadView(context: Context) : View(context) {
     /** Cue-Punkte (Frames im Audio, -1 = leer) – für die DJ-Bibliothek. */
     private val edCues = IntArray(4) { -1 }
     private var edCueMode = false
-    private var edLoupeX = -1f
+    private var edMoved = false
+    private var edDownX = 0f
+    private var edMarkOrig = 0
+    private var edPinchF0 = 0.0
     private var edPanX = 0f
     private var edPanV0 = 0
     private var edPinch0 = 0f
@@ -5705,30 +5708,21 @@ class PadView(context: Context) : View(context) {
                         if (edPreview >= 0) Engine.noteOff(edPreview)
                         edPad = -1
                     }
-                    e.actionMasked == MotionEvent.ACTION_POINTER_DOWN && e.pointerCount == 2 && (edWave.contains(x, y) || edDrag in 1..2 || edDrag == 5) -> {
-                        // zwei Finger: Lupe aufziehen / zusammenschieben
+                    e.actionMasked == MotionEvent.ACTION_POINTER_DOWN && e.pointerCount == 2 && (edWave.contains(x, y) || edDrag in 1..2 || edDrag in 5..7) -> {
+                        // Daumen + Zeigefinger: auseinander = hineinzoomen, zusammen = heraus, gemeinsam ziehen = verschieben
+                        if (edDrag == 1) edStart = edMarkOrig
+                        if (edDrag == 2) edEnd = edMarkOrig
                         edDrag = 6
-                        edLoupeX = -1f
-                        edPinch0 = abs(e.getX(0) - e.getX(1))
+                        edPinch0 = kotlin.math.hypot(e.getX(0) - e.getX(1), e.getY(0) - e.getY(1))
                         edPinchV0 = edV0
                         edPinchV1 = edV1
+                        val cx = (e.getX(0) + e.getX(1)) / 2f
+                        edPinchF0 = edV0 + ((cx - edWave.left) / edWave.width()).coerceIn(0f, 1f).toDouble() * (edV1 - edV0)
                     }
                     edCueMode && edWave.contains(x, y) -> {
-                        // Cue-Punkt setzen bzw. (nahe an einem) entfernen
-                        val near = edCues.indexOfFirst { it >= 0 && abs(frameToX(it) - x) < dp(18f) }
-                        if (near >= 0) {
-                            edCues[near] = -1
-                            edToast("Cue ${near + 1} entfernt")
-                        } else {
-                            val slot = edCues.indexOfFirst { it < 0 }
-                            if (slot < 0) edToast("Alle 4 Cue-Punkte belegt – einen antippen zum Entfernen")
-                            else {
-                                var f = xToFrame(x)
-                                if (edSnap) f = zeroCross(f)
-                                edCues[slot] = f
-                                edToast("Cue ${slot + 1} gesetzt")
-                            }
-                        }
+                        // Cue erst beim Loslassen setzen – so kann noch ein zweiter Finger zum Zoomen dazukommen
+                        edDrag = 7
+                        edDownX = x
                     }
                     edCueBtn.contains(x, y) -> {
                         edCueMode = !edCueMode
@@ -5746,16 +5740,17 @@ class PadView(context: Context) : View(context) {
                             abs(x - sx) <= abs(x - ex) -> 1
                             else -> 2
                         }
+                        edMoved = false
+                        edDownX = x
                         if (edDrag == 5) {
                             edPanX = x
                             edPanV0 = edV0
                         } else {
-                            edLoupeX = x
-                            moveMarker(x)
+                            edMarkOrig = if (edDrag == 1) edStart else edEnd
                         }
                     }
-                    edZoomIn.contains(x, y) -> edSetView((edV0 + edV1) / 2, (edV1 - edV0) / 2)
-                    edZoomOut.contains(x, y) -> edSetView((edV0 + edV1) / 2, (edV1 - edV0) * 2)
+                    edZoomOut.contains(x, y) -> edSetView(edData.size / 2, edData.size)
+                    edZoomIn.contains(x, y) -> edSetView((edStart + edEnd) / 2, ((edEnd - edStart) * 1.1).toInt())
                     edToS.contains(x, y) -> edSetView(edStart, min(edV1 - edV0, max(Engine.sampleRate / 10, (edEnd - edStart) / 8)))
                     edToE.contains(x, y) -> edSetView(edEnd, min(edV1 - edV0, max(Engine.sampleRate / 10, (edEnd - edStart) / 8)))
                     edSnapBtn.contains(x, y) -> {
@@ -5801,8 +5796,8 @@ class PadView(context: Context) : View(context) {
                 val x = e.getX(0)
                 val y = e.getY(0)
                 when (edDrag) {
-                    1, 2 -> {
-                        edLoupeX = x
+                    1, 2 -> if (edMoved || abs(x - edDownX) > dp(4f)) {
+                        edMoved = true
                         moveMarker(x)
                     }
                     5 -> {
@@ -5815,22 +5810,50 @@ class PadView(context: Context) : View(context) {
                         }
                     }
                     6 -> if (e.pointerCount >= 2 && edPinch0 > dp(20f)) {
-                        val d1 = abs(e.getX(0) - e.getX(1))
+                        val d1 = kotlin.math.hypot(e.getX(0) - e.getX(1), e.getY(0) - e.getY(1))
                         val span0 = edPinchV1 - edPinchV0
+                        val n = edData.size
+                        val span = (span0 * edPinch0 / max(dp(10f), d1)).toInt().coerceIn(min(n, max(64, Engine.sampleRate / 400)), n)
+                        // die Stelle unter den Fingern bleibt unter den Fingern
                         val cx = (e.getX(0) + e.getX(1)) / 2f
-                        val fc = edPinchV0 + ((cx - edWave.left) / edWave.width()).coerceIn(0f, 1f) * span0
-                        edSetView(fc.toInt(), (span0 * edPinch0 / max(dp(10f), d1)).toInt())
+                        val rel = ((cx - edWave.left) / edWave.width()).coerceIn(0f, 1f)
+                        val v0 = (edPinchF0 - rel * span).toInt().coerceIn(0, max(0, n - span))
+                        if (v0 != edV0 || v0 + span != edV1) {
+                            edV0 = v0
+                            edV1 = v0 + span
+                            computePeaks()
+                        }
                     }
                     3 -> edSlices = (edDragVal + (edDragY - y) / dp(12f)).toInt().coerceIn(1, 32)
                     4 -> edBars = barOptions[(edDragVal + (edDragY - y) / dp(30f)).toInt().coerceIn(0, barOptions.size - 1)]
                 }
             }
             MotionEvent.ACTION_UP, MotionEvent.ACTION_POINTER_UP, MotionEvent.ACTION_CANCEL -> {
+                val cancel = e.actionMasked == MotionEvent.ACTION_CANCEL
+                // kurzer Tipp ohne Ziehen: Marker springt an die Stelle
+                if (!cancel && (edDrag == 1 || edDrag == 2) && !edMoved) moveMarker(edDownX)
                 if (edDrag == 1 || edDrag == 2) edBars = Engine.suggestBars(edEnd - edStart)
+                if (!cancel && edDrag == 7 && e.actionMasked == MotionEvent.ACTION_UP) edCueTap(edDownX)
                 edDrag = 0
-                edLoupeX = -1f
             }
         }
+    }
+
+    private fun edCueTap(x: Float) {
+                val near = edCues.indexOfFirst { it >= 0 && abs(frameToX(it) - x) < dp(18f) }
+                if (near >= 0) {
+                    edCues[near] = -1
+                    edToast("Cue ${near + 1} entfernt")
+                } else {
+                    val slot = edCues.indexOfFirst { it < 0 }
+                    if (slot < 0) edToast("Alle 4 Cue-Punkte belegt – einen antippen zum Entfernen")
+                    else {
+                        var f = xToFrame(x)
+                        if (edSnap) f = zeroCross(f)
+                        edCues[slot] = f
+                        edToast("Cue ${slot + 1} gesetzt")
+                    }
+                }
     }
 
     private fun moveMarker(x: Float) {
@@ -5839,46 +5862,6 @@ class PadView(context: Context) : View(context) {
         val minLen = Engine.sampleRate / 50
         if (edDrag == 1) edStart = f.coerceIn(0, max(0, edEnd - minLen))
         else if (edDrag == 2) edEnd = f.coerceIn(min(edData.size, edStart + minLen), edData.size)
-    }
-
-    /** Runde Lupe über dem Finger: ±8 ms um den Marker, mit Nulllinie. */
-    private fun drawLoupe(canvas: Canvas, f: Int, acc: Int) {
-        val w = edWave
-        val r = dp(52f)
-        val cx = edLoupeX.coerceIn(w.left + r, w.right - r)
-        val cy = w.top - r * 0.2f
-        val d = edData
-        val half = max(48, Engine.sampleRate / 125)
-        canvas.save()
-        val clip = Path()
-        clip.addCircle(cx, cy, r, Path.Direction.CW)
-        canvas.clipPath(clip)
-        fillPaint.color = Color.rgb(10, 11, 14)
-        canvas.drawCircle(cx, cy, r, fillPaint)
-        strokePaint.strokeWidth = dp(0.8f)
-        strokePaint.color = Color.argb(70, 255, 255, 255)
-        canvas.drawLine(cx - r, cy, cx + r, cy, strokePaint)
-        val path = Path()
-        val steps = (2 * r).toInt()
-        for (px in 0..steps) {
-            val ff = (f - half + px.toLong() * 2 * half / steps).toInt()
-            val v = if (ff in d.indices) (d[ff] / edNorm).coerceIn(-1f, 1f) else 0f
-            val yy = cy - v * r * 0.8f
-            if (px == 0) path.moveTo(cx - r + px, yy) else path.lineTo(cx - r + px, yy)
-        }
-        strokePaint.strokeWidth = dp(1.8f)
-        strokePaint.color = acc
-        canvas.drawPath(path, strokePaint)
-        strokePaint.strokeWidth = dp(1.5f)
-        strokePaint.color = Color.WHITE
-        canvas.drawLine(cx, cy - r, cx, cy + r, strokePaint)
-        canvas.restore()
-        strokePaint.strokeWidth = dp(2.5f)
-        strokePaint.color = acc
-        canvas.drawCircle(cx, cy, r, strokePaint)
-        textPaint.textSize = dp(9f)
-        textPaint.color = Color.WHITE
-        canvas.drawText(String.format(Locale.GERMANY, "%.3f s", f.toFloat() / Engine.sampleRate), cx, cy + r - dp(8f), textPaint)
     }
 
     private fun reloadEditor(msg: String) {
@@ -5923,8 +5906,8 @@ class PadView(context: Context) : View(context) {
         val sx = frameToX(edStart)
         val ex = frameToX(edEnd)
         val mid = w.centerY()
-        smallBtn(canvas, edZoomOut, "🔍−", false, cols)
-        smallBtn(canvas, edZoomIn, "🔍+ " + edZoomLabel(), edV1 - edV0 < edData.size, cols)
+        smallBtn(canvas, edZoomOut, "⤢ GANZ " + edZoomLabel(), edV1 - edV0 < edData.size, cols)
+        smallBtn(canvas, edZoomIn, "⌖ S…E", false, cols)
         smallBtn(canvas, edToS, "⌖ S", false, cols)
         smallBtn(canvas, edToE, "⌖ E", false, cols)
         smallBtn(canvas, edSnapBtn, "0-SNAP", edSnap, cols)
@@ -6015,11 +5998,10 @@ class PadView(context: Context) : View(context) {
         }
         canvas.restore()
         // Lupe beim Ziehen eines Markers: stark vergrößerter Ausschnitt um den Marker
-        if (edLoupeX >= 0f && (edDrag == 1 || edDrag == 2)) drawLoupe(canvas, if (edDrag == 1) edStart else edEnd, acc)
         val secs = (edEnd - edStart).toFloat() / Engine.sampleRate
         textPaint.textSize = dp(11f)
         textPaint.color = alpha(cols[1], 0.8f)
-        canvas.drawText(String.format(Locale.GERMANY, "Auswahl %.3fs · Marker ziehen · 2 Finger = Lupe", secs), edRect.centerX(), w.bottom + dp(42f), textPaint)
+        canvas.drawText(String.format(Locale.GERMANY, "Auswahl %.3fs · Marker ziehen · Daumen + Zeigefinger = Zoom", secs), edRect.centerX(), w.bottom + dp(42f), textPaint)
 
         // Regler
         editorKnob(canvas, edKnobSlices, (edSlices - 1) / 31f, "SLICES", if (edSlices <= 1) "AUS" else "$edSlices", cols)
@@ -6116,7 +6098,7 @@ class PadView(context: Context) : View(context) {
         // ---- Wave-Editor
         if (edPad >= 0) {
             return when {
-                edZoomIn.contains(x, y) || edZoomOut.contains(x, y) -> Triple(RectF(edZoomOut.left, edZoomOut.top, edZoomIn.right, edZoomIn.bottom), "Lupe / Zoom", "Vergrößert die Wellenform bis auf einzelne Samples. Auch mit zwei Fingern in der Wellenform aufziehen. Vergrößert: mit einem Finger abseits der Marker verschieben.")
+                edZoomIn.contains(x, y) || edZoomOut.contains(x, y) -> Triple(RectF(edZoomOut.left, edZoomOut.top, edZoomIn.right, edZoomIn.bottom), "Zoom", "Mit Daumen und Zeigefinger in der Wellenform: auseinander = hineinzoomen (bis auf einzelne Samples), zusammen = heraus, gemeinsam ziehen = verschieben. ⤢ GANZ zeigt alles, ⌖ S…E die Auswahl. Vergrößert: mit einem Finger abseits der Marker verschieben.")
                 edToS.contains(x, y) || edToE.contains(x, y) -> Triple(RectF(edToS.left, edToS.top, edToE.right, edToE.bottom), "Zum Marker", "Springt mit der Lupe direkt an den Start- (S) bzw. Endpunkt (E) – zum genauen Schneiden.")
                 edCueBtn.contains(x, y) -> Triple(edCueBtn, "Cue-Punkte", "Cue-Modus: in die Wellenform tippen setzt Hot Cues 1–4, einen antippen entfernt ihn. Beim Speichern in die DJ-Bibliothek werden sie mitgespeichert – der Startpunkt (Cue) ist der Marker S.")
                 edSnapBtn.contains(x, y) -> Triple(edSnapBtn, "0-SNAP", "Marker rasten auf den nächsten Nulldurchgang der Welle ein – so knackt der Schnitt nicht.")

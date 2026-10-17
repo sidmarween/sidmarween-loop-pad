@@ -1999,7 +1999,8 @@ class DjView(context: Context) : View(context) {
     private var evPinch0 = 0f
     private var evPinchV0 = 0.0
     private var evPinchV1 = 0.0
-    private var evLoupe = -1f
+    private var evMarkOrig = 0.0
+    private var evPinchF0 = 0.0
     @Volatile private var evBusy = ""
     private val evTaps = ArrayList<Long>()
     private val evRect = RectF()
@@ -2023,7 +2024,6 @@ class DjView(context: Context) : View(context) {
 
     private fun closeEditor() {
         editDeck = -1
-        evLoupe = -1f
     }
 
     private fun evDeck(): Dj.Deck = Dj.decks[editDeck.coerceIn(0, 1)]
@@ -2098,7 +2098,7 @@ class DjView(context: Context) : View(context) {
             val d = evDeck()
             val mb = Engine.currentBpm()
             return arrayOf(
-                arrayOf("🔍−", "🔍+", "⌖ START", if (d.playing) "‖ PAUSE" else "▶ HÖREN", when (evSnap) { 0 -> "SNAP: BEAT"; 1 -> "SNAP: 0"; else -> "SNAP: FREI" }),
+                arrayOf("⤢ GANZ", "⌖ KOPF", "⌖ START", if (d.playing) "‖ PAUSE" else "▶ HÖREN", when (evSnap) { 0 -> "SNAP: BEAT"; 1 -> "SNAP: 0"; else -> "SNAP: FREI" }),
                 arrayOf("HOT 1", "HOT 2", "HOT 3", "HOT 4", "S ← KOPF"),
                 arrayOf("BPM −0.1", "BPM +0.1", "× 2", "÷ 2", "TAP"),
                 arrayOf("◀ RASTER", "RASTER ▶", "SCHLAG 1 = S", "🔎 ERKENNEN", ""),
@@ -2223,10 +2223,9 @@ class DjView(context: Context) : View(context) {
         val hx = evX(d.pos)
         c.drawLine(hx, w.top, hx, w.bottom, stroke)
         c.restore()
-        if (evLoupe >= 0f && evDrag == 1) drawEvLoupe(c, d, d.cuePoint, col)
         text.textSize = dp(10f)
         text.color = Color.rgb(170, 175, 185)
-        c.drawText("S ziehen = Startpunkt · Zahlen = Hot Cues ziehen · antippen = Kopf setzen · 2 Finger = Zoom", evRect.centerX(), w.bottom + dp(18f), text)
+        c.drawText("S ziehen = Startpunkt · Hot Cues ziehen · antippen = Kopf · Daumen + Zeigefinger = Zoom", evRect.centerX(), w.bottom + dp(18f), text)
         // Tasten
         val labels = evLabels
         for (rI in 0 until 6) for (i in 0 until 5) {
@@ -2302,31 +2301,6 @@ class DjView(context: Context) : View(context) {
         c.drawLine(w.left, mid, w.right, mid, stroke)
     }
 
-    private fun drawEvLoupe(c: Canvas, d: Dj.Deck, f: Double, col: Int) {
-        val w = evWave
-        val r = dp(54f)
-        val cx = evLoupe.coerceIn(w.left + r, w.right - r)
-        val cy = w.top - r * 0.1f
-        val half = d.srcRate / 100.0
-        c.save()
-        path.reset()
-        path.addCircle(cx, cy, r, Path.Direction.CW)
-        c.clipPath(path)
-        fill.color = Color.rgb(6, 7, 10)
-        c.drawCircle(cx, cy, r, fill)
-        drawEvWave(c, d, RectF(cx - r, cy - r, cx + r, cy + r), f - half, f + half, col)
-        stroke.strokeWidth = dp(1.5f)
-        stroke.color = Color.rgb(255, 170, 0)
-        c.drawLine(cx, cy - r, cx, cy + r, stroke)
-        c.restore()
-        stroke.strokeWidth = dp(2.5f)
-        stroke.color = col
-        c.drawCircle(cx, cy, r, stroke)
-        text.textSize = dp(9f)
-        text.color = Color.WHITE
-        c.drawText(String.format(Locale.GERMANY, "%.3f s", f / d.srcRate), cx, cy + r - dp(8f), text)
-    }
-
     private fun drawBtnE(c: Canvas, r: RectF, label: String, on: Boolean, col: Int) {
         fill.shader = null
         fill.color = if (on) col else Color.rgb(34, 37, 44)
@@ -2353,11 +2327,15 @@ class DjView(context: Context) : View(context) {
         when (e.actionMasked) {
             MotionEvent.ACTION_DOWN, MotionEvent.ACTION_POINTER_DOWN -> {
                 if (e.actionMasked == MotionEvent.ACTION_POINTER_DOWN && e.pointerCount == 2 && (evWave.contains(x, y) || evDrag in 1..20)) {
+                    // Daumen + Zeigefinger: Zoom um die Stelle zwischen den Fingern, gemeinsam ziehen = verschieben
+                    if (evDrag == 1) d.cuePoint = evMarkOrig
+                    if (evDrag in 10..13) d.hot[evDrag - 10] = evMarkOrig
                     evDrag = 30
-                    evLoupe = -1f
-                    evPinch0 = abs(e.getX(0) - e.getX(1))
+                    evPinch0 = kotlin.math.hypot(e.getX(0) - e.getX(1), e.getY(0) - e.getY(1))
                     evPinchV0 = ev0
                     evPinchV1 = ev1
+                    val cx = (e.getX(0) + e.getX(1)) / 2f
+                    evPinchF0 = ev0 + ((cx - evWave.left) / evWave.width()).coerceIn(0f, 1f) * (ev1 - ev0)
                     return
                 }
                 evDownX = x
@@ -2380,7 +2358,7 @@ class DjView(context: Context) : View(context) {
                         else -> 20
                     }
                     evPan0 = ev0
-                    if (evDrag == 1) evLoupe = x
+                    evMarkOrig = when (evDrag) { 1 -> d.cuePoint; in 10..13 -> d.hot[evDrag - 10]; else -> 0.0 }
                     return
                 }
                 for (r in 0 until 6) for (j in 0 until 5) if (!evBtns[r][j].isEmpty && evBtns[r][j].contains(x, y)) {
@@ -2393,11 +2371,15 @@ class DjView(context: Context) : View(context) {
             MotionEvent.ACTION_MOVE -> {
                 if (evDrag == 30) {
                     if (e.pointerCount >= 2 && evPinch0 > dp(20f)) {
-                        val d1 = abs(e.getX(0) - e.getX(1))
+                        val d1 = kotlin.math.hypot(e.getX(0) - e.getX(1), e.getY(0) - e.getY(1))
                         val span0 = evPinchV1 - evPinchV0
+                        val len = d.len.toDouble()
+                        val span = (span0 * evPinch0 / max(dp(10f), d1)).coerceIn(min(len, d.srcRate * 0.03), len)
                         val cx = (e.getX(0) + e.getX(1)) / 2f
-                        val fc = evPinchV0 + ((cx - evWave.left) / evWave.width()).coerceIn(0f, 1f) * span0
-                        evSetView(fc, span0 * evPinch0 / max(dp(10f), d1))
+                        val rel = ((cx - evWave.left) / evWave.width()).coerceIn(0f, 1f)
+                        val a = (evPinchF0 - rel * span).coerceIn(0.0, max(0.0, len - span))
+                        ev0 = a
+                        ev1 = a + span
                     }
                     return
                 }
@@ -2405,10 +2387,7 @@ class DjView(context: Context) : View(context) {
                 if (!evMoved && abs(mx - evDownX) < dp(6f)) return
                 evMoved = true
                 when (evDrag) {
-                    1 -> {
-                        evLoupe = mx
-                        d.cuePoint = evSnapPos(evF(mx))
-                    }
+                    1 -> d.cuePoint = evSnapPos(evF(mx))
                     in 10..13 -> d.hot[evDrag - 10] = evSnapPos(evF(mx))
                     20 -> {
                         val span = ev1 - ev0
@@ -2422,7 +2401,6 @@ class DjView(context: Context) : View(context) {
             MotionEvent.ACTION_UP, MotionEvent.ACTION_POINTER_UP, MotionEvent.ACTION_CANCEL -> {
                 val dr = evDrag
                 evDrag = 0
-                evLoupe = -1f
                 if (e.actionMasked == MotionEvent.ACTION_CANCEL) return
                 if (dr == 20 && !evMoved) {
                     // antippen: Abspielkopf hierhin
@@ -2443,8 +2421,8 @@ class DjView(context: Context) : View(context) {
         val bf = d.beatFrames()
         when (r) {
             0 -> when (j) {
-                0 -> evSetView((ev0 + ev1) / 2, (ev1 - ev0) * 2)
-                1 -> evSetView((ev0 + ev1) / 2, (ev1 - ev0) / 2)
+                0 -> evSetView(d.len / 2.0, d.len.toDouble())
+                1 -> evSetView(d.pos, min(ev1 - ev0, bf * 8))
                 2 -> evSetView(d.cuePoint, min(ev1 - ev0, bf * 2))
                 3 -> {
                     if (d.playing) d.playing = false else {
