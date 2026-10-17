@@ -731,11 +731,22 @@ class InstEditor(private val host: View) {
                 val s = semiAt(y)
                 liveSemi = s
                 Engine.acidLiveOn(s, false)
+                // alle Noten dieser Tonhöhe markieren – danach als Gruppe verschieben
+                if (!Engine.seqRecording) {
+                    sel.clear()
+                    for (k in 0 until len) if (aHead(k) && st.acidSemi[k] == s) sel.add(k)
+                    if (sel.isNotEmpty()) onHint?.invoke("${sel.size} Noten markiert – eine davon ziehen verschiebt alle")
+                }
             } else {
                 val v = ((y - keys.top) / rowH()).toInt().coerceIn(0, InstState.DV - 1)
                 st.drumSel = v
                 cellVoice = v
                 Engine.drumHit(v, false)
+                if (!Engine.seqRecording) {
+                    sel.clear()
+                    for (k in 0 until len) if (st.drumSteps[v][k] > 0) sel.add(v * InstState.MAX + k)
+                    if (sel.isNotEmpty()) onHint?.invoke("${sel.size} Schläge (${st.drumNames[v]}) markiert – einen ziehen verschiebt alle")
+                }
             }
             haptic()
             return
@@ -821,6 +832,15 @@ class InstEditor(private val host: View) {
                 drag = D_RUBBER
                 rubber.set(x, y, x, y)
             }
+            return
+        }
+        val key0 = v * InstState.MAX + k
+        if (st.drumSteps[v][k] > 0 && key0 in sel) {
+            // markierte Gruppe ziehen
+            drag = D_MOVE
+            downWasSelected = false
+            dApplied = 0
+            dAppliedSemi = 0
             return
         }
         drag = D_CELL

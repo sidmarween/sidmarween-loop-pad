@@ -4481,6 +4481,13 @@ class PadView(context: Context) : View(context) {
     }
 
     private fun kbNoteOn(pid: Int, semi: Int) {
+        // Taste markiert alle Noten dieser Tonhöhe (mehrere Finger = mehrere Reihen) – danach als Gruppe ziehen
+        if (!songView && !Engine.seqRecording) {
+            if (kbPointers.isEmpty()) mxSel.clear()
+            val ids = Engine.notesOf(kbPad).filter { it.semi == semi }.map { it.id }
+            mxSel.addAll(ids)
+            if (ids.isNotEmpty() && kbPointers.isEmpty()) hint("${ids.size} Noten auf ${noteNames[Math.floorMod(semi, 12)]}${4 + Math.floorDiv(semi, 12)} markiert – eine davon ziehen verschiebt alle")
+        }
         kbPointers[pid] = semi
         kbVoices[pid] = Engine.noteOn(kbPad, semi)
         Engine.recordNoteOn(kbPad, semi)?.let {
