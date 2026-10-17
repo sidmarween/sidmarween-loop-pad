@@ -2238,7 +2238,7 @@ class DjView(context: Context) : View(context) {
         c.restore()
         text.textSize = dp(10f)
         text.color = Color.rgb(170, 175, 185)
-        c.drawText("S ziehen = Startpunkt · Hot Cues ziehen · antippen = Kopf · Daumen + Zeigefinger = Zoom", evRect.centerX(), w.bottom + dp(18f), text)
+        c.drawText("S ziehen = Startpunkt · weiße Linie ziehen = Abspielkopf · antippen = Kopf · ▶ spielt ab Kopf · 2 Finger = Zoom", evRect.centerX(), w.bottom + dp(18f), text)
         // Tasten
         val labels = evLabels
         for (rI in 0 until 6) for (i in 0 until 5) {
@@ -2365,9 +2365,11 @@ class DjView(context: Context) : View(context) {
                     val sx = evX(d.cuePoint)
                     var hotHit = -1
                     for (h in 0..3) if (d.hot[h] >= 0 && abs(evX(d.hot[h]) - x) < near && y > evWave.bottom - dp(40f)) hotHit = h
+                    val hx = evX(d.pos)
                     evDrag = when {
                         hotHit >= 0 -> 10 + hotHit
-                        abs(x - sx) < near -> 1
+                        abs(x - sx) < near && abs(x - sx) <= abs(x - hx) -> 1
+                        abs(x - hx) < near -> 2
                         else -> 20
                     }
                     evPan0 = ev0
@@ -2401,6 +2403,7 @@ class DjView(context: Context) : View(context) {
                 evMoved = true
                 when (evDrag) {
                     1 -> d.cuePoint = evSnapPos(evF(mx))
+                    2 -> d.seekTo = evF(mx).coerceIn(0.0, (d.len - 2).toDouble())
                     in 10..13 -> d.hot[evDrag - 10] = evSnapPos(evF(mx))
                     20 -> {
                         val span = ev1 - ev0

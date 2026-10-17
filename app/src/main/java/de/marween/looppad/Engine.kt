@@ -650,6 +650,12 @@ object Engine {
     /** Vorhören eines Ausschnitts (Wave-Editor). */
     fun preview(data: FloatArray): Int = startVoice(data, -1, 1.0, false)
 
+    /** Abspielposition (Frames) einer Stimme, oder -1 wenn sie nicht mehr klingt. */
+    fun voicePos(id: Int): Double = synchronized(voiceLock) {
+        val v = voices.firstOrNull { it.active && it.id == id && !it.releasing }
+        v?.pos ?: -1.0
+    }
+
     private fun renderVoices(out: FloatArray, bus: FloatArray, block: Int, w: Long, chain: BooleanArray, padBufs: Array<FloatArray>) {
         synchronized(voiceLock) {
             val relStep = 1f / (0.12f * sampleRate)

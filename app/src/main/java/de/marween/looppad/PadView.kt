@@ -5613,6 +5613,46 @@ class PadView(context: Context) : View(context) {
     private var edDragY = 0f
     private var edDragVal = 0f
     private var edPreview = -1
+    /** Abspielkopf (Frame) – läuft beim Abhören mit, mit dem Finger verschiebbar. */
+    private var edHead = 0
+    private var edPlayFrom = 0
+    private var edHeadWasPlaying = false
+    private val edRuler = RectF()
+    private val edBtnFromHead = RectF()
+    private var edRulerTap = 0L
+
+    private fun edStopPreview() {
+        if (edPreview >= 0) Engine.noteOff(edPreview)
+        edPreview = -1
+    }
+
+    /** Abspielen ab [from] bis zum Endpunkt E (bzw. Dateiende, wenn der Kopf hinter E liegt). */
+    private fun edPlayFrom(from: Int) {
+        edStopPreview()
+        val to = if (from < edEnd) edEnd else edData.size
+        if (to - from < 2) return
+        edPlayFrom = from
+        edHead = from
+        edPreview = Engine.preview(edData.copyOfRange(from, to))
+    }
+
+    /** Kopfposition beim Abspielen nachführen (und vergrößert mitscrollen). */
+    private fun edUpdateHead() {
+        if (edPreview < 0) return
+        val pos = Engine.voicePos(edPreview)
+        if (pos < 0) {
+            edPreview = -1
+            return
+        }
+        edHead = (edPlayFrom + pos).toInt().coerceIn(0, edData.size)
+        val span = edV1 - edV0
+        if (span < edData.size && (edHead > edV1 || edHead < edV0) && edDrag == 0) {
+            val v0 = (edHead - span / 10).coerceIn(0, max(0, edData.size - span))
+            edV0 = v0
+            edV1 = v0 + span
+            computePeaks()
+        }
+    }
     private val barOptions = floatArrayOf(0.25f, 0.5f, 1f, 2f, 4f, 8f)
 
     fun openEditor(p: Int) {
@@ -5625,6 +5665,8 @@ class PadView(context: Context) : View(context) {
         edV0 = 0
         edV1 = d.size
         edNorm = 0f
+        edHead = 0
+        edPreview = -1
         edCueMode = false
         java.util.Arrays.fill(edCues, -1)
         edSlices = max(1, Engine.padSlices(p))
@@ -5644,7 +5686,8 @@ class PadView(context: Context) : View(context) {
         val tbw = (edRect.width() - dp(24f) - 5 * tg) / 6f
         val tools = arrayOf(edZoomOut, edZoomIn, edToS, edToE, edSnapBtn, edCueBtn)
         for (i in tools.indices) tools[i].set(edRect.left + dp(12f) + i * (tbw + tg), ty, edRect.left + dp(12f) + i * (tbw + tg) + tbw, ty + dp(32f))
-        edWave.set(edRect.left + dp(12f), ty + dp(32f) + dp(10f), edRect.right - dp(12f), ty + dp(42f) + edRect.height() * 0.32f)
+        edRuler.set(edRect.left + dp(12f), ty + dp(32f) + dp(8f), edRect.right - dp(12f), ty + dp(32f) + dp(30f))
+        edWave.set(edRect.left + dp(12f), edRuler.bottom + dp(2f), edRect.right - dp(12f), edRuler.bottom + dp(2f) + edRect.height() * 0.30f)
         val ks = dp(96f)
         val ky = edWave.bottom + dp(52f)
         edKnobSlices.set(edRect.centerX() - ks - dp(20f), ky, edRect.centerX() - dp(20f), ky + ks)
@@ -5652,9 +5695,10 @@ class PadView(context: Context) : View(context) {
         val by = edKnobSlices.bottom + dp(36f)
         val bw = (edRect.width() - dp(24f) - dp(10f)) / 2f
         val bh = dp(46f)
-        edBtnPlay.set(edRect.left + dp(12f), by, edRect.left + dp(12f) + bw, by + bh)
-        edBtnCut.set(edBtnPlay.right + dp(10f), by, edBtnPlay.right + dp(10f) + bw, by + bh)
-        edBtnSlice.set(edBtnPlay.left, by + bh + dp(10f), edBtnPlay.right, by + 2 * bh + dp(10f))
+        edBtnPlay.set(edRect.left + dp(12f), by, edRect.left + dp(12f) + (bw - dp(6f)) / 2f, by + bh)
+        edBtnFromHead.set(edBtnPlay.right + dp(6f), by, edRect.left + dp(12f) + bw, by + bh)
+        edBtnCut.set(edBtnFromHead.right + dp(10f), by, edBtnFromHead.right + dp(10f) + bw, by + bh)
+        edBtnSlice.set(edBtnPlay.left, by + bh + dp(10f), edBtnFromHead.right, by + 2 * bh + dp(10f))
         edBtnPads.set(edBtnCut.left, by + bh + dp(10f), edBtnCut.right, by + 2 * bh + dp(10f))
         edBtnSave.set(edBtnPlay.left, edBtnPads.bottom + dp(10f), edBtnCut.right, edBtnPads.bottom + dp(10f) + bh)
     }
@@ -5744,7 +5788,7 @@ class PadView(context: Context) : View(context) {
                 val y = e.getY(idx)
                 when {
                     edBtnClose.contains(x, y) -> {
-                        if (edPreview >= 0) Engine.noteOff(edPreview)
+                        edStopPreview()
                         edPad = -1
                     }
                     e.actionMasked == MotionEvent.ACTION_POINTER_DOWN && e.pointerCount == 2 && (edWave.contains(x, y) || edDrag in 1..2 || edDrag in 5..7) -> {
@@ -5757,6 +5801,23 @@ class PadView(context: Context) : View(context) {
                         edPinchV1 = edV1
                         val cx = (e.getX(0) + e.getX(1)) / 2f
                         edPinchF0 = edV0 + ((cx - edWave.left) / edWave.width()).coerceIn(0f, 1f).toDouble() * (edV1 - edV0)
+                    }
+                    edRuler.contains(x, y) || (edWave.contains(x, y) && abs(x - frameToX(edHead)) < dp(16f) &&
+                        abs(x - frameToX(edHead)) < abs(x - frameToX(edStart)) && abs(x - frameToX(edHead)) < abs(x - frameToX(edEnd))) -> {
+                        // Abspielkopf greifen und verschieben; Doppeltipp auf die Leiste spielt ab dort
+                        val now = SystemClock.uptimeMillis()
+                        if (edRuler.contains(x, y) && now - edRulerTap < 320) {
+                            edHead = xToFrame(x)
+                            edPlayFrom(edHead)
+                            edRulerTap = 0
+                            edDrag = 0
+                        } else {
+                            edRulerTap = now
+                            edHeadWasPlaying = edPreview >= 0
+                            edStopPreview()
+                            edDrag = 8
+                            edHead = xToFrame(x)
+                        }
                     }
                     edCueMode && edWave.contains(x, y) -> {
                         // Cue erst beim Loslassen setzen – so kann noch ein zweiter Finger zum Zoomen dazukommen
@@ -5799,8 +5860,10 @@ class PadView(context: Context) : View(context) {
                     edKnobSlices.contains(x, y) -> { edDrag = 3; edDragY = y; edDragVal = edSlices.toFloat() }
                     edKnobBars.contains(x, y) -> { edDrag = 4; edDragY = y; edDragVal = barOptions.indexOfFirst { it == edBars }.coerceAtLeast(0).toFloat() }
                     edBtnPlay.contains(x, y) -> {
-                        if (edPreview >= 0) Engine.noteOff(edPreview)
-                        if (edEnd - edStart > 2) edPreview = Engine.preview(edData.copyOfRange(edStart, edEnd))
+                        if (edPreview >= 0) edStopPreview() else edPlayFrom(edStart)
+                    }
+                    edBtnFromHead.contains(x, y) -> {
+                        if (edPreview >= 0) edStopPreview() else edPlayFrom(edHead.coerceIn(0, max(0, edData.size - 2)))
                     }
                     edBtnCut.contains(x, y) -> {
                         Engine.applyEdit(edPad, edStart, edEnd, 1, edBars)
@@ -5835,6 +5898,7 @@ class PadView(context: Context) : View(context) {
                 val x = e.getX(0)
                 val y = e.getY(0)
                 when (edDrag) {
+                    8 -> edHead = xToFrame(x)
                     1, 2 -> if (edMoved || abs(x - edDownX) > dp(4f)) {
                         edMoved = true
                         moveMarker(x)
@@ -5873,6 +5937,8 @@ class PadView(context: Context) : View(context) {
                 if (!cancel && (edDrag == 1 || edDrag == 2) && !edMoved) moveMarker(edDownX)
                 if (edDrag == 1 || edDrag == 2) edBars = Engine.suggestBars(edEnd - edStart)
                 if (!cancel && edDrag == 7 && e.actionMasked == MotionEvent.ACTION_UP) edCueTap(edDownX)
+                // Kopf losgelassen: lief es vorher, geht es ab der neuen Stelle weiter
+                if (!cancel && edDrag == 8 && edHeadWasPlaying) edPlayFrom(edHead)
                 edDrag = 0
             }
         }
@@ -5904,6 +5970,8 @@ class PadView(context: Context) : View(context) {
     }
 
     private fun reloadEditor(msg: String) {
+        edStopPreview()
+        edHead = 0
         val d = Engine.loopData(edPad)
         if (d != null) {
             edData = d
@@ -6036,7 +6104,49 @@ class PadView(context: Context) : View(context) {
             canvas.drawText(lab, x, w.bottom + dp(19f), textPaint)
         }
         canvas.restore()
-        // Lupe beim Ziehen eines Markers: stark vergrößerter Ausschnitt um den Marker
+        // Zeitleiste mit Abspielkopf
+        edUpdateHead()
+        val playingNow = edPreview >= 0
+        val ru = edRuler
+        fillPaint.color = Color.rgb(28, 30, 37)
+        canvas.drawRoundRect(ru, dp(5f), dp(5f), fillPaint)
+        run {
+            val sr = Engine.sampleRate.toFloat()
+            val spanS = (edV1 - edV0) / sr
+            val step = listOf(0.001f, 0.005f, 0.01f, 0.05f, 0.1f, 0.25f, 0.5f, 1f, 2f, 5f, 10f).firstOrNull { spanS / it <= 10f } ?: 10f
+            var t = kotlin.math.ceil(edV0 / sr / step) * step
+            textPaint.textSize = dp(8f)
+            textPaint.textAlign = Paint.Align.LEFT
+            while (t * sr <= edV1) {
+                val x = frameToX((t * sr).toInt())
+                strokePaint.strokeWidth = dp(1f)
+                strokePaint.color = Color.argb(90, 255, 255, 255)
+                canvas.drawLine(x, ru.bottom - dp(6f), x, ru.bottom, strokePaint)
+                textPaint.color = Color.argb(140, 255, 255, 255)
+                canvas.drawText(if (step < 0.1f) String.format(Locale.GERMANY, "%.3f", t) else String.format(Locale.GERMANY, "%.2f", t), x + dp(2f), ru.top + dp(9f), textPaint)
+                t += step
+            }
+            textPaint.textAlign = Paint.Align.CENTER
+        }
+        val hx = frameToX(edHead)
+        if (hx >= w.left - dp(1f) && hx <= w.right + dp(1f)) {
+            val hc = if (playingNow) Color.rgb(80, 230, 120) else Color.WHITE
+            strokePaint.strokeWidth = dp(2f)
+            strokePaint.color = hc
+            canvas.drawLine(hx, ru.top, hx, w.bottom, strokePaint)
+            val tri = Path()
+            tri.moveTo(hx - dp(8f), ru.top)
+            tri.lineTo(hx + dp(8f), ru.top)
+            tri.lineTo(hx, ru.top + dp(12f))
+            tri.close()
+            fillPaint.color = hc
+            canvas.drawPath(tri, fillPaint)
+        }
+        textPaint.textSize = dp(9f)
+        textPaint.color = Color.argb(170, 255, 255, 255)
+        textPaint.textAlign = Paint.Align.RIGHT
+        canvas.drawText(String.format(Locale.GERMANY, "▶ %.3f s", edHead / Engine.sampleRate.toFloat()), ru.right - dp(4f), ru.bottom - dp(3f), textPaint)
+        textPaint.textAlign = Paint.Align.CENTER
         val secs = (edEnd - edStart).toFloat() / Engine.sampleRate
         textPaint.textSize = dp(11f)
         textPaint.color = alpha(cols[1], 0.8f)
@@ -6047,7 +6157,9 @@ class PadView(context: Context) : View(context) {
         val bl = when (edBars) { 0.25f -> "¼"; 0.5f -> "½"; else -> edBars.toInt().toString() }
         editorKnob(canvas, edKnobBars, barOptions.indexOfFirst { it == edBars }.coerceAtLeast(0) / 5f, "TAKTE", bl, cols)
 
-        smallBtn(canvas, edBtnPlay, "▶ Hören", false, cols)
+        val playing = edPreview >= 0
+        smallBtn(canvas, edBtnPlay, if (playing && edPlayFrom == edStart) "■ STOP" else "▶ S…E", playing && edPlayFrom == edStart, cols)
+        smallBtn(canvas, edBtnFromHead, if (playing && edPlayFrom != edStart) "■ STOP" else "▶ AB KOPF", playing && edPlayFrom != edStart, cols)
         smallBtn(canvas, edBtnCut, "✂ Zuschneiden", false, cols)
         smallBtn(canvas, edBtnSlice, "🔪 Slicen (Tempo)", false, cols)
         smallBtn(canvas, edBtnPads, "⇢ Slices auf Pads", false, cols)
@@ -6144,7 +6256,9 @@ class PadView(context: Context) : View(context) {
                 edWave.contains(x, y) || (y > edWave.bottom && y < edWave.bottom + dp(30f)) -> Triple(edWave, "Wellenform", "Zeigt das Audio des Pads. Die Marker S (Start) und E (Ende) an der Wellenform ziehen, um den Ausschnitt zu wählen. Weiße Linien zeigen die Slices.")
                 edKnobSlices.contains(x, y) -> Triple(edKnobSlices, "SLICES", "Hoch/runter ziehen: teilt den Ausschnitt in 2–32 gleich lange Stücke. AUS = nicht slicen.")
                 edKnobBars.contains(x, y) -> Triple(edKnobBars, "TAKTE", "Wie viele Takte der gesliceten Loop lang ist (¼ bis 8). Die Slices verteilen sich darauf und folgen jedem Tempo.")
-                edBtnPlay.contains(x, y) -> Triple(edBtnPlay, "Hören", "Spielt den gewählten Ausschnitt einmal vor.")
+                edBtnPlay.contains(x, y) -> Triple(edBtnPlay, "Hören S…E", "Spielt den Ausschnitt von S bis E – der grüne Kopf zeigt, wo du gerade bist. Nochmal = Stopp.")
+                edBtnFromHead.contains(x, y) -> Triple(edBtnFromHead, "Ab Kopf", "Spielt sofort ab der Stelle des Abspielkopfs. Den Kopf auf der Zeitleiste (oder an der Linie) mit dem Finger verschieben; Doppeltipp auf die Leiste spielt direkt ab dort.")
+                edRuler.contains(x, y) -> Triple(edRuler, "Zeitleiste & Abspielkopf", "Antippen/Ziehen setzt den Abspielkopf. Läuft die Wiedergabe, geht sie nach dem Loslassen an der neuen Stelle weiter. Doppeltipp = ab hier abspielen.")
                 edBtnCut.contains(x, y) -> Triple(edBtnCut, "Zuschneiden", "Behält nur den Bereich zwischen S und E und legt ihn wieder synchron aufs Pad.")
                 edBtnSlice.contains(x, y) -> Triple(edBtnSlice, "Slicen (Tempo)", "Zerlegt den Loop in Slices, die auf ihren Rasterplätzen starten – so passt er sich jedem Tempo an, ohne die Tonhöhe zu ändern.")
                 edBtnSave.contains(x, y) -> Triple(edBtnSave, "In Bibliothek speichern", "Speichert den Ausschnitt S–E als eigenes Sample in die Bibliothek – du wählst die Kategorie. Ist SLICES eingestellt, kannst du die Stücke auch als Stems speichern oder als WAV-Dateien in einen Ordner exportieren.")
