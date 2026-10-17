@@ -33,6 +33,8 @@ class Loop(val data: FloatArray) {
     @Volatile var rate: Double = 1.0
     /** Slice-Grenzen (n+1 Werte) – gesetzt, wenn der Loop in Slices zerlegt wurde und dem Tempo folgt. */
     @Volatile var slices: IntArray? = null
+    /** Fertig ausgeschnittene Slices (mit kurzen Blenden) – damit Piano-Roll-Noten sie anschlagen. */
+    @Volatile var sliceBufs: Array<FloatArray>? = null
     /** Länge in Takten (bei Slices), passt sich dem Master-Tempo an. */
     @Volatile var bars: Float = 1f
     /** Warp: Original-Audio, sein Tempo und seine Länge in Takten – bei Tempowechsel wird neu gedehnt. */
@@ -377,6 +379,7 @@ object Engine {
             if (sv.slices > 1 && !sv.oneShot) {
                 l.slices = IntArray(sv.slices + 1) { (it.toLong() * d.size / sv.slices).toInt() }
                 l.bars = sv.bars
+                buildSliceBufs(l)
             }
             setWarpSource(l)
             loops.set(p, l)
@@ -632,6 +635,11 @@ object Engine {
     /** Spielt das Sample eines Pads in einer Tonhöhe (Halbtöne relativ zum Original). */
     fun noteOn(p: Int, semi: Int): Int {
         val l = loops.get(p) ?: return -1
+        val sb = l.sliceBufs
+        if (sb != null) {
+            val k = semi - SLICE_BASE
+            return if (k in sb.indices) startVoice(sb[k], p, 1.0, false) else -1
+        }
         return startVoice(l.data, p, 2.0.pow(semi / 12.0), !l.oneShot)
     }
 
@@ -931,7 +939,12 @@ object Engine {
                     val f = origin + k * loopLen + off
                     if (f >= end || f < w || f < origin) continue
                     if (f < ev.validFrom) continue
-                    val id = startVoice(l.data, p, 2.0.pow((ev.semi + 0) / 12.0), !l.oneShot)
+                    val sb = l.sliceBufs
+                    val id = if (sb != null) {
+                        val k = ev.semi - SLICE_BASE
+                        if (k !in sb.indices) continue
+                        startVoice(sb[k], p, 1.0, false)
+                    } else startVoice(l.data, p, 2.0.pow((ev.semi + 0) / 12.0), !l.oneShot)
                     if (id < 0) continue
                     synchronized(voiceLock) {
                         for (v in voices) if (v.id == id) {
@@ -981,7 +994,8 @@ object Engine {
     /** Schneidet einen Pad-Inhalt zu und zerlegt ihn optional in Slices, die dem Tempo folgen. */
     fun applyEdit(p: Int, start: Int, end: Int, slices: Int, bars: Float) {
         val l = loops.get(p) ?: return
-        pushPadUndo("Wave-Editor Pad ${p + 1}", p)
+        val slicing = !l.oneShot && slices > 1
+        pushUndo(if (slicing) "Slices Pad ${p + 1}" else "Wave-Editor Pad ${p + 1}", intArrayOf(p), slicing)
         val s0 = start.coerceIn(0, max(0, l.data.size - 2))
         val e0 = end.coerceIn(s0 + 2, l.data.size)
         val data = l.data.copyOfRange(s0, e0)
@@ -1012,8 +1026,57 @@ object Engine {
         val heard = outClock.frameAt(System.nanoTime(), sampleRate)
         loop.start = masterStart + Math.floorDiv(heard - masterStart, tl) * tl
         loop.muted = l.muted
+        loop.gain = l.gain
+        buildSliceBufs(loop)
         takes.set(p, null)
         loops.set(p, loop)
+        writeSliceNotes(p, slices, loop.bars)
+    }
+
+    /** Schneidet die Slices eines Loops als eigene Puffer aus (kurze Ein-/Ausblende gegen Knacksen). */
+    fun buildSliceBufs(l: Loop) {
+        val sl = l.slices
+        if (sl == null || sl.size < 3) { l.sliceBufs = null; return }
+        val d = l.data
+        l.sliceBufs = Array(sl.size - 1) { k ->
+            val a = sl[k].coerceIn(0, d.size)
+            val b = sl[k + 1].coerceIn(a, d.size)
+            val buf = d.copyOfRange(a, b)
+            val f = min(96, buf.size / 4)
+            for (i in 0 until f) {
+                val g = i.toFloat() / f
+                buf[i] *= g
+                buf[buf.size - 1 - i] *= g
+            }
+            buf
+        }
+    }
+
+    /** Slice → Taste: Slice 1 liegt auf C4 (Halbton 0), jeder weitere einen Halbton höher. */
+    const val SLICE_BASE = 0
+
+    /** Bildet die Slices als Noten in der Piano-Roll ab – in Originalreihenfolge auf ihrem Rasterplatz. */
+    fun writeSliceNotes(p: Int, n: Int, bars: Float) {
+        if (n < 2) return
+        val rb = max(1, kotlin.math.ceil(bars.toDouble()).toInt()).coerceAtMost(16)
+        val reps = max(1, kotlin.math.round(rb / bars.toDouble()).toInt())
+        val sliceLen = bars.toDouble() / n
+        synchronized(notesLock) {
+            rollBars[p] = rb
+            notes[p].clear()
+            for (r in 0 until reps) for (k in 0 until n) {
+                val pos = r * bars.toDouble() + k * sliceLen
+                if (pos >= rb - 1e-9) continue
+                notes[p].add(NoteEv(pos, sliceLen, SLICE_BASE + k, 1f))
+            }
+        }
+    }
+
+    /** Slice-Nummer (0-basiert) für einen Halbton, oder -1. */
+    fun sliceOf(p: Int, semi: Int): Int {
+        val b = loops.get(p)?.sliceBufs ?: return -1
+        val k = semi - SLICE_BASE
+        return if (k in b.indices) k else -1
     }
 
     /** Verteilt die Slices eines Ausschnitts als ONE SHOTS auf freie Pads. Gibt die Anzahl zurück. */
@@ -1842,7 +1905,9 @@ object Engine {
                 var fg = loop.fade
                 var peak = 0f
                 val sl = loop.slices
-                if (sl != null && mlen > 0L && len > 0) {
+                if (sl != null && loop.sliceBufs != null && notes[p].isNotEmpty()) {
+                    // Slices werden von den Piano-Roll-Noten angeschlagen (runRoll)
+                } else if (sl != null && mlen > 0L && len > 0) {
                     // Slices: jeder Slice startet auf seinem Rasterplatz im aktuellen Tempo
                     val n = sl.size - 1
                     val tl = max(1L, (mlen * loop.bars).toLong())
@@ -2802,6 +2867,7 @@ object Engine {
         c.semi = l.semi
         c.rate = l.rate
         c.slices = l.slices?.copyOf()
+        c.sliceBufs = l.sliceBufs
         c.bars = l.bars
         c.src = l.src
         c.srcBpm = l.srcBpm

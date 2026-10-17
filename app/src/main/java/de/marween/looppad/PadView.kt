@@ -5463,7 +5463,17 @@ class PadView(context: Context) : View(context) {
                 canvas.drawText("C${4 + Math.floorDiv(semi, 12)}", k.right - dp(4f), y0 + rowH * 0.8f, textPaint)
                 textPaint.textAlign = Paint.Align.CENTER
             }
-            if (semi == Engine.padSemi[kbPad]) {
+            val slc = Engine.sliceOf(kbPad, semi)
+            if (slc >= 0) {
+                // Slice-Taste: Nummer des Slices
+                fillPaint.color = alpha(cols[2], if (held) 0.9f else 0.28f)
+                canvas.drawRect(k.left + k.width() * 0.64f, y0 + dp(1f), k.right - dp(1f), y0 + rowH - dp(1f), fillPaint)
+                textPaint.textAlign = Paint.Align.LEFT
+                textPaint.textSize = min(dp(9f), rowH * 0.85f)
+                textPaint.color = if (isBlack(semi) && !held) Color.WHITE else Color.rgb(20, 20, 20)
+                canvas.drawText("S${slc + 1}", k.left + dp(3f), y0 + rowH * 0.78f, textPaint)
+                textPaint.textAlign = Paint.Align.CENTER
+            } else if (semi == Engine.padSemi[kbPad]) {
                 dotPaint.color = cols[2]
                 canvas.drawCircle(k.right - dp(28f), y0 + rowH / 2f, dp(2.5f), dotPaint)
             }
@@ -6192,7 +6202,7 @@ class PadView(context: Context) : View(context) {
                             edToast("Mit dem SLICES-Regler mind. 2 wählen")
                         } else {
                             Engine.applyEdit(edPad, edStart, edEnd, edSlices, edBars)
-                            reloadEditor("$edSlices Slices – folgt jetzt dem Tempo")
+                            reloadEditor("$edSlices Slices – liegen jetzt als Noten S1…S$edSlices in der Piano-Roll (🎹)")
                         }
                     }
                     edBtnSave.contains(x, y) -> {
@@ -6582,7 +6592,7 @@ class PadView(context: Context) : View(context) {
                 edBtnFromHead.contains(x, y) -> Triple(edBtnFromHead, "Ab Kopf", "Spielt sofort ab der Stelle des Abspielkopfs. Den Kopf auf der Zeitleiste (oder an der Linie) mit dem Finger verschieben; Doppeltipp auf die Leiste spielt direkt ab dort.")
                 edRuler.contains(x, y) -> Triple(edRuler, "Zeitleiste & Abspielkopf", "Antippen/Ziehen setzt den Abspielkopf. Läuft die Wiedergabe, geht sie nach dem Loslassen an der neuen Stelle weiter. Doppeltipp = ab hier abspielen.")
                 edBtnCut.contains(x, y) -> Triple(edBtnCut, "Zuschneiden", "Behält nur den Bereich zwischen S und E und legt ihn wieder synchron aufs Pad.")
-                edBtnSlice.contains(x, y) -> Triple(edBtnSlice, "Slicen (Tempo)", "Zerlegt den Loop in Slices, die auf ihren Rasterplätzen starten – so passt er sich jedem Tempo an, ohne die Tonhöhe zu ändern.")
+                edBtnSlice.contains(x, y) -> Triple(edBtnSlice, "Slicen (Tempo)", "Zerlegt den Loop in Slices, die auf ihren Rasterplätzen starten – so passt er sich jedem Tempo an, ohne die Tonhöhe zu ändern. Die Slices erscheinen automatisch als Noten in der Piano-Roll: Slice 1 auf C4, jeder weitere einen Halbton höher. Noten verschieben, kopieren oder löschen = Beat neu arrangieren.")
                 edBtnSave.contains(x, y) -> Triple(edBtnSave, "In Bibliothek speichern", "Speichert den Ausschnitt S–E als eigenes Sample in die Bibliothek – du wählst die Kategorie. Ist SLICES eingestellt, kannst du die Stücke auch als Stems speichern oder als WAV-Dateien in einen Ordner exportieren.")
                 edBtnPads.contains(x, y) -> Triple(edBtnPads, "Slices auf Pads", "Legt die Stücke als ⚡-One-Shots auf freie Pads – zum neu Anordnen im Sequenzer oder Live-Spielen.")
                 else -> Triple(edRect, "Wave-Editor", "Hier schneidest du Aufnahmen und zerlegst sie in Slices. ✕ oben rechts schließt den Editor.")
