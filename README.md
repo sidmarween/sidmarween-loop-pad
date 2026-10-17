@@ -2,7 +2,7 @@
 
 Android-App für Musiker: 16 Neon-Pads, XY-Effektfläche und Drehregler im Kaoss-Pad-Stil zum Live-Loopen übers Mikrofon.
 
-- **Pad halten** – nimmt auf, solange du hältst. Der erste Loop wird zum Taktgeber. Alle weiteren Loops rasten automatisch auf sein Raster ein: Länge wird auf 1/8, 1/4, 1/2, 1, 2, 4 oder 8 Takte gerundet, der Start auf den nächsten Rasterpunkt.
+- **Pad halten** – nimmt auf, solange der Finger liegt (Mikrofon oder Wave, je nach Eingang). Beim Loslassen entsteht automatisch ein synchroner Loop mit **1, 2, 4, 8 oder 16 Takten** – was der Haltezeit am nächsten liegt; der Start rastet auf den nächsten Taktanfang. Der erste Loop (ohne festes Tempo) wird zum Taktgeber.
 - **Pad mit Loop halten** – Overdub: nimmt zusätzlich auf den laufenden Loop drauf.
 - **Antippen** – Loop an / aus (steigt immer synchron zu den anderen Pads ein).
 - **CLEAR**, dann Pad antippen – Loop löschen.
@@ -74,7 +74,7 @@ Unter jedem Pad sitzt ein kleiner **•••**-Knopf:
 
 Unten zwei Schalter:
 - **🎙 ALLE MIKRO ↔ 🔁 ALLE WAVE** – stellt den Eingang aller Pads auf einmal um (zeigt „GEMISCHT“, wenn Pads unterschiedlich eingestellt sind).
-- **✋ HALTEN ↔ ⚡ LIVE 1/2/4 TAKTE** – Im Live-Modus ein leeres Pad nur antippen: es zeigt „BEREIT“, die Aufnahme startet auf dem nächsten Takt, läuft genau die eingestellte Länge, stoppt selbst und spielt sofort synchron weiter. Erneutes Antippen bricht ab. Ohne Tempo: Antippen startet, nochmal Antippen stoppt.
+- **✋ HALTEN ↔ ⚡ LIVE 1/2/4/8/16 TAKTE** – Im Live-Modus ein leeres Pad nur antippen: es zeigt „BEREIT“, die Aufnahme startet auf dem nächsten Takt, läuft genau die eingestellte Länge, stoppt selbst und spielt sofort synchron weiter. Erneutes Antippen bricht ab. Ohne Tempo: Antippen startet, nochmal Antippen stoppt.
 
 ## Effekte
 
@@ -93,7 +93,7 @@ Der **Effekt-Knopf** schaltet durch (links tippen = zurück, rechts = weiter, la
 
 **Weitere:** DELAY (taktsynchron) · STUTTER (taktsynchron) · FLANGER · CHORUS · REVERB · HALL · VOCODER (Loops oder Mikrofon steuern einen Synth-Träger) · DISTORTION · CRUSH
 
-Maximal 30 Sekunden pro Aufnahme. Kopfhörer verhindern, dass laufende Loops mit aufgenommen werden.
+Maximal 66 Sekunden pro Aufnahme (16 Takte ab 60 BPM). Kopfhörer verhindern, dass laufende Loops mit aufgenommen werden.
 
 ## Installieren
 

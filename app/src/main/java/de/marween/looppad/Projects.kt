@@ -95,7 +95,7 @@ object Projects {
             if (p < pa.length()) {
                 val o = pa.getJSONObject(p)
                 val f = o.optString("file", "")
-                val data = if (f.isNotEmpty() && File(dir, f).exists()) AudioFiles.decodeFile(File(dir, f), rate, 60) else null
+                val data = if (f.isNotEmpty() && File(dir, f).exists()) AudioFiles.decodeFile(File(dir, f), rate, Engine.MAX_SECONDS) else null
                 Engine.PadSave(
                     data, o.optBoolean("oneShot", false), o.optBoolean("muted", false),
                     o.optInt("slices", 0), o.optDouble("bars", 1.0).toFloat(), o.optInt("semi", 0)

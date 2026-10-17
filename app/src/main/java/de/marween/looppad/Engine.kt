@@ -85,7 +85,8 @@ class FrameClock {
  */
 object Engine {
     const val PADS = 16
-    const val MAX_SECONDS = 30
+    /** Längste Aufnahme (16 Takte bei 60 BPM passen hinein). */
+    const val MAX_SECONDS = 66
     private const val MIN_HOLD_NANOS = 180_000_000L
     private const val FADE_MS = 4
 
@@ -1178,6 +1179,25 @@ object Engine {
     }
 
     /** Wählt die Loop-Länge aus 1/8, 1/4, 1/2, 1, 2, 4, 8 x Taktgeber, die der gehaltenen Zeit am nächsten liegt. */
+    /** Gehaltene Aufnahme → 1, 2, 4, 8 oder 16 ganze Takte (was der Haltezeit am nächsten liegt). */
+    private fun quantizeBars(held: Long): Long {
+        val m = masterLen
+        val maxFrames = sampleRate.toLong() * MAX_SECONDS
+        val h = max(1L, held).toDouble()
+        var best = m
+        var bestErr = Double.MAX_VALUE
+        for (b in intArrayOf(1, 2, 4, 8, 16)) {
+            val l = m * b
+            if (l > maxFrames && b > 1) break
+            val err = abs(kotlin.math.ln(h / l.toDouble()))
+            if (err < bestErr) {
+                bestErr = err
+                best = l
+            }
+        }
+        return best
+    }
+
     private fun quantizeLen(held: Long): Long {
         val m = masterLen
         val maxFrames = sampleRate.toLong() * MAX_SECONDS
@@ -1207,7 +1227,7 @@ object Engine {
                 if (m1 <= 0L || take.oneShot) {
                     take.toOut = rawOut
                 } else {
-                    val len = quantizeLen(rawOut - take.fromOut)
+                    val len = quantizeBars(rawOut - take.fromOut)
                     val unit = min(len, m1)
                     val ms = masterStart
                     val qOut = ms + Math.floorDiv(take.fromOut - ms + unit / 2, unit) * unit
@@ -1223,7 +1243,7 @@ object Engine {
             if (take.overdub || m <= 0L || take.oneShot) {
                 take.toIn = rawTo
             } else {
-                val len = quantizeLen(rawTo - take.fromIn)
+                val len = quantizeBars(rawTo - take.fromIn)
                 val unit = min(len, m)
                 val ms = masterStart
                 val pressOut = outClock.frameAt(take.downNanos, sampleRate)

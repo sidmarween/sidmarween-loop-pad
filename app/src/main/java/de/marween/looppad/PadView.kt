@@ -1680,7 +1680,7 @@ class PadView(context: Context) : View(context) {
                     return true
                 }
                 if (!clearMode && modePill.contains(x, y)) {
-                    Engine.liveBars = when (Engine.liveBars) { 0 -> 1; 1 -> 2; 2 -> 4; else -> 0 }
+                    Engine.liveBars = when (Engine.liveBars) { 0 -> 1; 1 -> 2; 2 -> 4; 4 -> 8; 8 -> 16; else -> 0 }
                     performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
                     burst(x, y, overlayColors()[2], 12, 160f)
                     onRecSettingsChanged?.invoke()
