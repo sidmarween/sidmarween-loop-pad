@@ -30,6 +30,12 @@ Angelehnt an Native Instruments Maschine – Leiste links und rechts vom Effekt-
 - **Gesten**: ← wischen = Pad löschen (UNDO holt es zurück), ↕ wischen = Pad-Lautstärke, zwei Finger = stumm (lang: Solo).
 - **FX-Schalter** unten rechts in jedem Pad: antippen = Pad mit/ohne Effekt.
 
+## 🌐 Web-Version
+
+Im Ordner `web/` steckt Marv PAD als Browser-App (gleiche Engine als AudioWorklet: 12 Pads, Status-Farben, alle 37 Effekte, Effekt-Kette je Pad, Sequenzer, Piano-Roll mit Klaviatur links, Song-Matrix, Szenen, Undo, Note Repeat, ACID 303, DRUM 909, Bibliothek, Projekte im Browser-Speicher, WAV-Export).
+- Bauen: `sh web/build.sh` – danach `web/index.html` über einen Webserver öffnen (z. B. `python3 -m http.server` im Ordner `web`).
+- GitHub Pages: in den Repo-Einstellungen unter *Pages* als Quelle „GitHub Actions“ wählen – der Workflow `pages.yml` veröffentlicht dann jede Änderung automatisch. Dort funktioniert auch das Mikrofon.
+
 ## Menü ☰ (oben rechts)
 
 - **🔌 Audio-Geräte** – Ein- und Ausgang getrennt wählen (USB-Audio-Interface, USB-Mikrofon, USB-Headset, Kopfhörer, Lautsprecher …) oder Automatisch. Class-compliant USB-Audio-Geräte (USB-C oder OTG) bindet Android selbst ein; Marv PAD erkennt Ein-/Ausstecken und startet das Audio automatisch neu, Loops bleiben erhalten. Die Auswahl wird gemerkt.
