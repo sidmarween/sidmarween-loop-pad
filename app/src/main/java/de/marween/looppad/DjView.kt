@@ -186,8 +186,8 @@ class DjView(context: Context) : View(context) {
     private val tops = Array(3) { RectF() }
     private val pitch = arrayOf(RectF(), RectF())
     private val vol = arrayOf(RectF(), RectF())
-    /** je Deck: PLAY, CUE, SYNC, 🎧 */
-    private val side = Array(2) { Array(4) { RectF() } }
+    /** je Deck: PLAY, CUE, SYNC, 🎧, FX */
+    private val side = Array(2) { Array(5) { RectF() } }
     private val xy = RectF()
     private val xfader = RectF()
     private val pads = Array(18) { RectF() }
@@ -257,10 +257,10 @@ class DjView(context: Context) : View(context) {
         vol[0].set(pitch[0].right + g, y, pitch[0].right + g + vw, y + midH)
         pitch[1].set(R - pw, y, R, y + midH)
         vol[1].set(pitch[1].left - g - vw, y, pitch[1].left - g, y + midH)
-        val sbH = (midH - 3 * dp(6f)) / 4f
+        val sbH = (midH - 4 * dp(5f)) / 5f
         for (k in 0..1) {
             val x0 = if (k == 0) vol[0].right + g else vol[1].left - g - bw
-            for (i in 0..3) side[k][i].set(x0, y + i * (sbH + dp(6f)), x0 + bw, y + i * (sbH + dp(6f)) + sbH)
+            for (i in 0..4) side[k][i].set(x0, y + i * (sbH + dp(5f)), x0 + bw, y + i * (sbH + dp(5f)) + sbH)
         }
         val xl = side[0][0].right + dp(10f)
         val xr = side[1][0].left - dp(10f)
@@ -426,6 +426,7 @@ class DjView(context: Context) : View(context) {
             drawSide(c, side[k][1], "CUE", cuePreview[k], col)
             drawSide(c, side[k][2], "SYNC", dd.sync, col)
             drawSide(c, side[k][3], "🎧", dd.cue, col)
+            drawSide(c, side[k][4], "FX", dd.fxOn || dd.fxAmt > 0.02f, col)
             // Pitch-Anzeige
             text.textSize = dp(8.5f)
             text.color = alpha(s.ink, 0.75f)
@@ -1645,7 +1646,7 @@ class DjView(context: Context) : View(context) {
             padPress(i, true)
             return
         }
-        for (k in 0..1) for (j in 0..3) if (hit(side[k][j], x, y)) {
+        for (k in 0..1) for (j in 0..4) if (hit(side[k][j], x, y)) {
             ptrs[id] = Ptr(K.SIDE, k, j, x, y, now)
             sidePress(k, j, true)
             haptic()
@@ -1751,11 +1752,15 @@ class DjView(context: Context) : View(context) {
         val p = ptrs.remove(id) ?: return
         when (p.kind) {
             K.PAD -> padPress(p.idx, false)
-            K.SIDE -> sidePress(p.idx, p.sub, false)
+            K.SIDE -> {
+                if (p.sub == 4 && SystemClock.uptimeMillis() - p.downAt > 500) fxLong(p.idx) else sidePress(p.idx, p.sub, false)
+            }
             K.WAVE -> Dj.decks[p.idx].scratching = false
             K.XY -> {
                 xyActive = false
-                if (!xyHold) Dj.decks[focus].fxAmt = 0f
+                val dd = Dj.decks[focus]
+                if (dd.fxOn) dd.fxLevel = max(0.05f, dd.fxAmt)
+                if (!xyHold) dd.fxAmt = 0f
             }
             K.TOP -> topTap(p.idx)
             else -> {}
@@ -1852,6 +1857,10 @@ class DjView(context: Context) : View(context) {
                 onHint?.invoke(if (!dd.sync && !dd.syncReq) "SYNC ${"AB"[k]} aus" else "SYNC ${"AB"[k]}: Tempo und Takt folgen dem Master (${String.format(Locale.GERMANY, "%.1f", max(Engine.currentBpm(), dd.bpm))} BPM)")
             }
             3 -> if (down) dd.cue = !dd.cue
+            4 -> if (!down) {
+                dd.fxOn = !dd.fxOn
+                onHint?.invoke(if (dd.fxOn) "FX ${"AB"[k]} an: ${Fx.NAMES[dd.fxType]} – XY-Fläche regelt ihn, lange drücken wählt den Effekt" else "FX ${"AB"[k]} aus")
+            }
         }
     }
 
@@ -1915,6 +1924,15 @@ class DjView(context: Context) : View(context) {
                 else -> Dj.setLoopBeats(dd, dd.loopBeats * 2f)
             }
         }
+    }
+
+    /** FX-Knopf lange gedrückt: nächster Effekt für diesen Kanal. */
+    private fun fxLong(k: Int) {
+        haptic()
+        val dd = Dj.decks[k]
+        val ch = Dj.FX_CHOICES
+        dd.fxType = ch[(ch.indexOf(dd.fxType) + 1) % ch.size]
+        onHint?.invoke("Effekt Kanal ${"AB"[k]}: ${Fx.NAMES[dd.fxType]}")
     }
 
     private fun hotPress(k: Int, h: Int) {

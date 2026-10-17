@@ -110,6 +110,9 @@ object Dj {
         @Volatile var fxType = 7
         @Volatile var fxAmt = 0f
         @Volatile var fxX = 0.5f
+        /** FX-Knopf am Kanal: Effekt dauerhaft an (Stärke [fxLevel]). */
+        @Volatile var fxOn = false
+        @Volatile var fxLevel = 0.6f
         @Volatile var cue = false
         @Volatile var level = 0f
         /** Effektives Tempo-Verhältnis (für Anzeige). */
@@ -217,7 +220,7 @@ object Dj {
                 if (a > peak) peak = a
             }
             // Effekt je Deck (ein Regler: 0 = aus)
-            val amt = d.fxAmt
+            val amt = if (d.fxAmt > 0.02f) d.fxAmt else if (d.fxOn) d.fxLevel else 0f
             if (amt > 0.02f && d.fxType >= 0) {
                 if (d.fxL == null) {
                     d.fxL = Fx(sr)
