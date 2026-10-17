@@ -84,6 +84,7 @@ class MainActivity : Activity() {
         pads.onRecMenu = { showRecMenu() }
         pads.onSongStopped = { finishSong() }
         pads.theme = getSharedPreferences("marvpad", MODE_PRIVATE).getInt("design", PadView.NOIR)
+        pads.infoMode = getSharedPreferences("marvpad", MODE_PRIVATE).getBoolean("info", false)
         setContentView(pads)
         hideSystemBars()
     }
@@ -357,6 +358,7 @@ class MainActivity : Activity() {
                 "✨ Neues Projekt",
                 "🎙 Meine Aufnahmen",
                 if (Engine.bounce) "🔁 Bounce: AN (Quellen nach Wave-Aufnahme stumm)" else "🔁 Bounce: AUS",
+                (if (pads.infoMode) "☑" else "☐") + " ℹ Info-Modus (Funktionen erklären)",
                 "🎨 Design wählen"
             )) { _, which ->
                 when (which) {
@@ -371,6 +373,11 @@ class MainActivity : Activity() {
                         Engine.bounce = !Engine.bounce
                         getSharedPreferences("marvpad", MODE_PRIVATE).edit().putBoolean("bounce", Engine.bounce).apply()
                         toast(if (Engine.bounce) "Bounce an: nach einer Wave-Aufnahme spielt nur noch das neue Pad" else "Bounce aus: Quell-Pads spielen weiter")
+                    }
+                    5 -> {
+                        pads.infoMode = !pads.infoMode
+                        getSharedPreferences("marvpad", MODE_PRIVATE).edit().putBoolean("info", pads.infoMode).apply()
+                        toast(if (pads.infoMode) "Info-Modus an: tippe auf ein Element, um es erklärt zu bekommen" else "Info-Modus aus")
                     }
                     else -> showDesigns()
                 }

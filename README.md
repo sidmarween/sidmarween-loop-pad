@@ -10,6 +10,8 @@ Android-App für Musiker: 16 Neon-Pads, XY-Effektfläche und Drehregler im Kaoss
 
 ## Menü ☰ (oben rechts)
 
+- **ℹ Info-Modus** (Haken setzen) – jedes angetippte Element (Knöpfe, Regler, Pads, XY-Fläche, Sequenzer, Tastatur, Matrix, Editor) wird hervorgehoben und erklärt, statt ausgelöst zu werden. ☰ und die Schließen-Knöpfe funktionieren weiter.
+
 - **Projekt speichern / laden** – sichert alles zum Weitermachen: Pads (Audio), Modi, Tempo, Sequenzer-Pattern, Effekt und Regler.
 - **Neues Projekt** – alles leeren.
 - **Meine Aufnahmen** – jede Mikrofon-Aufnahme wird automatisch gespeichert; von hier auf ein Pad laden, als WAV exportieren oder löschen. Sie erscheinen auch oben in der Bibliothek.

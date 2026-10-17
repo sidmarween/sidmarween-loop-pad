@@ -593,6 +593,7 @@ class PadView(context: Context) : View(context) {
         drawFooter(canvas)
         if (kbPad >= 0) drawKeyboard(canvas)
         if (edPad >= 0) drawEditor(canvas, dt)
+        drawInfo(canvas)
         message?.let { drawMessage(canvas, it) }
 
         postInvalidateOnAnimation()
@@ -1223,7 +1224,12 @@ class PadView(context: Context) : View(context) {
         }
         textPaint.textSize = dp(9f)
         textPaint.color = alpha(BRAND_ORANGE, 0.8f)
-        canvas.drawText("© marween", w / 2f, height - insetBottom - dp(2f), textPaint)
+        if (infoMode) {
+            textPaint.color = overlayColors()[2]
+            canvas.drawText("ℹ INFO-MODUS · Element antippen · ☰ zum Beenden", w / 2f, height - insetBottom - dp(2f), textPaint)
+        } else {
+            canvas.drawText("© marween", w / 2f, height - insetBottom - dp(2f), textPaint)
+        }
     }
 
     /** Zeigt am Pad, ob es durch den Effekt läuft (FX) oder trocken bleibt (durchgestrichen). */
@@ -1722,6 +1728,11 @@ class PadView(context: Context) : View(context) {
 
     @SuppressLint("ClickableViewAccessibility")
     override fun onTouchEvent(e: MotionEvent): Boolean {
+        if (infoMode && message == null && (e.actionMasked == MotionEvent.ACTION_DOWN || e.actionMasked == MotionEvent.ACTION_POINTER_DOWN)) {
+            val ix = e.getX(e.actionIndex)
+            val iy = e.getY(e.actionIndex)
+            if (infoTouch(ix, iy)) return true
+        }
         if (edPad >= 0) {
             editorTouch(e)
             return true
@@ -4277,6 +4288,194 @@ class PadView(context: Context) : View(context) {
         textPaint.textSize = dp(10f)
         textPaint.color = alpha(cols[1], 0.75f)
         canvas.drawText(label, cx, r.bottom + dp(14f), textPaint)
+    }
+
+
+    // ================================================================ Info-Modus
+
+    /** Im Info-Modus erklärt Antippen ein Element, statt es auszulösen. */
+    var infoMode = false
+        set(v) {
+            field = v
+            infoTitle = null
+            invalidate()
+        }
+    private var infoTitle: String? = null
+    private var infoText = ""
+    private val infoHi = RectF()
+    private val infoBox = RectF()
+    private val infoTextPaint = android.text.TextPaint(Paint.ANTI_ALIAS_FLAG)
+
+    private fun showInfo(r: RectF?, title: String, text: String) {
+        infoTitle = title
+        infoText = text
+        if (r != null) infoHi.set(r) else infoHi.setEmpty()
+        performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+    }
+
+    /** true = Ereignis verbraucht (Erklärung gezeigt). */
+    private fun infoTouch(x: Float, y: Float): Boolean {
+        // Menü und Schließen-Knöpfe funktionieren normal
+        if (designBtn.contains(x, y)) return false
+        if (kbPad >= 0 && kbClose.contains(x, y)) return false
+        if (edPad >= 0 && edBtnClose.contains(x, y)) return false
+        if (infoTitle != null && infoBox.contains(x, y)) {
+            infoTitle = null
+            return true
+        }
+        val hit = infoAt(x, y)
+        if (hit == null) {
+            infoTitle = null
+            return true
+        }
+        showInfo(hit.first, hit.second, hit.third)
+        return true
+    }
+
+    private fun srcName(i: Int) = if (Engine.padSource[i] == 1) "〰 Wave (App-Audio inkl. Effekte)" else "🎙 Mikrofon"
+
+    private fun infoAt(x: Float, y: Float): Triple<RectF?, String, String>? {
+        // ---- Wave-Editor
+        if (edPad >= 0) {
+            return when {
+                edWave.contains(x, y) || (y > edWave.bottom && y < edWave.bottom + dp(30f)) -> Triple(edWave, "Wellenform", "Zeigt das Audio des Pads. Die Marker S (Start) und E (Ende) an der Wellenform ziehen, um den Ausschnitt zu wählen. Weiße Linien zeigen die Slices.")
+                edKnobSlices.contains(x, y) -> Triple(edKnobSlices, "SLICES", "Hoch/runter ziehen: teilt den Ausschnitt in 2–32 gleich lange Stücke. AUS = nicht slicen.")
+                edKnobBars.contains(x, y) -> Triple(edKnobBars, "TAKTE", "Wie viele Takte der gesliceten Loop lang ist (¼ bis 8). Die Slices verteilen sich darauf und folgen jedem Tempo.")
+                edBtnPlay.contains(x, y) -> Triple(edBtnPlay, "Hören", "Spielt den gewählten Ausschnitt einmal vor.")
+                edBtnCut.contains(x, y) -> Triple(edBtnCut, "Zuschneiden", "Behält nur den Bereich zwischen S und E und legt ihn wieder synchron aufs Pad.")
+                edBtnSlice.contains(x, y) -> Triple(edBtnSlice, "Slicen (Tempo)", "Zerlegt den Loop in Slices, die auf ihren Rasterplätzen starten – so passt er sich jedem Tempo an, ohne die Tonhöhe zu ändern.")
+                edBtnPads.contains(x, y) -> Triple(edBtnPads, "Slices auf Pads", "Legt die Stücke als ⚡-One-Shots auf freie Pads – zum neu Anordnen im Sequenzer oder Live-Spielen.")
+                else -> Triple(edRect, "Wave-Editor", "Hier schneidest du Aufnahmen und zerlegst sie in Slices. ✕ oben rechts schließt den Editor.")
+            }
+        }
+        // ---- Tastatur / Matrix
+        if (kbPad >= 0 && kbRect.contains(x, y)) {
+            if (mxOpen) {
+                layoutMatrix()
+                when {
+                    mxBars.contains(x, y) -> return Triple(mxBars, "Takte", "Länge der Matrix für dieses Pad: 1, 2, 4 oder 8 Takte. Die Noten laufen in dieser Länge als Schleife.")
+                    mxRaster.contains(x, y) -> return Triple(mxRaster, "Raster", "Raster für die Aufnahme: frei (genau wie gespielt), 1/4, 1/8, 1/16 oder 1/32. Wird schon beim Einspielen angewendet.")
+                    mxQuant.contains(x, y) -> return Triple(mxQuant, "Quantisieren", "Setzt alle vorhandenen Noten nachträglich auf das gewählte Raster.")
+                    mxClear.contains(x, y) -> return Triple(mxClear, "Leeren", "Löscht alle Noten dieses Pads.")
+                    mxGrid.contains(x, y) -> return Triple(mxGrid, "Matrix (Piano-Roll)", "Tonhöhe senkrecht, Zeit waagrecht. Leeres Feld antippen setzt eine Note, eine Note antippen löscht sie. Die weiße Linie ist die Abspielposition.")
+                }
+            }
+            return when {
+                kbMatrixBtn.contains(x, y) -> Triple(kbMatrixBtn, "▦ Matrix", "Schaltet zwischen Klaviatur und Matrix (Piano-Roll) um. In der Matrix siehst und bearbeitest du die aufgenommenen Töne.")
+                kbOctDown.contains(x, y) || kbOctUp.contains(x, y) -> Triple(RectF(kbOctDown.left, kbOctDown.top, kbOctUp.right, kbOctUp.bottom), "Oktave − / +", "Verschiebt die Tastatur um eine Oktave nach unten oder oben.")
+                kbTakeBtn.contains(x, y) -> Triple(kbTakeBtn, "📌 Ton fürs Pad", "Ist das an, wird der zuletzt gespielte Ton zur festen Tonhöhe des Pads – auch beim Antippen und im Sequenzer.")
+                kbRec.contains(x, y) -> Triple(kbRec, "● REC", "Aufnahme starten: Pattern (deine Töne landen in der Matrix) oder Song (alles, was du hörst). Nochmal drücken beendet.")
+                kbPlay.contains(x, y) -> Triple(kbPlay, "▶ Play", "Startet Sequenzer und Matrix.")
+                kbStop.contains(x, y) -> Triple(kbStop, "■ Stop", "Hält Sequenzer und Matrix an und beendet eine laufende Aufnahme.")
+                kbKeysRect.contains(x, y) -> Triple(kbKeysRect, "Klaviatur", "Spielt das Sample des Pads in verschiedenen Tonhöhen. Mehrere Finger = Akkord, über die Tasten wischen wechselt den Ton.")
+                else -> Triple(kbRect, "🎹 Tastatur", "Spielt das Pad-Sample melodisch. ✕ schließt die Tastatur.")
+            }
+        }
+        // ---- Kopfzeile
+        if (logoDst.contains(x, y)) return Triple(logoDst, "Marv PAD", "Live-Looper mit 12 Pads, XY-Effektfläche, Effekt-Kette, Sequenzer und Tastatur. © marween")
+        if (displayRect.contains(x, y)) {
+            return if (x > displayRect.left + displayRect.width() * 0.62f)
+                Triple(displayRect, "Tempo", "Zeigt das Master-Tempo. Rechts im Display tippen: Tempo einstellen (Regler, ±, Tap-Tempo), Metronom an/aus oder Automatisch (erster Loop bestimmt das Tempo).")
+            else
+                Triple(displayRect, "Display", "Zeigt den gewählten Kettenplatz und Effekt, ob er aktiv ist (●), auf welche Pads er wirkt (→ALLE, →P3 …), die X/Y-Werte und den Takt. Links antippen öffnet die Effektliste.")
+        }
+        // ---- Regler
+        for (k in 0 until 5) {
+            if (!knobRects[k].contains(x, y)) continue
+            val t = when (k) {
+                0 -> "MIX" to "Wie stark der Effekt des gewählten Kettenplatzes beigemischt wird."
+                1 -> Fx.P1_LABELS[Engine.fxType] to "Erster Effekt-Parameter des gewählten Effekts (${Fx.NAMES[Engine.fxType]}). Nach oben/unten ziehen."
+                2 -> Fx.P2_LABELS[Engine.fxType] to "Zweiter Effekt-Parameter des gewählten Effekts (${Fx.NAMES[Engine.fxType]}). Nach oben/unten ziehen."
+                3 -> "VOL" to "Gesamtlautstärke der App."
+                else -> "SWING" to "Shuffle: verschiebt jede zweite 1/16 im Sequenzer und in der Matrix nach hinten. 50 % = gerade, 75 % = stark geshuffelt."
+            }
+            return Triple(knobRects[k], t.first, t.second + " Werte ändern: Regler nach oben/unten ziehen.")
+        }
+        if (muteBtn.contains(x, y)) return Triple(muteBtn, "Alle stumm / an", "Schaltet alle Loop-Pads auf einmal stumm oder wieder an. Die Loops laufen im Takt weiter.")
+        if (clearBtn.contains(x, y)) return Triple(clearBtn, "CLEAR", "Löschmodus: danach ein Pad antippen, um seinen Inhalt zu löschen.")
+        if (fxBtn.contains(x, y)) return Triple(fxBtn, "Effekt-Knopf", "Links tippen = vorheriger, rechts = nächster Effekt für den gewählten Kettenplatz. Lange drücken öffnet die Liste aller 37 Effekte.")
+        // ---- XY-Fläche
+        for (sl in 0 until Engine.SLOTS) if (slotRects[sl].contains(x, y)) {
+            return Triple(slotRects[sl], "Effekt-Kette Platz ${sl + 1}", "Bis zu 3 Effekte laufen nacheinander (1 › 2 › 3). Antippen wählt den Platz – Effekt-Knopf und Regler gelten dann für ihn. Den gewählten Platz nochmal antippen schaltet ihn an/aus.")
+        }
+        if (holdRect.contains(x, y)) return Triple(holdRect, "🔒 HOLD", "Hält den Effekt an der letzten Position aktiv, auch ohne Finger. Auf der Fläche ziehen verschiebt ihn, nochmal HOLD schaltet aus.")
+        if (motRect.contains(x, y)) return Triple(motRect, "● REC Bewegung", "Speichert deine Fingerbewegung: tippen, dann Fläche berühren startet die Aufnahme, nochmal tippen beendet sie. Sie läuft dann als ▶ AUTO im Takt. AUTO antippen löscht sie.")
+        if (xyRect.contains(x, y)) return Triple(xyRect, "XY-Effektfläche", "Finger drauf = Effekt an. X (waagrecht) und Y (senkrecht) steuern zwei Parameter aller aktiven Effekte: hier ${Fx.X_LABELS[Engine.fxType]} und ${Fx.Y_LABELS[Engine.fxType]}.")
+        // ---- Pads
+        for (i in 0 until VISIBLE_PADS) {
+            if (keyRects[i].contains(x, y)) return Triple(keyRects[i], "🎹 Tastatur-Knopf", "Öffnet die Tastatur für Pad ${i + 1}: Sample in Tonhöhen spielen, Akkorde, Aufnahme in die Matrix.")
+            if (moreRects[i].contains(x, y)) return Triple(moreRects[i], "••• Pad-Menü", "Eingang (Mikrofon/Wave), Modus (Loop/One Shot), Bibliothek, Import, Wave-Editor, Tastatur, Effekt an/aus, Export und Löschen für Pad ${i + 1}.")
+            if (padRects[i].contains(x, y)) {
+                val mode = when {
+                    Engine.liveBars < 0 -> "TIPPEN: 1. Tipp startet die Aufnahme, 2. Tipp beendet sie."
+                    Engine.liveBars > 0 -> "LIVE: antippen – die Aufnahme startet auf dem nächsten Takt und läuft ${Engine.liveBars} Takt(e)."
+                    else -> "HALTEN: Aufnahme läuft, solange der Finger liegt."
+                }
+                val txt = if (!Engine.hasLoop(i)) {
+                    "Leeres Pad. $mode Daraus wird automatisch ein synchroner Loop (1–32 Takte). Eingang: ${srcName(i)}."
+                } else if (Engine.isOneShot(i)) {
+                    "⚡ One Shot: antippen spielt das Sample einmal. Im Sequenzer setzbar. Effekt: ${if (Engine.padFx[i]) "an" else "aus"}."
+                } else {
+                    "∞ Loop: antippen schaltet ihn an/aus (steigt synchron ein). Halten = Overdub (zusätzlich drüber aufnehmen). Effekt: ${if (Engine.padFx[i]) "an" else "aus"}."
+                }
+                return Triple(padRects[i], "Pad ${i + 1}", txt)
+            }
+        }
+        // ---- Sequenzer
+        if (seqRect.contains(x, y)) {
+            return when {
+                recBtn.contains(x, y) -> Triple(recBtn, "● REC", "Pattern aufnehmen (⚡-Pads landen auf den Schritten) oder Song aufnehmen (mit oder ohne Effekte). Nochmal drücken beendet.")
+                playBtn.contains(x, y) -> Triple(playBtn, "▶ Play", "Startet den Sequenzer und die Matrix-Noten im Master-Tempo.")
+                stopBtn.contains(x, y) -> Triple(stopBtn, "■ Stop", "Anhalten. Lange halten leert das Pattern.")
+                else -> Triple(seqRect, "Sequenzer", "16 Schritte pro Takt für das zuletzt gespielte ⚡-Pad. Schritt antippen = an/aus, hoch/runter ziehen = Lautstärke. Punkte zeigen Schritte anderer Pads und Matrix-Noten.")
+            }
+        }
+        // ---- Fußzeile
+        if (srcPill.contains(x, y)) return Triple(srcPill, "Eingang aller Pads", "Stellt den Eingang aller Pads um: 🎙 Mikrofon oder 〰 Wave (nimmt auf, was die App ausgibt – inkl. Effekte). Pro Pad im •••-Menü einstellbar.")
+        if (modePill.contains(x, y)) return Triple(modePill, "Aufnahme-Modus", "✋ HALTEN (Finger halten), 👆 TIPPEN (Start/Stopp per Tipp) oder ⚡ LIVE mit fester Länge. Loops rasten immer synchron auf 1–32 Takte ein.")
+        return null
+    }
+
+    private fun drawInfo(canvas: Canvas) {
+        val title = infoTitle ?: return
+        val cols = overlayColors()
+        // Element hervorheben
+        if (!infoHi.isEmpty) {
+            val pulse = 0.5f + 0.5f * sin(time * 6f)
+            strokePaint.strokeWidth = dp(3f)
+            strokePaint.color = alpha(cols[2], 0.6f + 0.4f * pulse)
+            tmpRect.set(infoHi.left - dp(4f), infoHi.top - dp(4f), infoHi.right + dp(4f), infoHi.bottom + dp(4f))
+            canvas.drawRoundRect(tmpRect, dp(10f), dp(10f), strokePaint)
+        }
+        val m = dp(16f)
+        val w = width - 2 * m
+        infoTextPaint.textSize = dp(13.5f)
+        infoTextPaint.color = Color.WHITE
+        val layout = android.text.StaticLayout.Builder.obtain(infoText, 0, infoText.length, infoTextPaint, (w - dp(28f)).toInt()).build()
+        val h = layout.height + dp(56f)
+        // Box nicht über das erklärte Element legen
+        val below = infoHi.isEmpty || infoHi.centerY() < height / 2f
+        val top = if (below) min(height - insetBottom - dp(40f) - h, max(infoHi.bottom + dp(14f), height * 0.45f)) else max(insetTop + dp(8f), infoHi.top - dp(14f) - h)
+        infoBox.set(m, top, m + w, top + h)
+        fillPaint.shader = null
+        fillPaint.color = Color.argb(240, 18, 18, 24)
+        canvas.drawRoundRect(infoBox, dp(14f), dp(14f), fillPaint)
+        strokePaint.strokeWidth = dp(2f)
+        strokePaint.color = cols[2]
+        canvas.drawRoundRect(infoBox, dp(14f), dp(14f), strokePaint)
+        textPaint.textAlign = Paint.Align.LEFT
+        textPaint.textSize = dp(15f)
+        textPaint.color = cols[2]
+        canvas.drawText("ℹ $title", infoBox.left + dp(14f), infoBox.top + dp(26f), textPaint)
+        textPaint.textAlign = Paint.Align.RIGHT
+        textPaint.textSize = dp(10f)
+        textPaint.color = alpha(Color.WHITE, 0.5f)
+        canvas.drawText("antippen = schließen", infoBox.right - dp(14f), infoBox.top + dp(24f), textPaint)
+        textPaint.textAlign = Paint.Align.CENTER
+        canvas.save()
+        canvas.translate(infoBox.left + dp(14f), infoBox.top + dp(40f))
+        layout.draw(canvas)
+        canvas.restore()
     }
 
     companion object {
