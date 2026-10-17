@@ -799,7 +799,7 @@ object Dj {
 
     /** Für die Deck-Effekte: kleine Auswahl gut passender Effekte. */
     val FX_CHOICES: IntArray by lazy {
-        val want = arrayOf("DELAY", "REVERB", "FLANGER", "PHASER", "STUTTER", "CRUSH", "FILTER", "GRAIN DLY", "FREEZE", "TREMOLO")
+        val want = arrayOf("DELAY", "TAPE ECHO", "SPACE ECHO", "REVERB", "FLANGER", "PHASER", "STUTTER", "LOOPER", "SLICER", "REVERSE", "CRUSH", "FILTER", "GRAIN DLY", "FREEZE", "TREMOLO")
         want.mapNotNull { n -> Fx.NAMES.indexOf(n).takeIf { it >= 0 } }.toIntArray()
     }
 }

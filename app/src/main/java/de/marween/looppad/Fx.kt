@@ -129,49 +129,65 @@ class Fx(private val sr: Int) {
         const val SEQFX = 34
         const val MULTIFX = 35
         const val KRISTALL = 36
-        const val COUNT = 37
+        const val TAPEECHO = 37
+        const val SPACEECHO = 38
+        const val LOOPER = 39
+        const val SLICER = 40
+        const val REVERSE = 41
+        const val HARMONIZER = 42
+        const val AUTOTUNE = 43
+        const val ROBOT = 44
+        const val COUNT = 45
 
         val NAMES = arrayOf(
             "LOWPASS", "HIGHPASS", "BANDPASS", "NOTCH", "BELL", "PEAK", "COMB",
             "DELAY", "STUTTER", "FLANGER", "CHORUS", "REVERB", "HALL", "VOCODER", "DISTORT", "CRUSH",
             "PHASER", "TREMOLO", "VIBRATO", "EQ", "FILTER", "SATURATE", "OVERDRIVE", "GRAIN DLY", "PITCH", "STRETCH",
-            "SMEAR", "FREEZE", "RINGMOD", "FM", "SHUFFLE", "FREQ SHIFT", "RESONATOR", "GRANULAR", "SEQ-FX", "MULTI-FX", "KRISTALL"
+            "SMEAR", "FREEZE", "RINGMOD", "FM", "SHUFFLE", "FREQ SHIFT", "RESONATOR", "GRANULAR", "SEQ-FX", "MULTI-FX", "KRISTALL",
+            "TAPE ECHO", "SPACE ECHO", "LOOPER", "SLICER", "REVERSE", "HARMONIZER", "AUTOTUNE", "ROBOTER"
         )
         val X_LABELS = arrayOf(
             "CUTOFF", "CUTOFF", "FREQUENZ", "FREQUENZ", "FREQUENZ", "FREQUENZ", "TONHÖHE",
             "ZEIT", "LÄNGE", "SPEED", "SPEED", "GRÖSSE", "LÄNGE", "TONHÖHE", "DRIVE", "RATE",
             "SPEED", "SPEED", "SPEED", "TIEFEN", "CUTOFF", "DRIVE", "DRIVE", "ZEIT", "TONHÖHE", "SPEED",
-            "SMEAR", "BLUR", "FREQUENZ", "MOD-FREQ", "SLICE", "SHIFT", "GRUNDTON", "POSITION", "MUSTER", "MORPH", "SPLICE"
+            "SMEAR", "BLUR", "FREQUENZ", "MOD-FREQ", "SLICE", "SHIFT", "GRUNDTON", "POSITION", "MUSTER", "MORPH", "SPLICE",
+            "ZEIT", "ZEIT", "LÄNGE", "MUSTER", "LÄNGE", "INTERVALL", "TONART", "TONHÖHE"
         )
         val Y_LABELS = arrayOf(
             "RESONANZ", "RESONANZ", "SCHÄRFE", "SCHÄRFE", "GAIN ±", "RESONANZ", "FEEDBACK ±",
             "FEEDBACK", "GATE", "TIEFE", "TIEFE", "DÄMPFUNG", "HELLIGKEIT", "FORMANT", "TON", "BITS",
             "TIEFE", "TIEFE", "TIEFE", "HÖHEN", "RESONANZ", "WÄRME", "TON", "FEEDBACK", "GRÖSSE", "GRÖSSE",
-            "HELLIGKEIT", "HELLIGKEIT", "WELLE", "TIEFE", "CHAOS", "FEEDBACK", "AUSKLANG", "DICHTE", "INTENSITÄT", "ECHO", "FEEDBACK"
+            "HELLIGKEIT", "HELLIGKEIT", "WELLE", "TIEFE", "CHAOS", "FEEDBACK", "AUSKLANG", "DICHTE", "INTENSITÄT", "ECHO", "FEEDBACK",
+            "PITCH", "INTENSITÄT", "SPEED / REV", "RATE", "ECHO", "STIMMEN", "TEMPO", "METALL"
         )
         val P1_LABELS = arrayOf(
             "STEIL", "STEIL", "STEIL", "STEIL", "BREITE", "DRY", "MODUS",
             "TON", "PITCH", "FEEDBK", "STIMMEN", "PRE", "PRE", "AKKORD", "TYP", "DRIVE",
             "FEEDBK", "FORM", "FORM", "MITTEN", "MODUS", "BIAS", "BASS", "STREUUNG", "FEEDBK", "PITCH",
-            "DIFFUS", "SHIMMER", "LFO", "FEEDBK", "REVERSE", "BEREICH", "AKKORD", "SPREAD", "RATE", "FARBE", "PITCH"
+            "DIFFUS", "SHIMMER", "LFO", "FEEDBK", "REVERSE", "BEREICH", "AKKORD", "SPREAD", "RATE", "FARBE", "PITCH",
+            "FEEDBK", "HALL", "DECAY", "TIEFE", "WEICH", "DETUNE", "SKALA", "BITS"
         )
         val P2_LABELS = arrayOf(
             "DRIVE", "DRIVE", "DRIVE", "DRIVE", "STUFEN", "DRIVE", "TON",
             "WOBBLE", "TON", "BASIS", "BASIS", "LOWCUT", "LOWCUT", "MIC", "LEVEL", "TON",
             "STUFEN", "SYNC", "BASIS", "MITT-FRQ", "DRIVE", "LEVEL", "LEVEL", "PITCH", "STREUUNG", "STREUUNG",
-            "TON", "DIFFUS", "LFO-TIEFE", "TON", "PITCH", "TON", "HELL", "GRÖSSE", "VARIATION", "RAUM", "REVERSE"
+            "TON", "DIFFUS", "LFO-TIEFE", "TON", "PITCH", "TON", "HELL", "GRÖSSE", "VARIATION", "RAUM", "REVERSE",
+            "WOW / SYNC", "TON", "OVERDUB", "WEICH", "TON", "OKTAVE", "TRANSP.", "TON"
         )
         val P1_DEFAULT = floatArrayOf(
             0.3f, 0.3f, 0f, 0.3f, 0.4f, 0.6f, 0.25f, 0.6f, 0.5f, 0.5f, 0.6f, 0.15f, 0.4f, 0.3f, 0.2f, 0.2f,
-            0.5f, 0f, 0f, 0.5f, 0f, 0.5f, 0.5f, 0.3f, 0f, 0.5f, 0.2f, 0f, 0.2f, 0.2f, 0.3f, 0.3f, 0.4f, 0.3f, 0.5f, 0.4f, 1f
+            0.5f, 0f, 0f, 0.5f, 0f, 0.5f, 0.5f, 0.3f, 0f, 0.5f, 0.2f, 0f, 0.2f, 0.2f, 0.3f, 0.3f, 0.4f, 0.3f, 0.5f, 0.4f, 1f,
+            0.55f, 0.4f, 0f, 1f, 0.3f, 0.2f, 0f, 0.2f
         )
         val P2_DEFAULT = floatArrayOf(
             0f, 0f, 0f, 0f, 0f, 0f, 0.7f, 0.2f, 1f, 0.3f, 0.4f, 0.2f, 0.3f, 0f, 0.6f, 1f,
-            0.4f, 0f, 0.3f, 0.5f, 0f, 0.6f, 0.6f, 0.5f, 0.2f, 0.2f, 0.6f, 0.3f, 0f, 0.7f, 0.2f, 0.7f, 0.5f, 0.4f, 0.2f, 0.4f, 0.5f
+            0.4f, 0f, 0.3f, 0.5f, 0f, 0.6f, 0.6f, 0.5f, 0.2f, 0.2f, 0.6f, 0.3f, 0f, 0.7f, 0.2f, 0.7f, 0.5f, 0.4f, 0.2f, 0.4f, 0.5f,
+            0.25f, 0.5f, 0f, 0.2f, 0.7f, 0.5f, 0.5f, 0.6f
         )
         val HUES = floatArrayOf(
             190f, 175f, 205f, 165f, 30f, 55f, 100f, 280f, 50f, 130f, 160f, 230f, 250f, 310f, 15f, 0f,
-            145f, 95f, 120f, 40f, 200f, 25f, 10f, 265f, 295f, 215f, 240f, 185f, 330f, 345f, 60f, 300f, 75f, 270f, 85f, 20f, 195f
+            145f, 95f, 120f, 40f, 200f, 25f, 10f, 265f, 295f, 215f, 240f, 185f, 330f, 345f, 60f, 300f, 75f, 270f, 85f, 20f, 195f,
+            35f, 170f, 110f, 5f, 285f, 320f, 140f, 205f
         )
 
         /** Anzeige für Regler mit Stufen, sonst null. */
@@ -192,6 +208,10 @@ class Fx(private val sr: Int) {
             knob == 1 && type <= NOTCH -> "${12 * stages(v)} dB"
             knob == 2 && type == BELL -> "${stages(v)}×"
             knob == 1 && type == COMB -> if (v < 0.5f) "FB" else "FF"
+            knob == 1 && type == AUTOTUNE -> arrayOf("CHROM.", "DUR", "MOLL", "PENTA")[min(3, (v * 4f).toInt())]
+            knob == 2 && type == AUTOTUNE -> semiLabel(v)
+            knob == 2 && type == HARMONIZER -> if (v < 0.33f) "−1 OKT" else if (v < 0.66f) "0" else "+1 OKT"
+            knob == 2 && type == TAPEECHO -> if (v > 0.5f) "SYNC" else "${(v * 200).toInt()} %"
             else -> null
         }
 
@@ -200,6 +220,7 @@ class Fx(private val sr: Int) {
 
     private var engage = 0f
     private val fx2 = Fx2(sr)
+    private val fx3 = Fx3(sr)
     private var sx = 0.5f
     private var sy = 0.5f
     private var lastType = -1
@@ -286,6 +307,7 @@ class Fx(private val sr: Int) {
         vocFormant = -1f
         dsLp = 0f; dsHp = 0f
         fx2.reset()
+        fx3.reset()
     }
 
     private fun onePole(cutoff: Float): Float = (1.0 - exp(-2.0 * PI * cutoff / sr)).toFloat()
@@ -317,6 +339,10 @@ class Fx(private val sr: Int) {
         }
         wasTouching = touching
 
+        if (type >= TAPEECHO) {
+            fx3.process(buf, n, frame0, type, sx, sy, touching, mix, p1, p2, bar, if (masterLen > 0) masterStart else 0L)
+            return
+        }
         if (type >= PHASER) {
             fx2.process(buf, n, frame0, type, sx, sy, touching, mix, p1, p2, bar, if (masterLen > 0) masterStart else 0L)
             return
