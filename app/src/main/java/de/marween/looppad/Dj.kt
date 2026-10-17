@@ -241,8 +241,8 @@ object Dj {
 
     private fun renderDeck(d: Deck, bl: FloatArray, br: FloatArray, n: Int, w: Long, sr: Int) {
         val data = d.data ?: return
-        val len = d.len
         val ch = d.ch
+        val len = min(d.len, data.size / max(1, ch))
         val st = d.seekTo
         if (st >= 0) {
             d.pos = st.coerceIn(0.0, (len - 2).toDouble())
@@ -572,6 +572,143 @@ object Dj {
         d.pitch = 0f
         d.libId = null
         d.data = t.data
+    }
+
+    class Wave(val peaks: ByteArray, val lows: ByteArray, val env: FloatArray, val fps: Double)
+
+    /** Wellenform-Übersicht und Hüllkurve (für Tempo/Raster) eines Tracks. */
+    fun waveOf(data: ShortArray, ch: Int, len: Int, rate: Int): Wave {
+        val bins = (len + BIN - 1) / BIN
+        val pk = ByteArray(bins)
+        val lw = ByteArray(bins)
+        var lpState = 0f
+        val a = (1.0 - exp(-2 * PI * 180.0 / rate)).toFloat()
+        val hop = max(1, rate / 200)
+        val env = FloatArray(len / hop + 1)
+        var maxPk = 1e-6f
+        val pkF = FloatArray(bins)
+        val lwF = FloatArray(bins)
+        for (bi in 0 until bins) {
+            var m = 0f
+            var sAll = 0f
+            var sLow = 0f
+            val f0 = bi * BIN
+            val f1 = min(len, f0 + BIN)
+            for (f in f0 until f1) {
+                val v = if (ch == 2) (data[2 * f] + data[2 * f + 1]) / 65536f else data[f] / 32768f
+                lpState += a * (v - lpState)
+                val av = abs(v)
+                if (av > m) m = av
+                sAll += av
+                sLow += abs(lpState)
+                env[f / hop] += v * v
+            }
+            pkF[bi] = m
+            lwF[bi] = if (sAll > 1e-6f) (sLow / sAll).coerceIn(0f, 1f) else 0f
+            if (m > maxPk) maxPk = m
+        }
+        for (bi in 0 until bins) {
+            pk[bi] = (min(1f, pkF[bi] / maxPk) * 255f).toInt().toByte()
+            lw[bi] = (lwF[bi] * 255f).toInt().toByte()
+        }
+        return Wave(pk, lw, env, rate.toDouble() / hop)
+    }
+
+    /** Tempo und Beat-Raster neu erkennen (Frames). [keepBpm] = nur das Raster neu legen. */
+    fun reanalyze(d: Deck, keepBpm: Boolean) {
+        val data = d.data ?: return
+        val w = waveOf(data, d.ch, d.len, d.srcRate)
+        val hop = d.srcRate / w.fps
+        val bpm = if (keepBpm && d.bpm > 0f) d.bpm else detectBpm(w.env, w.fps).first
+        d.bpm = bpm
+        d.grid = findGrid(w.env, w.fps, bpm) * hop
+    }
+
+    /**
+     * Ganzen Track auf ein neues Tempo dehnen – ohne Tonhöhenänderung (WSOLA, Stereo).
+     * Raster, Cue, Hot Cues, Loop und Position werden mitgerechnet. Läuft im Hintergrund;
+     * das Deck spielt währenddessen weiter.
+     */
+    fun warpTo(d: Deck, newBpm: Float, progress: (Float) -> Unit) {
+        val data = d.data ?: return
+        val ch = d.ch
+        val len = d.len
+        val sr = d.srcRate
+        if (d.bpm <= 0f || newBpm <= 0f) return
+        val ratio = d.bpm.toDouble() / newBpm // Ausgabe-Länge / Eingabe-Länge
+        val outLen = (len * ratio).toInt()
+        val n = 2048 * sr / 48000 / 2 * 2
+        val ho = n / 2
+        val tol = n / 4
+        val win = FloatArray(n) { (0.5 - 0.5 * cos(2 * PI * it / n)).toFloat() }
+        val out = ShortArray(outLen * ch)
+        val acc = Array(ch) { FloatArray(n) }
+        fun mono(i: Int): Float = if (i < 0 || i >= len) 0f else if (ch == 2) (data[2 * i] + data[2 * i + 1]) * 0.5f else data[i].toFloat()
+        var prev = 0
+        var k = 0
+        while (k * ho < outLen) {
+            val nominal = (k * ho / ratio).toInt()
+            var chosen = nominal
+            if (k > 0) {
+                // Stelle suchen, die am besten an das vorige Stück anschließt
+                val nat = prev + ho
+                var best = Double.NEGATIVE_INFINITY
+                var cand = max(0, nominal - tol)
+                val last = min(len - n, nominal + tol)
+                while (cand <= last) {
+                    var c = 0.0
+                    var j = 0
+                    while (j < ho) {
+                        c += mono(nat + j) * mono(cand + j)
+                        j += 12
+                    }
+                    if (c > best) { best = c; chosen = cand }
+                    cand += 3
+                }
+            }
+            chosen = chosen.coerceIn(0, max(0, len - 1))
+            for (c in 0 until ch) {
+                val a = acc[c]
+                for (j in 0 until n) {
+                    val i = chosen + j
+                    val v = if (i < len) data[i * ch + c].toFloat() else 0f
+                    a[j] += v * win[j]
+                }
+                val o0 = k * ho
+                for (j in 0 until ho) {
+                    val oi = o0 + j
+                    if (oi >= outLen) break
+                    out[oi * ch + c] = a[j].toInt().coerceIn(-32768, 32767).toShort()
+                }
+                System.arraycopy(a, ho, a, 0, n - ho)
+                java.util.Arrays.fill(a, n - ho, n, 0f)
+            }
+            prev = chosen
+            k++
+            if (k % 400 == 0) progress(min(1f, k * ho.toFloat() / outLen))
+        }
+        val w = waveOf(out, ch, outLen, sr)
+        // Umschalten: Positionen umrechnen, dann Daten tauschen (der Mischer liest die Länge sicher)
+        val r = ratio
+        d.peaks = w.peaks
+        d.lows = w.lows
+        d.grid = d.grid * r
+        d.cuePoint = d.cuePoint * r
+        for (h in 0..3) if (d.hot[h] >= 0) d.hot[h] = d.hot[h] * r
+        d.loopIn = d.loopIn * r
+        d.loopOut = d.loopOut * r
+        val newPos = d.pos * r
+        d.bpm = newBpm
+        if (outLen < d.len) {
+            d.len = outLen
+            d.data = out
+        } else {
+            d.data = out
+            d.len = outLen
+        }
+        d.seekTo = newPos
+        d.pitch = 0f
+        progress(1f)
     }
 
     /** Tempo-Erkennung über Onset-Autokorrelation (70–180 BPM, auf 85–175 gefaltet). */

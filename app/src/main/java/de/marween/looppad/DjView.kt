@@ -397,6 +397,11 @@ class DjView(context: Context) : View(context) {
 
     override fun onDraw(c: Canvas) {
         if (panel.width() <= 0f) layoutAll()
+        if (editDeck >= 0) {
+            drawEditor(c)
+            postInvalidateOnAnimation()
+            return
+        }
         val s = skin
         c.drawColor(s.bg)
         drawBody(c)
@@ -1597,6 +1602,10 @@ class DjView(context: Context) : View(context) {
     @SuppressLint("ClickableViewAccessibility")
     override fun onTouchEvent(e: MotionEvent): Boolean {
         if (e.actionMasked == MotionEvent.ACTION_DOWN) try { requestUnbufferedDispatch(e) } catch (ignored: Throwable) {}
+        if (editDeck >= 0) {
+            editorTouch(e)
+            return true
+        }
         when (e.actionMasked) {
             MotionEvent.ACTION_DOWN, MotionEvent.ACTION_POINTER_DOWN -> {
                 val i = e.actionIndex
@@ -1951,6 +1960,567 @@ class DjView(context: Context) : View(context) {
     /** MIDI/außen: Pad-Anzeige blinken lassen. */
     fun flashSampler(p: Int) {
         if (padMode == 1 && p in 0 until 12) padFlash[p] = 1f
+    }
+
+    // ================================================================ Track-Editor (Wave-Editor fürs Deck)
+
+    /** Deck im Editor (-1 = zu). */
+    var editDeck = -1
+        private set
+    /** Bibliothek: Cue-Punkte/Tempo sichern (Deck). */
+    var onEditSaveLib: ((Int) -> Unit)? = null
+    private var ev0 = 0.0
+    private var ev1 = 1.0
+    /** 0 = auf Schläge, 1 = Nulldurchgang, 2 = frei */
+    private var evSnap = 0
+    private var evDrag = 0
+    private var evDownX = 0f
+    private var evDownY = 0f
+    private var evMoved = false
+    private var evPan0 = 0.0
+    private var evPinch0 = 0f
+    private var evPinchV0 = 0.0
+    private var evPinchV1 = 0.0
+    private var evLoupe = -1f
+    @Volatile private var evBusy = ""
+    private val evTaps = ArrayList<Long>()
+    private val evRect = RectF()
+    private val evClose = RectF()
+    private val evOver = RectF()
+    private val evWave = RectF()
+    private val evBtns = Array(6) { Array(5) { RectF() } }
+    private val evDownAt = LongArray(64)
+
+    fun openEditor(k: Int) {
+        val d = Dj.decks[k]
+        if (!d.loaded()) return
+        editDeck = k
+        evSnap = 0
+        val bf = d.beatFrames()
+        val c = if (d.cuePoint > 0) d.cuePoint else d.pos
+        evSetView(c, bf * 16)
+        layoutEditor()
+        invalidate()
+    }
+
+    private fun closeEditor() {
+        editDeck = -1
+        evLoupe = -1f
+    }
+
+    private fun evDeck(): Dj.Deck = Dj.decks[editDeck.coerceIn(0, 1)]
+
+    private fun evSetView(center: Double, span0: Double) {
+        val d = evDeck()
+        val len = d.len.toDouble()
+        val span = span0.coerceIn(min(len, d.srcRate * 0.03), len)
+        var a = center - span / 2
+        a = a.coerceIn(0.0, max(0.0, len - span))
+        ev0 = a
+        ev1 = a + span
+    }
+
+    private fun layoutEditor() {
+        val m = dp(8f)
+        evRect.set(m, insetTop + m, width - m, height - insetBottom - m)
+        evClose.set(evRect.right - dp(46f), evRect.top + dp(8f), evRect.right - dp(8f), evRect.top + dp(46f))
+        var y = evClose.bottom + dp(26f)
+        evOver.set(evRect.left + dp(10f), y, evRect.right - dp(10f), y + dp(26f))
+        y = evOver.bottom + dp(8f)
+        val rows = 6
+        val bh = dp(38f)
+        val gap = dp(6f)
+        val btnH = rows * bh + (rows - 1) * gap
+        val waveH = max(dp(120f), evRect.bottom - dp(10f) - btnH - dp(30f) - y)
+        evWave.set(evRect.left + dp(10f), y, evRect.right - dp(10f), y + waveH)
+        y = evWave.bottom + dp(30f)
+        val L = evRect.left + dp(10f)
+        val W = evRect.width() - dp(20f)
+        for (r in 0 until rows) {
+            val n = when (r) { 3 -> 4; 4 -> 2; 5 -> 2; else -> 5 }
+            val bw = (W - (n - 1) * gap) / n
+            for (i in 0 until 5) {
+                if (i < n) evBtns[r][i].set(L + i * (bw + gap), y, L + i * (bw + gap) + bw, y + bh) else evBtns[r][i].setEmpty()
+            }
+            y += bh + gap
+        }
+    }
+
+    private fun evX(f: Double): Float = evWave.left + ((f - ev0) / (ev1 - ev0)).toFloat() * evWave.width()
+    private fun evF(x: Float): Double = ev0 + ((x - evWave.left) / evWave.width()).toDouble() * (ev1 - ev0)
+
+    private fun evSnapPos(f0: Double): Double {
+        val d = evDeck()
+        val data = d.data ?: return f0
+        val f = f0.coerceIn(0.0, (d.len - 2).toDouble())
+        return when (evSnap) {
+            0 -> Dj.snapBeat(d, f)
+            1 -> {
+                val ch = d.ch
+                val i0 = f.toInt()
+                val r = d.srcRate / 200
+                var best = i0
+                var bd = Int.MAX_VALUE
+                for (i in max(1, i0 - r)..min(d.len - 1, i0 + r)) {
+                    val a = data[(i - 1) * ch].toInt()
+                    val b = data[i * ch].toInt()
+                    if ((a <= 0 && b > 0) || (a >= 0 && b < 0)) {
+                        val dd = abs(i - i0)
+                        if (dd < bd) { bd = dd; best = i }
+                    }
+                }
+                best.toDouble()
+            }
+            else -> f
+        }
+    }
+
+    private val evLabels: Array<Array<String>>
+        get() {
+            val d = evDeck()
+            val mb = Engine.currentBpm()
+            return arrayOf(
+                arrayOf("🔍−", "🔍+", "⌖ START", if (d.playing) "‖ PAUSE" else "▶ HÖREN", when (evSnap) { 0 -> "SNAP: BEAT"; 1 -> "SNAP: 0"; else -> "SNAP: FREI" }),
+                arrayOf("HOT 1", "HOT 2", "HOT 3", "HOT 4", "S ← KOPF"),
+                arrayOf("BPM −0.1", "BPM +0.1", "× 2", "÷ 2", "TAP"),
+                arrayOf("◀ RASTER", "RASTER ▶", "SCHLAG 1 = S", "🔎 ERKENNEN", ""),
+                arrayOf(if (mb > 0f) String.format(Locale.GERMANY, "⇄ AUF %.1f BPM WARPEN", mb) else "⇄ WARPEN (kein Master)", if (d.sync) "SYNC: AN" else "SYNC: AUS"),
+                arrayOf(if (d.libId != null) "💾 IN BIBLIOTHEK SICHERN" else "💿 IN DJ-BIBLIOTHEK", "✓ FERTIG")
+            )
+        }
+
+    private fun drawEditor(c: Canvas) {
+        layoutEditor()
+        val d = evDeck()
+        val col = if (editDeck == 0) skin.colA else skin.colB
+        c.drawColor(Color.argb(200, 0, 0, 0))
+        fill.shader = null
+        fill.color = Color.rgb(18, 20, 25)
+        c.drawRoundRect(evRect, dp(14f), dp(14f), fill)
+        stroke.strokeWidth = dp(2f)
+        stroke.color = col
+        c.drawRoundRect(evRect, dp(14f), dp(14f), stroke)
+        text.textAlign = Paint.Align.LEFT
+        text.textSize = dp(15f)
+        text.color = Color.WHITE
+        var title = "〰 Deck ${"AB"[editDeck]} · ${d.title}"
+        while (title.length > 6 && text.measureText(title) > evRect.width() - dp(70f)) title = title.dropLast(2)
+        c.drawText(title, evRect.left + dp(14f), evClose.centerY() + dp(5f), text)
+        text.textSize = dp(11f)
+        text.color = Color.rgb(190, 195, 205)
+        val r = d.srcRate.toDouble()
+        val info = if (evBusy.isNotEmpty()) evBusy else String.format(
+            Locale.GERMANY, "%.2f BPM · Start %s.%02d · Raster %.3f s · Länge %s · Zoom %s",
+            d.bpm, Dj.fmt(d.cuePoint / r), ((d.cuePoint / r * 100) % 100).toInt(), d.grid / r, Dj.fmt(d.seconds()), evZoomLabel()
+        )
+        c.drawText(info, evRect.left + dp(14f), evClose.bottom + dp(16f), text)
+        text.textAlign = Paint.Align.CENTER
+        drawBtnE(c, evClose, "✕", false, col)
+        // Übersicht (ganzer Track) mit Sichtfenster
+        val ov = evOver
+        fill.color = Color.rgb(10, 11, 14)
+        c.drawRect(ov, fill)
+        val pk = d.peaks
+        if (pk.isNotEmpty()) {
+            stroke.strokeWidth = 1f
+            val n = ov.width().toInt()
+            for (i in 0 until n step 2) {
+                val bi = (i.toLong() * pk.size / n).toInt().coerceIn(0, pk.size - 1)
+                val v = (pk[bi].toInt() and 0xFF) / 255f
+                stroke.color = alpha(col, 0.7f)
+                c.drawLine(ov.left + i, ov.centerY() - v * ov.height() / 2, ov.left + i, ov.centerY() + v * ov.height() / 2, stroke)
+            }
+            fill.color = Color.argb(60, 255, 255, 255)
+            val a0 = ov.left + (ev0 / d.len).toFloat() * ov.width()
+            val a1 = ov.left + (ev1 / d.len).toFloat() * ov.width()
+            c.drawRect(a0, ov.top, max(a0 + dp(2f), a1), ov.bottom, fill)
+            stroke.strokeWidth = dp(1.5f)
+            stroke.color = Color.WHITE
+            val px = ov.left + (d.pos / d.len).toFloat() * ov.width()
+            c.drawLine(px, ov.top, px, ov.bottom, stroke)
+            stroke.color = Color.rgb(255, 170, 0)
+            val cx0 = ov.left + (d.cuePoint / d.len).toFloat() * ov.width()
+            c.drawLine(cx0, ov.top, cx0, ov.bottom, stroke)
+        }
+        // Hauptwellenform
+        val w = evWave
+        fill.color = Color.rgb(8, 9, 12)
+        c.drawRoundRect(w, dp(6f), dp(6f), fill)
+        c.save()
+        c.clipRect(w)
+        drawEvWave(c, d, w, ev0, ev1, col)
+        // Raster
+        if (d.bpm > 0f) {
+            val bf = d.beatFrames()
+            val k0 = floor((ev0 - d.grid) / bf).toLong()
+            val k1 = floor((ev1 - d.grid) / bf).toLong() + 1
+            val pxPerBeat = (bf / (ev1 - ev0) * w.width()).toFloat()
+            if (k1 - k0 < 4000) for (k in k0..k1) {
+                val x = evX(d.grid + k * bf)
+                val bar = Math.floorMod(k, 4L) == 0L
+                if (!bar && pxPerBeat < dp(5f)) continue
+                stroke.strokeWidth = dp(if (bar) 1.4f else 0.7f)
+                stroke.color = Color.argb(if (bar) 150 else 60, 255, 255, 255)
+                c.drawLine(x, w.top, x, w.bottom, stroke)
+                if (bar && (pxPerBeat * 4 > dp(26f) || Math.floorMod(k / 4, 4L) == 0L)) {
+                    mono.textSize = dp(9f)
+                    mono.color = Color.argb(170, 255, 255, 255)
+                    mono.textAlign = Paint.Align.LEFT
+                    c.drawText("${Math.floorDiv(k, 4L) + 1}", x + dp(2f), w.top + dp(10f), mono)
+                }
+            }
+        }
+        // Hot Cues
+        for (h in 0..3) {
+            val hf = d.hot[h]
+            if (hf < 0) continue
+            val x = evX(hf)
+            stroke.strokeWidth = dp(2f)
+            stroke.color = HOT[h]
+            c.drawLine(x, w.top, x, w.bottom, stroke)
+            fill.color = HOT[h]
+            c.drawCircle(x, w.bottom - dp(10f), dp(8f), fill)
+            text.textSize = dp(10f)
+            text.color = Color.WHITE
+            c.drawText("${h + 1}", x, w.bottom - dp(6.5f), text)
+        }
+        // Startpunkt (Cue)
+        val sx = evX(d.cuePoint)
+        stroke.strokeWidth = dp(2.5f)
+        stroke.color = Color.rgb(255, 170, 0)
+        c.drawLine(sx, w.top, sx, w.bottom, stroke)
+        fill.color = Color.rgb(255, 170, 0)
+        path.reset()
+        path.moveTo(sx - dp(10f), w.top)
+        path.lineTo(sx + dp(10f), w.top)
+        path.lineTo(sx, w.top + dp(14f))
+        path.close()
+        c.drawPath(path, fill)
+        text.textSize = dp(9f)
+        text.color = Color.BLACK
+        c.drawText("S", sx, w.top + dp(8f), text)
+        // Abspielkopf
+        stroke.strokeWidth = dp(1.6f)
+        stroke.color = Color.WHITE
+        val hx = evX(d.pos)
+        c.drawLine(hx, w.top, hx, w.bottom, stroke)
+        c.restore()
+        if (evLoupe >= 0f && evDrag == 1) drawEvLoupe(c, d, d.cuePoint, col)
+        text.textSize = dp(10f)
+        text.color = Color.rgb(170, 175, 185)
+        c.drawText("S ziehen = Startpunkt · Zahlen = Hot Cues ziehen · antippen = Kopf setzen · 2 Finger = Zoom", evRect.centerX(), w.bottom + dp(18f), text)
+        // Tasten
+        val labels = evLabels
+        for (rI in 0 until 6) for (i in 0 until 5) {
+            val b = evBtns[rI][i]
+            if (b.isEmpty || labels[rI].size <= i || labels[rI][i].isEmpty()) continue
+            val on = when {
+                rI == 1 && i < 4 -> d.hot[i] >= 0
+                rI == 0 && i == 3 -> d.playing
+                rI == 4 && i == 1 -> d.sync
+                else -> false
+            }
+            val bc = if (rI == 1 && i < 4) HOT[i] else col
+            drawBtnE(c, b, labels[rI][i], on, bc)
+        }
+    }
+
+    private fun drawEvWave(c: Canvas, d: Dj.Deck, w: RectF, a: Double, b: Double, col: Int) {
+        val data = d.data ?: return
+        val ch = d.ch
+        val span = b - a
+        val cols = w.width().toInt()
+        val fpp = span / cols
+        val mid = w.centerY()
+        val hh = w.height() * 0.46f
+        val pk = d.peaks
+        if (fpp < 1.5) {
+            // stark vergrößert: Kurve
+            path.reset()
+            for (px in 0..cols) {
+                val f = (a + px * fpp).toInt().coerceIn(0, d.len - 1)
+                val v = if (ch == 2) (data[2 * f] + data[2 * f + 1]) / 65536f else data[f] / 32768f
+                val y = mid - v * hh
+                if (px == 0) path.moveTo(w.left + px, y) else path.lineTo(w.left + px, y)
+            }
+            stroke.strokeWidth = dp(1.6f)
+            stroke.color = col
+            c.drawPath(path, stroke)
+        } else {
+            stroke.strokeWidth = max(1f, dp(1f))
+            val st = max(1, (fpp / 24).toInt())
+            var px = 0
+            while (px < cols) {
+                val f0 = (a + px * fpp).toLong()
+                val f1 = (a + (px + 1) * fpp).toLong()
+                var mn = 0f
+                var mx = 0f
+                if (fpp > Dj.BIN * 2 && pk.isNotEmpty()) {
+                    val bi0 = (f0 / Dj.BIN).toInt().coerceIn(0, pk.size - 1)
+                    val bi1 = (f1 / Dj.BIN).toInt().coerceIn(bi0, pk.size - 1)
+                    var m = 0
+                    for (bi in bi0..bi1) m = max(m, pk[bi].toInt() and 0xFF)
+                    mx = m / 255f
+                    mn = -mx
+                } else {
+                    var f = max(0L, f0)
+                    val e = min(d.len.toLong(), f1)
+                    while (f < e) {
+                        val i = f.toInt()
+                        val v = if (ch == 2) (data[2 * i] + data[2 * i + 1]) / 65536f else data[i] / 32768f
+                        if (v < mn) mn = v
+                        if (v > mx) mx = v
+                        f += st
+                    }
+                }
+                val inStart = f0 >= d.cuePoint
+                stroke.color = if (inStart) col else alpha(col, 0.45f)
+                c.drawLine(w.left + px, mid - mx * hh, w.left + px, mid - mn * hh + 0.5f, stroke)
+                px++
+            }
+        }
+        stroke.strokeWidth = dp(0.6f)
+        stroke.color = Color.argb(60, 255, 255, 255)
+        c.drawLine(w.left, mid, w.right, mid, stroke)
+    }
+
+    private fun drawEvLoupe(c: Canvas, d: Dj.Deck, f: Double, col: Int) {
+        val w = evWave
+        val r = dp(54f)
+        val cx = evLoupe.coerceIn(w.left + r, w.right - r)
+        val cy = w.top - r * 0.1f
+        val half = d.srcRate / 100.0
+        c.save()
+        path.reset()
+        path.addCircle(cx, cy, r, Path.Direction.CW)
+        c.clipPath(path)
+        fill.color = Color.rgb(6, 7, 10)
+        c.drawCircle(cx, cy, r, fill)
+        drawEvWave(c, d, RectF(cx - r, cy - r, cx + r, cy + r), f - half, f + half, col)
+        stroke.strokeWidth = dp(1.5f)
+        stroke.color = Color.rgb(255, 170, 0)
+        c.drawLine(cx, cy - r, cx, cy + r, stroke)
+        c.restore()
+        stroke.strokeWidth = dp(2.5f)
+        stroke.color = col
+        c.drawCircle(cx, cy, r, stroke)
+        text.textSize = dp(9f)
+        text.color = Color.WHITE
+        c.drawText(String.format(Locale.GERMANY, "%.3f s", f / d.srcRate), cx, cy + r - dp(8f), text)
+    }
+
+    private fun drawBtnE(c: Canvas, r: RectF, label: String, on: Boolean, col: Int) {
+        fill.shader = null
+        fill.color = if (on) col else Color.rgb(34, 37, 44)
+        c.drawRoundRect(r, dp(8f), dp(8f), fill)
+        stroke.strokeWidth = dp(1f)
+        stroke.color = alpha(col, if (on) 1f else 0.45f)
+        c.drawRoundRect(r, dp(8f), dp(8f), stroke)
+        text.textSize = min(dp(12f), (r.width() - dp(8f)) / max(2f, label.length * 0.6f))
+        text.color = if (on) Color.rgb(15, 15, 15) else Color.WHITE
+        c.drawText(label, r.centerX(), r.centerY() + text.textSize * 0.36f, text)
+    }
+
+    private fun evZoomLabel(): String {
+        val d = evDeck()
+        val z = d.len / max(1.0, ev1 - ev0)
+        return if (z < 10) String.format(Locale.GERMANY, "%.1f×", z) else "${z.toInt()}×"
+    }
+
+    private fun editorTouch(e: MotionEvent) {
+        val d = evDeck()
+        val i = e.actionIndex
+        val x = e.getX(i)
+        val y = e.getY(i)
+        when (e.actionMasked) {
+            MotionEvent.ACTION_DOWN, MotionEvent.ACTION_POINTER_DOWN -> {
+                if (e.actionMasked == MotionEvent.ACTION_POINTER_DOWN && e.pointerCount == 2 && (evWave.contains(x, y) || evDrag in 1..20)) {
+                    evDrag = 30
+                    evLoupe = -1f
+                    evPinch0 = abs(e.getX(0) - e.getX(1))
+                    evPinchV0 = ev0
+                    evPinchV1 = ev1
+                    return
+                }
+                evDownX = x
+                evDownY = y
+                evMoved = false
+                if (hit(evClose, x, y)) { closeEditor(); return }
+                if (hit(evOver, x, y, dp(6f))) {
+                    evDrag = 25
+                    evSetView(((x - evOver.left) / evOver.width()).coerceIn(0f, 1f) * d.len.toDouble(), ev1 - ev0)
+                    return
+                }
+                if (evWave.contains(x, y)) {
+                    val near = dp(26f)
+                    val sx = evX(d.cuePoint)
+                    var hotHit = -1
+                    for (h in 0..3) if (d.hot[h] >= 0 && abs(evX(d.hot[h]) - x) < near && y > evWave.bottom - dp(40f)) hotHit = h
+                    evDrag = when {
+                        hotHit >= 0 -> 10 + hotHit
+                        abs(x - sx) < near -> 1
+                        else -> 20
+                    }
+                    evPan0 = ev0
+                    if (evDrag == 1) evLoupe = x
+                    return
+                }
+                for (r in 0 until 6) for (j in 0 until 5) if (!evBtns[r][j].isEmpty && evBtns[r][j].contains(x, y)) {
+                    evDownAt[r * 5 + j] = SystemClock.uptimeMillis()
+                    evDrag = 40 + r * 5 + j
+                    haptic()
+                    return
+                }
+            }
+            MotionEvent.ACTION_MOVE -> {
+                if (evDrag == 30) {
+                    if (e.pointerCount >= 2 && evPinch0 > dp(20f)) {
+                        val d1 = abs(e.getX(0) - e.getX(1))
+                        val span0 = evPinchV1 - evPinchV0
+                        val cx = (e.getX(0) + e.getX(1)) / 2f
+                        val fc = evPinchV0 + ((cx - evWave.left) / evWave.width()).coerceIn(0f, 1f) * span0
+                        evSetView(fc, span0 * evPinch0 / max(dp(10f), d1))
+                    }
+                    return
+                }
+                val mx = e.getX(0)
+                if (!evMoved && abs(mx - evDownX) < dp(6f)) return
+                evMoved = true
+                when (evDrag) {
+                    1 -> {
+                        evLoupe = mx
+                        d.cuePoint = evSnapPos(evF(mx))
+                    }
+                    in 10..13 -> d.hot[evDrag - 10] = evSnapPos(evF(mx))
+                    20 -> {
+                        val span = ev1 - ev0
+                        val nv = (evPan0 - (mx - evDownX) / evWave.width() * span).coerceIn(0.0, max(0.0, d.len - span))
+                        ev0 = nv
+                        ev1 = nv + span
+                    }
+                    25 -> evSetView(((mx - evOver.left) / evOver.width()).coerceIn(0f, 1f) * d.len.toDouble(), ev1 - ev0)
+                }
+            }
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_POINTER_UP, MotionEvent.ACTION_CANCEL -> {
+                val dr = evDrag
+                evDrag = 0
+                evLoupe = -1f
+                if (e.actionMasked == MotionEvent.ACTION_CANCEL) return
+                if (dr == 20 && !evMoved) {
+                    // antippen: Abspielkopf hierhin
+                    d.seekTo = evF(evDownX).coerceIn(0.0, (d.len - 2).toDouble())
+                }
+                if (dr == 1 && !evMoved) d.seekTo = d.cuePoint
+                if (dr >= 40) {
+                    val idx = dr - 40
+                    val long = SystemClock.uptimeMillis() - evDownAt[idx] > 550
+                    evButton(idx / 5, idx % 5, long)
+                }
+            }
+        }
+    }
+
+    private fun evButton(r: Int, j: Int, long: Boolean) {
+        val d = evDeck()
+        val bf = d.beatFrames()
+        when (r) {
+            0 -> when (j) {
+                0 -> evSetView((ev0 + ev1) / 2, (ev1 - ev0) * 2)
+                1 -> evSetView((ev0 + ev1) / 2, (ev1 - ev0) / 2)
+                2 -> evSetView(d.cuePoint, min(ev1 - ev0, bf * 2))
+                3 -> {
+                    if (d.playing) d.playing = false else {
+                        if (d.sync) d.syncReq = true
+                        d.playing = true
+                    }
+                }
+                else -> {
+                    evSnap = (evSnap + 1) % 3
+                    onHint?.invoke(when (evSnap) { 0 -> "Marker rasten auf Schläge des Rasters"; 1 -> "Marker rasten auf Nulldurchgänge"; else -> "Marker frei" })
+                }
+            }
+            1 -> if (j < 4) {
+                if (long) {
+                    d.hot[j] = -1.0
+                    onHint?.invoke("Hot Cue ${j + 1} gelöscht")
+                } else if (d.hot[j] < 0) {
+                    d.hot[j] = evSnapPos(d.pos)
+                    onHint?.invoke("Hot Cue ${j + 1} am Abspielkopf gesetzt – ziehen zum Verschieben, lange drücken löscht")
+                } else {
+                    d.seekTo = d.hot[j]
+                    evSetView(d.hot[j], ev1 - ev0)
+                }
+            } else {
+                d.cuePoint = evSnapPos(d.pos)
+                onHint?.invoke("Startpunkt = Abspielkopf")
+            }
+            2 -> when (j) {
+                0 -> d.bpm = max(40f, Math.round((d.bpm - 0.1f) * 100f) / 100f)
+                1 -> d.bpm = min(240f, Math.round((d.bpm + 0.1f) * 100f) / 100f)
+                2 -> d.bpm = min(240f, d.bpm * 2f)
+                3 -> d.bpm = max(40f, d.bpm / 2f)
+                else -> {
+                    // im Takt mittippen, während der Track läuft – Raster folgt dem ersten Tipp
+                    val now = SystemClock.uptimeMillis()
+                    if (evTaps.isNotEmpty() && now - evTaps.last() > 2000) evTaps.clear()
+                    evTaps.add(now)
+                    if (evTaps.size > 8) evTaps.removeAt(0)
+                    if (evTaps.size >= 4) {
+                        val iv = (evTaps.last() - evTaps.first()).toDouble() / (evTaps.size - 1)
+                        val b = (60000.0 / iv / d.ratio).toFloat()
+                        if (b in 40f..240f) d.bpm = Math.round(b * 10f) / 10f
+                        // Raster: letzter Tipp ist ein Schlag
+                        d.grid = d.pos - Engine.outputLatencyMs() / 1000.0 * d.srcRate
+                    }
+                    onHint?.invoke(if (evTaps.size < 4) "Weiter im Takt tippen (${evTaps.size}/4) …" else String.format(Locale.GERMANY, "Tempo %.1f BPM", d.bpm))
+                }
+            }
+            3 -> when (j) {
+                0 -> d.grid -= d.srcRate * 0.005
+                1 -> d.grid += d.srcRate * 0.005
+                2 -> {
+                    d.grid = d.cuePoint
+                    onHint?.invoke("Raster: Schlag 1 liegt jetzt auf dem Startpunkt S")
+                }
+                else -> {
+                    evBusy = "Erkenne Tempo und Raster …"
+                    Thread {
+                        Dj.reanalyze(d, false)
+                        evBusy = ""
+                        post { onHint?.invoke(String.format(Locale.GERMANY, "Erkannt: %.2f BPM · Raster neu gelegt", d.bpm)) }
+                    }.start()
+                }
+            }
+            4 -> if (j == 0) {
+                val mb = Engine.currentBpm()
+                if (mb <= 0f) {
+                    onHint?.invoke("Noch kein Master-Tempo – oben BPM antippen oder Pads laufen lassen")
+                    return
+                }
+                if (evBusy.isNotEmpty()) return
+                if (abs(mb - d.bpm) < 0.01f) {
+                    onHint?.invoke("Track hat schon das Master-Tempo")
+                    return
+                }
+                val from = d.bpm
+                evBusy = String.format(Locale.GERMANY, "Warpe %.2f → %.2f BPM …", from, mb)
+                Thread {
+                    try {
+                        Dj.warpTo(d, mb) { p -> evBusy = String.format(Locale.GERMANY, "Warpe %.2f → %.2f BPM … %d %%", from, mb, (p * 100).toInt()) }
+                        d.sync = true
+                        d.syncReq = true
+                        post { onHint?.invoke(String.format(Locale.GERMANY, "Track neu quantisiert: %.2f BPM ohne Tonhöhenänderung · SYNC an", mb)) }
+                    } catch (e: OutOfMemoryError) {
+                        post { onHint?.invoke("Zu wenig Speicher für diesen Track") }
+                    } finally {
+                        evBusy = ""
+                    }
+                }.start()
+            } else {
+                Dj.toggleSync(d)
+            }
+            5 -> if (j == 0) onEditSaveLib?.invoke(editDeck) else closeEditor()
+        }
     }
 
     // ================================================================ Farb-Helfer

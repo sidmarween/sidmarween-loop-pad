@@ -142,6 +142,7 @@ class MainActivity : Activity() {
         dj.onHint = { hint(it) }
         dj.onSkinMenu = { showDesigns() }
         dj.onSamplerLoad = { p -> showSamplerLoad(p) }
+        dj.onEditSaveLib = { k -> saveDeckToLib(k) }
         djMode = prefs.getBoolean("djMode", false)
         // MIDI
         Midi.load(prefs)
@@ -1399,6 +1400,7 @@ class MainActivity : Activity() {
             "▦ Von einem Pad übernehmen",
             "💿 DJ-Bibliothek (mit Cue-Punkten)"
         )
+        if (dd.loaded()) items.add(0, "〰 Im Wave-Editor öffnen (Startpunkt, Hot Cues, Raster, Warp/Sync)")
         if (dd.loaded()) {
             items.add(String.format(Locale.GERMANY, "🎚 Tempo/Raster korrigieren (%.1f BPM)", dd.bpm))
             items.add("⏏ Auswerfen")
@@ -1406,7 +1408,12 @@ class MainActivity : Activity() {
         }
         AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
             .setTitle("Deck ${"AB"[k]} laden")
-            .setItems(items.toTypedArray()) { _, w ->
+            .setItems(items.toTypedArray()) { _, w0 ->
+                if (dd.loaded() && w0 == 0) {
+                    dj.openEditor(k)
+                    return@setItems
+                }
+                val w = if (dd.loaded()) w0 - 1 else w0
                 when (w) {
                     0 -> {
                         djDeck = k
