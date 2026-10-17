@@ -94,8 +94,29 @@ class MainActivity : Activity() {
         Engine.outKey = prefs.getString("outDev", null)
         Engine.inKey = prefs.getString("inDev", null)
         registerUsbWatcher()
-        setContentView(pads)
+        if (savedInstanceState == null) showSplash() else setContentView(pads)
         hideSystemBars()
+    }
+
+    /** Startbild: 4 Sekunden das Marv-PAD-Logo, dann blendet die Oberfläche ein. */
+    private fun showSplash() {
+        val bg = Color.rgb(22, 25, 30)
+        val img = android.widget.ImageView(this).apply {
+            setImageResource(R.drawable.splash)
+            scaleType = android.widget.ImageView.ScaleType.FIT_CENTER
+            setBackgroundColor(bg)
+            alpha = 0f
+            animate().alpha(1f).setDuration(500L).start()
+        }
+        window.decorView.setBackgroundColor(bg)
+        setContentView(img)
+        img.postDelayed({
+            if (isFinishing || isDestroyed) return@postDelayed
+            pads.alpha = 0f
+            setContentView(pads)
+            hideSystemBars()
+            pads.animate().alpha(1f).setDuration(350L).start()
+        }, 4000L)
     }
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
