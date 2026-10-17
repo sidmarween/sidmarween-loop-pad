@@ -948,6 +948,11 @@ class InstEditor(private val host: View) {
             } else if (!moved && kind == 2 && selMode) {
                 val key = cellVoice * InstState.MAX + cellStep
                 if (downWasSelected) sel.remove(key)
+            } else if (!moved && kind == 2) {
+                // Stift: markierten Schlag antippen = löschen
+                Engine.pushPatternUndo("DRUM Schritt")
+                st.drumSteps[cellVoice][cellStep] = 0
+                sel.remove(cellVoice * InstState.MAX + cellStep)
             }
             D_RESIZE -> if (!moved && !newNote && kind == 1) {
                 Engine.pushPatternUndo("ACID Note löschen")

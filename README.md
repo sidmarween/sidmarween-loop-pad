@@ -189,3 +189,17 @@ USB-Controller (OTG) und MIDI-Apps: Pads per Note (ab C1 = 36 oder einzeln **gel
 - **Pads** CUES: je Deck Hot Cue 1–4 (Doppeltipp löscht), Beat-Jump, Loop ½× / an-aus / 2×. **SAMPLER**: die 12 Pads der App – leeres Pad antippen lädt Audio (DJ-Bibliothek, Deck ab Cue-Punkt, Datei); es startet beim Antippen **synchron zu den laufenden Pads ab dem Startpunkt**.
 - DECK A/B lang drücken = Split-Cue (links Master, rechts Vorhören).
 - **DJ-Bibliothek**: im Wave-Editor „💾 → 💿 DJ-Bibliothek“ (Startpunkt = S, Hot Cues aus 📍 CUE bzw. den Slices) oder im Deck-Menü „Cue-Punkte speichern“.
+
+
+## ✎ ACID 303 & DRUM 909 – Editor
+
+Auf der ACID- bzw. DRUM-Fläche **✎ EDIT**: links Klaviatur (ACID) bzw. die 11 Instrumente (DRUM), rechts die Matrix in 1/16-Schritten, Länge 1–4 Takte.
+- **✏ STIFT**: Feld antippen setzt eine Note (ACID: nach rechts ziehen = länger/gebunden), antippen löscht, **lange drücken = Accent**, Note ziehen verschiebt. DRUM: über Felder ziehen malt Schläge.
+- **⬚ AUSWAHL**, **ALLE · KOPIE · EINF. · LÖSCH · QUANT** (auf 1/8 oder 1/4), Zoom, ⇅ HALBTON (ACID) bzw. ▦ PRESET (DRUM), **⇅ MIDI** laden/exportieren (DRUM als General-MIDI-Drums auf Kanal 10).
+- ACID: Spuren **ACCENT** und **SLIDE** unter der Matrix. **⚙ SOUND**: Cutoff, Resonanz, Env Mod, Decay, Accent, **Glide-Zeit**, Drive, Tune, Oktave, Swing, Lautstärke, Säge/Rechteck, FX-Bus, Zufall.
+- DRUM **⚙ KITS**: je Instrument Tune, Decay, Level, Stumm; Drive, Swing, Lautstärke, FX-Bus, Presets.
+- **Klaviatur-/Instrument-Taste** spielt den Ton und markiert alle Noten dieser Reihe – eine davon ziehen verschiebt die ganze Gruppe (auch in der Piano-Roll).
+
+## VEL – Lautstärke je Note
+
+In Piano-Roll, ACID- und DRUM-Editor liegt unter der Matrix die **VEL**-Spur: je Note ein Balken, mit dem Finger hoch/runter ziehen (über mehrere Noten wischen geht auch; markierte Noten ändern sich gemeinsam).
