@@ -157,3 +157,35 @@ Maximal 66 Sekunden pro Aufnahme (16 Takte ab 60 BPM). Kopfhörer verhindern, da
 Jeder Push auf `main` baut über GitHub Actions eine signierte APK und legt sie unter **Releases** ab.
 
 © marween
+
+
+## ⚡ Live-Reaktion & Latenz
+
+☰ → „⚡ Latenz & Live-Reaktion“: **AUTO** startet mit dem kleinsten Audio-Puffer des Geräts und vergrößert ihn nur, wenn es knackst (oder fest MINIMAL/AUSGEWOGEN/STABIL). Touch-Ereignisse kommen ohne Bildtakt-Verzögerung an, ONE SHOTS klingen im nächsten Audio-Block (ohne abgeschnittenen Anschlag), Loops starten schon beim **Berühren**. „Start-Raster AUS“ lässt Loops sofort (phasenrichtig im Takt) einsetzen. Bluetooth-Kopfhörer verzögern um 150–300 ms – für Live Kabel oder USB-Audio verwenden.
+
+## 🎙 Live-Mikrofon mit Effekten
+
+☰ → „Live-Mikrofon“: die Stimme live hören, mit bis zu **3 eigenen Effekten** und optional zusätzlich durch die XY-Effekte. Mit Effekten aufnehmen: Pad-Eingang auf WAVE.
+
+## 🎹 MIDI
+
+USB-Controller (OTG) und MIDI-Apps: Pads per Note (ab C1 = 36 oder einzeln **gelernt**), Anschlagdynamik, Tastatur-Kanal spielt die Piano-Roll chromatisch (C4 = Originalton), **CC lernen** für XY, Regler, Crossfader, Deck-Fader/Filter/Pitch/Effekt, Mikro. MIDI-Clock empfangen (Tempo folgt) oder senden, Start/Stopp, Programmwechsel = Szene.
+
+## 🎹 Piano-Roll bearbeiten
+
+**✏ STIFT** (setzen, ziehen = länger, antippen = löschen, Note ziehen = verschieben, rechten Rand ziehen = Länge) und **⬚ AUSWAHL** (antippen/Rahmen ziehen markiert, markierte ziehen verschiebt, ins Leere tippen = Einfügemarke). **ALLE · KOPIE · EINF. · LÖSCH · GRUPPE · QUANT** (nur Markierte). Zoom bis 32× mit 🔍 oder zwei Fingern. **⇅ MIDI**: Noten als .mid exportieren/importieren.
+
+## 〰 Wave-Editor-Lupe
+
+🔍 bis auf einzelne Samples, zwei Finger aufziehen, beim Ziehen der Marker eine runde **Lupe**, ⌖ S/E springt zum Marker, **0-SNAP** rastet auf Nulldurchgänge (kein Knacksen), **📍 CUE** setzt Hot Cues 1–4 für die DJ-Bibliothek.
+
+## 🎧 DJ-Modus
+
+☰ → Design → „🎧 DJ · …“ (18 Hardware-Designs: Stahl, Akai-Farbe, Walnuss, Retro-Creme, Glas, Porzellan, Neon, Matt-Schwarz, Pastell, Graphit, Marv-Orange, Messing/Leder/Leinen …).
+- **Display**: zwei Decks mit Wellenform (Bass-Farbe), Beat-Raster, Cue/Hot Cues, Loop; Wellenform ziehen = scratchen, Übersicht antippen = springen, Titel antippen = laden (Datei MP3/WAV, Bibliothek, Aufnahmen, Pad, **DJ-Bibliothek**).
+- **4 Regler**: HI/MID/LOW (Kill bis +6 dB) und FILTER (links Tiefpass, rechts Hochpass) fürs gewählte Deck (DECK A/B), Doppeltipp = Mitte.
+- **Fader**: außen Pitch (±8 %, Doppeltipp = 0), innen Lautstärke, dazwischen PLAY · CUE (halten am Cue = vorhören) · SYNC (Tempo + Takt auf das Master-Tempo der Pads) · 🎧 Vorhören. Crossfader weich/hart (SAMPLER lang drücken).
+- **XY-Fläche**: Effekt des Decks (Taster FX wählt), loslassen = aus, Doppeltipp = halten.
+- **Pads** CUES: je Deck Hot Cue 1–4 (Doppeltipp löscht), Beat-Jump, Loop ½× / an-aus / 2×. **SAMPLER**: die 12 Pads der App – leeres Pad antippen lädt Audio (DJ-Bibliothek, Deck ab Cue-Punkt, Datei); es startet beim Antippen **synchron zu den laufenden Pads ab dem Startpunkt**.
+- DECK A/B lang drücken = Split-Cue (links Master, rechts Vorhören).
+- **DJ-Bibliothek**: im Wave-Editor „💾 → 💿 DJ-Bibliothek“ (Startpunkt = S, Hot Cues aus 📍 CUE bzw. den Slices) oder im Deck-Menü „Cue-Punkte speichern“.

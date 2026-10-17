@@ -1300,8 +1300,9 @@ object Engine {
     /** Liefert die neuesten Mikrofon-Samples mit so wenig Verzögerung wie möglich. */
     private fun fillMonitor(dst: FloatArray, n: Int): Boolean {
         val c = captured
-        val lag = max(n.toLong(), burstFrames.toLong())
-        if (monCursor < 0 || monCursor + n > c || c - monCursor > lag * 6 + n) monCursor = c - n - lag
+        // Abstand zum Schreibzeiger: zwei Blöcke Reserve gegen Ruckler zwischen Aufnahme- und Ausgabe-Thread
+        val lag = 2L * max(n.toLong(), burstFrames.toLong())
+        if (monCursor < 0 || monCursor + n > c || c - monCursor > lag * 4 + n) monCursor = c - n - lag
         if (monCursor < 0) {
             java.util.Arrays.fill(dst, 0, n, 0f)
             monCursor += n
