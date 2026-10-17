@@ -2102,12 +2102,47 @@ class DjView(context: Context) : View(context) {
     private fun evX(f: Double): Float = evWave.left + ((f - ev0) / (ev1 - ev0)).toFloat() * evWave.width()
     private fun evF(x: Float): Double = ev0 + ((x - evWave.left) / evWave.width()).toDouble() * (ev1 - ev0)
 
+    /** Nächster Anschlag um [f] (±25 ms): Block mit dem stärksten Energieanstieg. */
+    private fun transientNear(d: Dj.Deck, f: Double): Double {
+        val data = d.data ?: return f
+        val ch = d.ch
+        val blk = max(16, d.srcRate / 1000)
+        val reach = d.srcRate / 40
+        val i0 = max(blk, f.toInt() - reach)
+        val i1 = min(d.len - blk, f.toInt() + reach)
+        if (i1 <= i0) return f
+        fun en(at: Int): Double {
+            var s = 0.0
+            var i = at
+            val e = min(d.len, at + blk)
+            while (i < e) { val v = data[i * ch].toDouble(); s += v * v; i++ }
+            return s
+        }
+        var best = f
+        var bestRise = 0.0
+        var prev = en(i0 - blk)
+        var i = i0
+        while (i < i1) {
+            val e = en(i)
+            val rise = e - prev * 1.5
+            if (rise > bestRise) { bestRise = rise; best = i.toDouble() }
+            prev = e
+            i += blk
+        }
+        return best
+    }
+
     private fun evSnapPos(f0: Double): Double {
         val d = evDeck()
         val data = d.data ?: return f0
         val f = f0.coerceIn(0.0, (d.len - 2).toDouble())
         return when (evSnap) {
-            0 -> Dj.snapBeat(d, f)
+            0 -> {
+                // Beat nur, wenn er auf dem Bildschirm nahe liegt – sonst auf den nächsten
+                // Anschlag (Transiente) rasten, damit S auch vor den ersten Schlag passt
+                val b = Dj.snapBeat(d, f)
+                if (abs(evX(b) - evX(f)) < dp(16f)) b else transientNear(d, f)
+            }
             1 -> {
                 val ch = d.ch
                 val i0 = f.toInt()

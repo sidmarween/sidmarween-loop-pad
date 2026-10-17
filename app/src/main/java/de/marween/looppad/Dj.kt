@@ -527,6 +527,10 @@ object Dj {
         // Mono-Hüllkurve für die Tempo-Analyse (10-ms-Raster)
         val hop = max(1, t.rate / 200)
         val env = FloatArray(t.len / hop + 1)
+        val envLo = FloatArray(t.len / hop + 1)
+        val envHi = FloatArray(t.len / hop + 1)
+        var hiLp = 0f
+        val a4 = (1.0 - exp(-2 * PI * 4000.0 / t.rate)).toFloat()
         var maxPk = 1e-6f
         val pkF = FloatArray(bins)
         val lwF = FloatArray(bins)
@@ -544,6 +548,10 @@ object Dj {
                 sAll += av
                 sLow += abs(lpState)
                 env[f / hop] += v * v
+                envLo[f / hop] += lpState * lpState
+                hiLp += a4 * (v - hiLp)
+                val hv = v - hiLp
+                envHi[f / hop] += hv * hv
             }
             pkF[bi] = m
             lwF[bi] = if (sAll > 1e-6f) (sLow / sAll).coerceIn(0f, 1f) else 0f
@@ -553,9 +561,10 @@ object Dj {
             pk[bi] = (min(1f, pkF[bi] / maxPk) * 255f).toInt().toByte()
             lw[bi] = (lwF[bi] * 255f).toInt().toByte()
         }
-        val det = detectBpm(env, t.rate.toDouble() / hop)
+        val on = onsetEnv(envLo, envHi, t.rate.toDouble() / hop)
+        val det = detectBpm(on, t.rate.toDouble() / hop)
         val bpm = nameBpm ?: det.first
-        val grid = findGrid(env, t.rate.toDouble() / hop, bpm) * hop
+        val grid = findGrid(on, t.rate.toDouble() / hop, bpm) * hop
         d.playing = false
         d.sync = false
         d.loopOn = false
@@ -577,7 +586,7 @@ object Dj {
         d.data = t.data
     }
 
-    class Wave(val peaks: ByteArray, val lows: ByteArray, val env: FloatArray, val fps: Double)
+    class Wave(val peaks: ByteArray, val lows: ByteArray, val env: FloatArray, val fps: Double, val onset: FloatArray)
 
     /** Wellenform-Übersicht und Hüllkurve (für Tempo/Raster) eines Tracks. */
     fun waveOf(data: ShortArray, ch: Int, len: Int, rate: Int): Wave {
@@ -588,6 +597,10 @@ object Dj {
         val a = (1.0 - exp(-2 * PI * 180.0 / rate)).toFloat()
         val hop = max(1, rate / 200)
         val env = FloatArray(len / hop + 1)
+        val envLo = FloatArray(len / hop + 1)
+        val envHi = FloatArray(len / hop + 1)
+        var hiLp = 0f
+        val a4 = (1.0 - exp(-2 * PI * 4000.0 / rate)).toFloat()
         var maxPk = 1e-6f
         val pkF = FloatArray(bins)
         val lwF = FloatArray(bins)
@@ -605,6 +618,10 @@ object Dj {
                 sAll += av
                 sLow += abs(lpState)
                 env[f / hop] += v * v
+                envLo[f / hop] += lpState * lpState
+                hiLp += a4 * (v - hiLp)
+                val hv = v - hiLp
+                envHi[f / hop] += hv * hv
             }
             pkF[bi] = m
             lwF[bi] = if (sAll > 1e-6f) (sLow / sAll).coerceIn(0f, 1f) else 0f
@@ -614,7 +631,7 @@ object Dj {
             pk[bi] = (min(1f, pkF[bi] / maxPk) * 255f).toInt().toByte()
             lw[bi] = (lwF[bi] * 255f).toInt().toByte()
         }
-        return Wave(pk, lw, env, rate.toDouble() / hop)
+        return Wave(pk, lw, env, rate.toDouble() / hop, onsetEnv(envLo, envHi, rate.toDouble() / hop))
     }
 
     /** Tempo und Beat-Raster neu erkennen (Frames). [keepBpm] = nur das Raster neu legen. */
@@ -622,9 +639,9 @@ object Dj {
         val data = d.data ?: return
         val w = waveOf(data, d.ch, d.len, d.srcRate)
         val hop = d.srcRate / w.fps
-        val bpm = if (keepBpm && d.bpm > 0f) d.bpm else detectBpm(w.env, w.fps).first
+        val bpm = if (keepBpm && d.bpm > 0f) d.bpm else detectBpm(w.onset, w.fps).first
         d.bpm = bpm
-        d.grid = findGrid(w.env, w.fps, bpm) * hop
+        d.grid = findGrid(w.onset, w.fps, bpm) * hop
     }
 
     /**
@@ -714,53 +731,113 @@ object Dj {
         progress(1f)
     }
 
-    /** Tempo-Erkennung über Onset-Autokorrelation (70–180 BPM, auf 85–175 gefaltet). */
-    fun detectBpm(env: FloatArray, fps: Double): Pair<Float, Float> {
-        val n = env.size
-        if (n < fps * 4) return 120f to 0f
-        val on = FloatArray(n)
-        var prev = ln(1.0 + 1000.0 * env[0]).toFloat()
-        var mean = 0f
-        for (k in 1 until n) {
-            val e = ln(1.0 + 1000.0 * env[k]).toFloat()
-            on[k] = max(0f, e - prev)
-            prev = e
-            mean += on[k]
-        }
-        mean /= n
-        for (k in 0 until n) on[k] -= mean
-        // Mittelteil (höchstens 90 s) analysieren
-        val span = min(n, (fps * 90).toInt())
-        val s0 = (n - span) / 2
-        val minLag = (fps * 60.0 / 180.0).toInt()
-        val maxLag = (fps * 60.0 / 70.0).toInt() + 1
-        val r = DoubleArray(maxLag * 2 + 2)
-        for (lag in minLag..min(maxLag * 2, span - 1)) {
-            var s = 0.0
-            for (k in s0 until s0 + span - lag) s += on[k] * on[k + lag]
-            r[lag] = s / (span - lag)
-        }
-        var best = minLag
-        var bs = Double.NEGATIVE_INFINITY
-        for (lag in minLag..maxLag) {
-            val sc = r[lag] + 0.5 * (if (2 * lag < r.size) r[2 * lag] else 0.0)
-            if (sc > bs) {
-                bs = sc
-                best = lag
+    /**
+     * Onset-Kurve für Tempo und Raster: Anstiege der Energie im Bassbereich (Kick) und in den
+     * Höhen (Hi-Hats), jeweils logarithmisch und normiert; gleitender Mittelwert (0,5 s) abgezogen.
+     * Flächige Synths, Pads und Arpeggios im Mittenbereich stören so kaum noch.
+     */
+    fun onsetEnv(lo: FloatArray, hi: FloatArray, fps: Double): FloatArray {
+        val n = lo.size
+        val out = FloatArray(n)
+        if (n < 4) return out
+        val d = FloatArray(n)
+        for ((env, w) in arrayOf(lo to 1f, hi to 0.5f)) {
+            var mean = 0.0
+            for (v in env) mean += v
+            mean /= n
+            val sc = 1e4 / (mean + 1e-12)
+            var prev = ln(1.0 + sc * env[0])
+            var sum = 0.0
+            var sq = 0.0
+            for (k in 0 until n) {
+                val e = ln(1.0 + sc * env[k])
+                val v = max(0.0, e - prev)
+                prev = e
+                d[k] = v.toFloat()
+                sum += v
+                sq += v * v
             }
+            val m = sum / n
+            val sd = sqrt(max(1e-18, sq / n - m * m)).toFloat()
+            for (k in 0 until n) out[k] += w * d[k] / sd
         }
-        // parabolische Verfeinerung
-        var lagF = best.toDouble()
-        if (best > minLag && best < maxLag) {
-            val y0 = r[best - 1]; val y1 = r[best]; val y2 = r[best + 1]
-            val den = y0 - 2 * y1 + y2
-            if (abs(den) > 1e-12) lagF = best + 0.5 * (y0 - y2) / den
+        // gleitenden Mittelwert abziehen
+        val win = max(3, (fps * 0.5).toInt())
+        val res = FloatArray(n)
+        var acc = 0.0
+        val half = win / 2
+        var lo0 = 0
+        var hi0 = -1
+        for (k in 0 until n) {
+            val a = k - half
+            val b = min(n - 1, k + half)
+            while (hi0 < b) { hi0++; acc += out[hi0] }
+            while (lo0 < a) { acc -= out[lo0]; lo0++ }
+            val c = acc / win
+            res[k] = max(0.0, out[k] - c).toFloat()
         }
-        var bpm = (60.0 * fps / lagF).toFloat()
-        while (bpm < 85f) bpm *= 2f
-        while (bpm > 175f) bpm /= 2f
-        val conf = if (r[0] != 0.0) (bs / max(1e-9, abs(r[best]))).toFloat() else 0f
-        return (Math.round(bpm * 10f) / 10f) to conf
+        return res
+    }
+
+    /**
+     * Tempo-Erkennung: Autokorrelation der Onset-Kurve, bewertet mit einem Kamm über
+     * 1–4 Schläge plus Achtel-Unterteilung. Dadurch rastet die Erkennung nicht mehr auf
+     * punktierte Synth-Figuren (Faktor 2/3 bzw. 4/3) ein. Zwischen halbem/doppeltem Tempo
+     * entscheidet eine sanfte Gewichtung um 122 BPM (×2 / ÷2 korrigiert im Editor).
+     */
+    fun detectBpm(on: FloatArray, fps: Double): Pair<Float, Float> {
+        val n = on.size
+        if (n < fps * 4) return 120f to 0f
+        val span = min(n, (fps * 120).toInt())
+        val s0 = (n - span) / 2
+        var mean = 0.0
+        for (k in s0 until s0 + span) mean += on[k]
+        mean /= span
+        val seg = FloatArray(span) { (on[s0 + it] - mean).toFloat() }
+        val maxLag = min(span - 2, (fps * 4.2).toInt())
+        val r = DoubleArray(maxLag + 2)
+        for (lag in 0..maxLag + 1) {
+            if (lag >= span) break
+            var s = 0.0
+            var k = 0
+            val lim = span - lag
+            while (k < lim) { s += seg[k] * seg[k + lag]; k++ }
+            r[lag] = s / lim
+        }
+        val r0 = if (r[0] > 0) r[0] else 1.0
+        for (i in r.indices) r[i] /= r0
+        fun rr(l: Double): Double {
+            if (l < 0 || l >= maxLag) return 0.0
+            val i = l.toInt()
+            val f = l - i
+            return r[i] * (1 - f) + r[i + 1] * f
+        }
+        fun comb(t: Double): Double {
+            val l = fps * 60.0 / t
+            return rr(l) + 0.85 * rr(2 * l) + 0.6 * rr(3 * l) + 0.7 * rr(4 * l)
+        }
+        var bestT = 120.0
+        var bestS = Double.NEGATIVE_INFINITY
+        var t = 60.0
+        while (t <= 200.0) {
+            val l = fps * 60.0 / t
+            val sc = comb(t) + 1.2 * rr(l / 2)
+            val lg = ln(t / 122.0) / ln(2.0) / 0.55
+            val pr = exp(-0.5 * lg * lg)
+            if (sc * pr > bestS) { bestS = sc * pr; bestT = t }
+            t += 0.1
+        }
+        // fein nachjustieren
+        var fineT = bestT
+        var fineS = Double.NEGATIVE_INFINITY
+        var ft = bestT - 0.3
+        while (ft <= bestT + 0.3) {
+            val sc = comb(ft)
+            if (sc > fineS) { fineS = sc; fineT = ft }
+            ft += 0.01
+        }
+        val conf = (bestS / 3.15).toFloat().coerceIn(0f, 1f)
+        return (Math.round(fineT * 10).toFloat() / 10f) to conf
     }
 
     /** Beat-Raster: Phase mit der meisten Onset-Energie (in Hüllkurven-Schritten). */
@@ -768,8 +845,7 @@ object Dj {
         val n = env.size
         if (n < 8 || bpm <= 0f) return 0.0
         val period = fps * 60.0 / bpm
-        val on = FloatArray(n)
-        for (k in 1 until n) on[k] = max(0f, sqrt(env[k]) - sqrt(env[k - 1]))
+        val on = env
         val steps = max(8, period.toInt() * 2)
         var bestPh = 0.0
         var bs = -1.0
