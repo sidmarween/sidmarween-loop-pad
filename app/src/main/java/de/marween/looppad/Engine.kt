@@ -108,6 +108,68 @@ object Engine {
 
     private fun seqBar(): Long = if (masterLen > 0L) masterLen else sampleRate * 2L
 
+    // ---------------------------------------------------------------- Virtuelle Instrumente (ACID 303 / DRUM 909)
+    @Volatile var acid: AcidSynth? = null
+        private set
+    @Volatile var drum: DrumMachine? = null
+        private set
+    private var instRate = 0
+
+    /** Ein Sequenzer-Schritt für die Instrumente (sample-genau). */
+    private fun instStep(step: Int, f: Long, w: Long, stepLen: Long) {
+        val st = InstState
+        val a = acid
+        if (a != null && st.acidOn && st.acidGate[step]) {
+            val prev = Math.floorMod(step - 1, STEPS)
+            val next = (step + 1) % STEPS
+            val slideIn = st.acidSlide[prev] && st.acidGate[prev]
+            a.queue(f, true, st.acidSemi[step], st.acidAcc[step], slideIn)
+            if (!(st.acidSlide[step] && st.acidGate[next])) a.queue(f + stepLen / 2, false, 0, false, false)
+        }
+        val d = drum
+        if (d != null && st.drumOn) {
+            for (v in 0 until InstState.DV) {
+                val x = st.drumSteps[v][step]
+                if (x > 0) d.trigger(v, (f - w).toInt(), x == 2)
+            }
+        }
+    }
+
+    /** Nächster Rasterschritt (für Live-Aufnahme): Schritt und ob er noch bevorsteht. */
+    private fun liveStep(): Pair<Int, Boolean> {
+        val bar = seqBar()
+        val origin = seqStart()
+        val heard = outClock.frameAt(System.nanoTime(), sampleRate)
+        val n = Math.floorDiv((heard - origin) * STEPS + bar / 2, bar)
+        val f = stepFrame(origin, bar, n)
+        return Math.floorMod(n, STEPS.toLong()).toInt() to (f >= written)
+    }
+
+    /** Touchpad: ACID-Ton an (slide = vom vorigen Ton gleiten). */
+    fun acidLiveOn(semi: Int, slide: Boolean) {
+        if (seqRecording && seqPlaying && !slide) {
+            val (step, ahead) = liveStep()
+            InstState.acidGate[step] = true
+            InstState.acidSemi[step] = semi
+            if (ahead) return
+        }
+        acid?.queue(-1, true, semi, false, slide)
+    }
+
+    fun acidLiveOff() {
+        acid?.queue(-1, false, 0, false, false)
+    }
+
+    /** Touchpad/Pads: DRUM-Instrument anschlagen. */
+    fun drumHit(v: Int, accent: Boolean) {
+        if (seqRecording && seqPlaying) {
+            val (step, ahead) = liveStep()
+            InstState.drumSteps[v][step] = if (accent) 2 else 1
+            if (ahead) return
+        }
+        drum?.trigger(v, 0, accent)
+    }
+
     /** Shuffle/Swing 0..1: verschiebt jede zweite 1/16 um bis zu eine halbe 1/16 nach hinten (50 % … 75 %). */
     @Volatile var swing = 0f
 
@@ -176,6 +238,7 @@ object Engine {
             val f = if (Math.floorMod(n, 2L) == 1L) base + sw else base
             if (f >= w && f < w + block) {
                 val step = Math.floorMod(n, STEPS.toLong()).toInt()
+                instStep(step, f, w, bar / STEPS)
                 for (p in 0 until PADS) {
                     val vel = seq[p][step]
                     if (vel <= 0f) continue
@@ -260,6 +323,8 @@ object Engine {
 
     fun newProject() {
         restore(Array(PADS) { PadSave(null, false, false) }, 0L, 0f, null)
+        InstState.acidClear()
+        InstState.drumClear()
     }
 
     /** Rendert das Sequenzer-Pattern als nahtlosen Ein-Takt-Loop. */
@@ -1098,6 +1163,11 @@ object Engine {
             findDevice(am, outKey, AudioManager.GET_DEVICES_OUTPUTS)?.let { t.setPreferredDevice(it) }
             findDevice(am, inKey, AudioManager.GET_DEVICES_INPUTS)?.let { r.setPreferredDevice(it) }
         } catch (ignored: Exception) {}
+        if (acid == null || instRate != sampleRate) {
+            acid = AcidSynth(sampleRate)
+            drum = DrumMachine(sampleRate)
+            instRate = sampleRate
+        }
         if (fxs == null || fxRate != sampleRate) {
             fxs = Array(SLOTS) { Fx(sampleRate) }
             fxRate = sampleRate
@@ -1525,6 +1595,8 @@ object Engine {
                 levels[p] = max(if (mute) peak * 0.25f else peak, levels[p] * 0.88f)
             }
             renderVoices(out, bus, block, w)
+            acid?.render(if (InstState.acidFx) bus else out, block, w)
+            drum?.render(if (InstState.drumFx) bus else out, block)
             if (songRecording && songDry) {
                 for (i in 0 until block) dryBuf[i] = out[i] + bus[i]
             }

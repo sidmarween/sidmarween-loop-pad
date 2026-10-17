@@ -31,6 +31,16 @@ Das **Display** in der Kopfzeile zeigt den aktuellen Effekt, die X/Y-Werte und d
 
 Im Display rechts auf **BPM / TEMPO ▸** tippen: Tempo 60–200 BPM (Regler, −/+, **Tap-Tempo**), **Metronom** an/aus, oder **Automatisch** (erster Loop bestimmt das Tempo). Ein festes Tempo gilt für neue Aufnahmen (werden auf Takte gerundet), Sequenzer, Delay/Stutter und Metronom.
 
+## Virtuelle Instrumente: 🔊 ACID 303 und 🥁 DRUM 909
+
+Über der XY-Fläche: **🎛 EFFEKTE | 🔊 ACID 303 | 🥁 DRUM 909** – die Fläche wird zum Instrument.
+
+**🔊 ACID** (303-artiger Bass, synthetisiert): 16 Schritte mit Ton (antippen = an/aus, ziehen = Tonhöhe), **A**ccent und **S**lide. Kopfzeile: AN/AUS, SAW/SQR, FX (durch die Effekt-Kette), Oktave −/+, 🎲 Zufalls-Linie, Leeren. Unten die Spielfläche: X = Ton (2 Oktaven), Y = Filter – Gleiten ergibt Slides; bei laufender Pattern-Aufnahme werden die Töne in die Schritte geschrieben. Regler oben: CUTOFF, RESO, ENV MOD, DECAY, LEVEL.
+
+**🥁 DRUM** (909-artig, synthetisiert): BD, SD, LT, MT, HT, RS, CP, CH, OH, CR, RD. Instrument wählen, 16 Schritte (antippen: aus → an → Accent). Presets House/Techno/Breakbeat/Electro, ▶/■, FX, Leeren. Darunter Finger-Drum-Pads (mit ACCENT-Schalter); bei laufender Pattern-Aufnahme werden Schläge gerastert eingetragen. Regler oben: TUNE/DECAY/LEVEL des gewählten Instruments, DRIVE, VOL.
+
+Beide laufen synchron mit Sequenzer, Tempo und Swing, landen in Song-Aufnahme und Resample und werden im Projekt gespeichert.
+
 ## Effekt-Kette (bis zu 3 Effekte)
 
 Oben links auf der XY-Fläche: drei Plätze **1 › 2 › 3**. Antippen wählt den Platz – Effekt-Knopf, Effektliste und die Regler MIX/P1/P2 gelten dann für diesen Platz (jeder Platz merkt sich seine Werte). Den gewählten Platz nochmal antippen schaltet ihn an/aus. Die Effekte laufen nacheinander (z. B. FILTER › DELAY › HALL), die XY-Fläche steuert alle aktiven gleichzeitig. Die Kette wird im Projekt gespeichert.

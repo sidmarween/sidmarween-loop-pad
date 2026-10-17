@@ -54,6 +54,7 @@ object Projects {
             ch.put(o)
         }
         j.put("chain", ch)
+        j.put("instruments", InstState.toJson())
         val kn = JSONArray()
         for (v in Engine.knobs) kn.put(v.toDouble())
         j.put("knobs", kn)
@@ -158,6 +159,7 @@ object Projects {
             for (sl in 1 until Engine.SLOTS) Engine.slotOn[sl] = false
         }
         Engine.metronome = j.optBoolean("metronome", false)
+        InstState.fromJson(j.optJSONObject("instruments"))
         Engine.swing = j.optDouble("swing", 0.0).toFloat()
         val oldTarget = j.optInt("fxTarget", -1)
         for (p in 0 until Engine.PADS) {

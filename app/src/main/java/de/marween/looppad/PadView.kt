@@ -406,6 +406,14 @@ class PadView(context: Context) : View(context) {
             xyH = minXy
         }
         xyRect.set(margin, contentTop, w - margin, contentTop + xyH)
+        // Umschalter Effekte / ACID / DRUM über der XY-Fläche
+        val tabH = dp(26f)
+        val tabW = (xyRect.width() - 2 * dp(6f)) / 3f
+        for (t in 0 until 3) {
+            val tx = xyRect.left + t * (tabW + dp(6f))
+            modeRects[t].set(tx, contentTop, tx + tabW, contentTop + tabH)
+        }
+        xyRect.top = contentTop + tabH + dp(5f)
 
         val gridTop = xyRect.bottom + gap
         val gridW = 4 * cell + 3 * colGap
@@ -576,10 +584,15 @@ class PadView(context: Context) : View(context) {
             xyDispX = Engine.motCurX
             xyDispY = Engine.motCurY
         }
-        drawXy(canvas, dt)
-        drawSlotChips(canvas)
-        drawHoldButton(canvas)
-        drawMotionButton(canvas)
+        drawModeTabs(canvas)
+        if (xyMode == 0) {
+            drawXy(canvas, dt)
+            drawSlotChips(canvas)
+            drawHoldButton(canvas)
+            drawMotionButton(canvas)
+        } else {
+            drawInstrument(canvas)
+        }
         for (i in 0 until VISIBLE_PADS) {
             drawPad(canvas, i, dt)
             drawMore(canvas, i)
@@ -1316,7 +1329,9 @@ class PadView(context: Context) : View(context) {
 
     // ---------------------------------------------------------------- Regler, Effekt-Knopf, XY-Fläche
 
-    private fun knobLabel(k: Int): String = when (k) {
+    private fun knobLabel(k: Int): String = if (xyMode == 1) ACID_KNOBS[k] else if (xyMode == 2) {
+        if (k < 3) "${DRUM_KNOBS[k]} ${InstState.drumNames[InstState.drumSel]}" else DRUM_KNOBS[k]
+    } else when (k) {
         0 -> "MIX"
         1 -> Fx.P1_LABELS[Engine.fxType]
         2 -> Fx.P2_LABELS[Engine.fxType]
@@ -1324,10 +1339,22 @@ class PadView(context: Context) : View(context) {
         else -> "SWING"
     }
 
-    private fun knobValue(k: Int): Float = if (k == 4) Engine.swing else Engine.knobs[k]
+    private fun knobValue(k: Int): Float {
+        val st = InstState
+        return when (xyMode) {
+            1 -> when (k) { 0 -> st.acidCut; 1 -> st.acidRes; 2 -> st.acidEnv; 3 -> st.acidDec; else -> st.acidVol }
+            2 -> when (k) { 0 -> st.drumTune[st.drumSel]; 1 -> st.drumDecay[st.drumSel]; 2 -> st.drumLevel[st.drumSel]; 3 -> st.drumDrive; else -> st.drumVol }
+            else -> if (k == 4) Engine.swing else Engine.knobs[k]
+        }
+    }
 
     private fun setKnobValue(k: Int, v: Float) {
-        if (k == 4) Engine.swing = v else Engine.knobs[k] = v
+        val st = InstState
+        when (xyMode) {
+            1 -> when (k) { 0 -> st.acidCut = v; 1 -> st.acidRes = v; 2 -> st.acidEnv = v; 3 -> st.acidDec = v; else -> st.acidVol = v }
+            2 -> when (k) { 0 -> st.drumTune[st.drumSel] = v; 1 -> st.drumDecay[st.drumSel] = v; 2 -> st.drumLevel[st.drumSel] = v; 3 -> st.drumDrive = v; else -> st.drumVol = v }
+            else -> if (k == 4) Engine.swing = v else Engine.knobs[k] = v
+        }
     }
 
     private fun drawKnobs(canvas: Canvas) {
@@ -1353,7 +1380,7 @@ class PadView(context: Context) : View(context) {
             textPaint.textSize = dp(10f)
             textPaint.color = ink(if (active) 1f else 0.75f)
             canvas.drawText(knobLabel(k), cx, r.bottom - dp(1f), textPaint)
-            val step = if (k == 4) "${50 + (v * 25).toInt()}%" else Fx.stepLabel(Engine.fxType, k, v)
+            val step = if (xyMode != 0) null else if (k == 4) "${50 + (v * 25).toInt()}%" else Fx.stepLabel(Engine.fxType, k, v)
             if (active || step != null) {
                 textPaint.textSize = dp(if (step != null && step.length > 3) 9f else 11f)
                 textPaint.color = if (skinned) skin.knobText else if (light) Color.BLACK else Color.WHITE
@@ -1844,6 +1871,21 @@ class PadView(context: Context) : View(context) {
                     performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
                     return true
                 }
+                for (t in 0 until 3) {
+                    if (modeRects[t].contains(x, y)) {
+                        if (xyMode != t) {
+                            instRelease()
+                            xyMode = t
+                        }
+                        performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+                        burst(x, y, overlayColors()[2], 14, 180f)
+                        return true
+                    }
+                }
+                if (xyMode != 0 && xyRect.contains(x, y)) {
+                    instDown(id, x, y)
+                    return true
+                }
                 for (sl in 0 until Engine.SLOTS) {
                     if (slotRects[sl].contains(x, y) && xyRect.contains(x, y)) {
                         slotPressed(sl)
@@ -1908,6 +1950,7 @@ class PadView(context: Context) : View(context) {
                 for (pi in 0 until e.pointerCount) {
                     val id = e.getPointerId(pi)
                     if (id == xyPointer) setXy(e.getX(pi), e.getY(pi))
+                    if (id == instPointer) instMove(e.getX(pi), e.getY(pi))
                     if (id == stepPointer && Engine.seqSelected >= 0) {
                         val dy = stepDownY - e.getY(pi)
                         if (stepDragged || abs(dy) > dp(8f)) {
@@ -1925,6 +1968,10 @@ class PadView(context: Context) : View(context) {
             MotionEvent.ACTION_UP, MotionEvent.ACTION_POINTER_UP -> {
                 val idx = e.actionIndex
                 val upId = e.getPointerId(idx)
+                if (upId == instPointer) {
+                    instUp()
+                    return true
+                }
                 if (upId == stepPointer) {
                     stepPointer = -1
                     val sel = Engine.seqSelected
@@ -1971,6 +2018,7 @@ class PadView(context: Context) : View(context) {
                 release(p, e.getX(idx), e.getY(idx))
             }
             MotionEvent.ACTION_CANCEL -> {
+                instRelease()
                 fxPointer = -1
                 removeCallbacks(fxLongPress)
                 xyPointer = -1
@@ -4394,6 +4442,32 @@ class PadView(context: Context) : View(context) {
         if (muteBtn.contains(x, y)) return Triple(muteBtn, "Alle stumm / an", "Schaltet alle Loop-Pads auf einmal stumm oder wieder an. Die Loops laufen im Takt weiter.")
         if (clearBtn.contains(x, y)) return Triple(clearBtn, "CLEAR", "Löschmodus: danach ein Pad antippen, um seinen Inhalt zu löschen.")
         if (fxBtn.contains(x, y)) return Triple(fxBtn, "Effekt-Knopf", "Links tippen = vorheriger, rechts = nächster Effekt für den gewählten Kettenplatz. Lange drücken öffnet die Liste aller 37 Effekte.")
+        // ---- Umschalter & Instrumente
+        for (t in 0 until 3) if (modeRects[t].contains(x, y)) {
+            val txt = when (t) {
+                0 -> "Die Fläche darunter ist die XY-Effektfläche mit Effekt-Kette, HOLD und Bewegungs-Aufnahme."
+                1 -> "Virtueller 303-artiger Bass: 16-Schritt-Sequenzer mit Ton, Accent (A) und Slide (S), resonantes Filter. Auf dem Touchpad spielen: X = Ton, Y = Filter. Die Regler oben werden zu CUTOFF, RESO, ENV MOD, DECAY, LEVEL."
+                else -> "Virtueller 909-artiger Drumcomputer: 11 synthetisierte Instrumente, 16 Schritte je Instrument (antippen: aus → an → Accent), Presets und Finger-Drum-Pads. Die Regler oben: TUNE/DECAY/LEVEL des gewählten Instruments, DRIVE und VOL."
+            }
+            return Triple(modeRects[t], modeNames[t], txt + " Beide Instrumente laufen synchron mit dem Sequenzer (▶) und lassen sich mit FX durch die Effekt-Kette schicken.")
+        }
+        if (xyMode == 1 && xyRect.contains(x, y)) {
+            layoutAcid()
+            val hdrTxt = arrayOf("AN/AUS: ob der Bass im Sequenzer mitspielt.", "Wellenform: Sägezahn (SAW) oder Rechteck (SQR).", "FX: Bass durch die Effekt-Kette schicken.", "Oktave tiefer.", "Oktave höher.", "Zufällige Acid-Linie erzeugen.", "Alle Schritte löschen.")
+            for (i in 0 until 7) if (instHdr[i].contains(x, y)) return Triple(instHdr[i], "ACID", hdrTxt[i])
+            if (laneRect.contains(x, y)) return Triple(laneRect, "Schritte", "Schritt antippen = an/aus, hoch/runter ziehen = Tonhöhe. Die Balkenhöhe zeigt den Ton.")
+            if (accRow.contains(x, y)) return Triple(accRow, "Accent (A)", "Betont den Schritt: lauter und mit stärkerem Filter-Hub.")
+            if (sliRow.contains(x, y)) return Triple(sliRow, "Slide (S)", "Gleitet vom Schritt in den nächsten (typischer 303-Slide, ohne neuen Anschlag).")
+            return Triple(playRect, "Spielfläche", "Live spielen: X = Ton (2 Oktaven), Y = Filter auf/zu. Finger gleiten lassen ergibt Slides. Bei laufender Pattern-Aufnahme werden die Töne in die Schritte geschrieben.")
+        }
+        if (xyMode == 2 && xyRect.contains(x, y)) {
+            layoutDrum()
+            val hdrTxt = arrayOf("AN/AUS: ob die Drums im Sequenzer mitspielen.", "FX: Drums durch die Effekt-Kette schicken.", "Preset laden: House, Techno, Breakbeat, Electro.", "Sequenzer starten/stoppen.", "Alle Drum-Schritte löschen.")
+            for (i in 0 until 5) if (instHdr[i].contains(x, y)) return Triple(instHdr[i], "DRUM", hdrTxt[i])
+            for (v in 0 until InstState.DV) if (voiceRects[v].contains(x, y)) return Triple(voiceRects[v], InstState.drumLong[v], "Wählt das Instrument zum Bearbeiten (Schritte und Regler TUNE/DECAY/LEVEL).")
+            if (dStepRow.contains(x, y)) return Triple(dStepRow, "Schritte", "16 Schritte des gewählten Instruments. Antippen: aus → an → Accent → aus.")
+            return Triple(xyRect, "Drum-Pads", "Live trommeln. ACCENT schaltet betonte Schläge. Bei laufender Pattern-Aufnahme werden die Schläge gerastert eingetragen.")
+        }
         // ---- XY-Fläche
         for (sl in 0 until Engine.SLOTS) if (slotRects[sl].contains(x, y)) {
             return Triple(slotRects[sl], "Effekt-Kette Platz ${sl + 1}", "Bis zu 3 Effekte laufen nacheinander (1 › 2 › 3). Antippen wählt den Platz – Effekt-Knopf und Regler gelten dann für ihn. Den gewählten Platz nochmal antippen schaltet ihn an/aus.")
@@ -4478,10 +4552,419 @@ class PadView(context: Context) : View(context) {
         canvas.restore()
     }
 
+
+    // ================================================================ Virtuelle Instrumente: ACID 303 / DRUM 909
+
+    /** 0 = Effekte, 1 = ACID, 2 = DRUM. */
+    private var xyMode = 0
+    private val modeRects = Array(3) { RectF() }
+    private val modeNames = arrayOf("🎛 EFFEKTE", "🔊 ACID 303", "🥁 DRUM 909")
+
+    private fun drawModeTabs(canvas: Canvas) {
+        val cols = overlayColors()
+        for (t in 0 until 3) {
+            val r = modeRects[t]
+            if (r.width() <= 0f) continue
+            val on = xyMode == t
+            val rr = r.height() / 2f
+            fillPaint.shader = null
+            fillPaint.color = if (on) cols[2] else alpha(cols[0], 0.85f)
+            canvas.drawRoundRect(r, rr, rr, fillPaint)
+            strokePaint.strokeWidth = dp(1.2f)
+            strokePaint.color = if (on) Color.WHITE else alpha(cols[1], 0.4f)
+            canvas.drawRoundRect(r, rr, rr, strokePaint)
+            textPaint.textSize = dp(11f)
+            textPaint.color = if (on) Color.WHITE else alpha(cols[1], 0.8f)
+            canvas.drawText(modeNames[t], r.centerX(), r.centerY() + dp(4f), textPaint)
+            // laufendes Instrument markieren
+            val running = Engine.seqPlaying && ((t == 1 && InstState.acidOn && InstState.acidHasNotes()) || (t == 2 && InstState.drumOn && InstState.drumHasNotes()))
+            if (running) {
+                dotPaint.color = if (on) Color.WHITE else cols[2]
+                canvas.drawCircle(r.right - dp(10f), r.centerY(), dp(3f), dotPaint)
+            }
+        }
+    }
+
+    // ---- gemeinsame Bausteine
+    private val instHdr = Array(8) { RectF() }
+    private var instHdrN = 0
+    private val laneRect = RectF()
+    private val accRow = RectF()
+    private val sliRow = RectF()
+    private val playRect = RectF()
+    private val voiceRects = Array(InstState.DV) { RectF() }
+    private val dStepRow = RectF()
+    private val dPadRects = Array(12) { RectF() }
+    private var instPointer = -1
+    private var instKind = 0     // 1 = ACID-Play, 2 = ACID-Lane, 3 = Drum-Pad
+    private var acidLiveSemi = Int.MIN_VALUE
+    private var laneStep = -1
+    private var laneWasOn = false
+    private var laneDragged = false
+    private var laneDownY = 0f
+    private var laneVoice = -1
+    private var drumAccMode = false
+
+    private fun layoutHeader(n: Int) {
+        val r = xyRect
+        val h = dp(26f)
+        val gap = dp(5f)
+        val w = (r.width() - dp(12f) - (n - 1) * gap) / n
+        for (i in 0 until n) {
+            val x = r.left + dp(6f) + i * (w + gap)
+            instHdr[i].set(x, r.top + dp(6f), x + w, r.top + dp(6f) + h)
+        }
+        instHdrN = n
+    }
+
+    private fun chip(canvas: Canvas, r: RectF, label: String, on: Boolean, cols: IntArray) {
+        val rr = dp(7f)
+        fillPaint.shader = null
+        fillPaint.color = if (on) cols[2] else blend(cols[0], cols[1], 0.08f)
+        canvas.drawRoundRect(r, rr, rr, fillPaint)
+        strokePaint.strokeWidth = dp(1f)
+        strokePaint.color = if (on) Color.WHITE else alpha(cols[1], 0.35f)
+        canvas.drawRoundRect(r, rr, rr, strokePaint)
+        textPaint.textSize = min(dp(11f), r.width() / max(3f, label.length * 0.62f))
+        textPaint.color = if (on) Color.WHITE else cols[1]
+        canvas.drawText(label, r.centerX(), r.centerY() + textPaint.textSize * 0.36f, textPaint)
+    }
+
+    private fun instPanel(canvas: Canvas, cols: IntArray) {
+        val r = xyRect
+        val rr = dp(12f)
+        fillPaint.shader = null
+        fillPaint.color = Color.rgb(16, 17, 22)
+        canvas.drawRoundRect(r, rr, rr, fillPaint)
+        strokePaint.strokeWidth = dp(1.5f)
+        strokePaint.color = alpha(cols[2], 0.8f)
+        canvas.drawRoundRect(r, rr, rr, strokePaint)
+    }
+
+    private fun drawInstrument(canvas: Canvas) {
+        val cols = overlayColors()
+        instPanel(canvas, cols)
+        if (xyMode == 1) drawAcid(canvas, cols) else drawDrum(canvas, cols)
+    }
+
+    // ---- ACID
+    private val noteNm = arrayOf("C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "H")
+
+    private fun layoutAcid() {
+        layoutHeader(7)
+        val r = xyRect
+        val top = instHdr[0].bottom + dp(6f)
+        val rest = r.bottom - dp(6f) - top
+        val rowH = dp(14f)
+        val laneH = max(dp(34f), (rest - 2 * rowH - dp(10f)) * 0.48f)
+        laneRect.set(r.left + dp(6f), top, r.right - dp(6f), top + laneH)
+        accRow.set(laneRect.left, laneRect.bottom + dp(3f), laneRect.right, laneRect.bottom + dp(3f) + rowH)
+        sliRow.set(laneRect.left, accRow.bottom + dp(2f), laneRect.right, accRow.bottom + dp(2f) + rowH)
+        playRect.set(laneRect.left, sliRow.bottom + dp(6f), laneRect.right, r.bottom - dp(6f))
+    }
+
+    private fun drawAcid(canvas: Canvas, cols: IntArray) {
+        layoutAcid()
+        val st = InstState
+        val labels = arrayOf(
+            if (st.acidOn) "● AN" else "○ AUS", if (st.acidSquare) "⊓ SQR" else "⩘ SAW", "FX",
+            "OKT−", "OKT+", "🎲 RND", "LEEREN"
+        )
+        val ons = booleanArrayOf(st.acidOn, false, st.acidFx, false, false, false, false)
+        for (i in 0 until 7) chip(canvas, instHdr[i], labels[i], ons[i], cols)
+        // Lauflicht / Schritte
+        val cur = Engine.seqCurrentStep()
+        val cw = laneRect.width() / InstState.STEPS
+        for (k in 0 until InstState.STEPS) {
+            val x0 = laneRect.left + k * cw
+            tmpRect.set(x0 + dp(1f), laneRect.top, x0 + cw - dp(1f), laneRect.bottom)
+            fillPaint.color = if (k == cur) Color.rgb(48, 48, 58) else if (k % 4 == 0) Color.rgb(30, 31, 38) else Color.rgb(24, 25, 31)
+            canvas.drawRoundRect(tmpRect, dp(3f), dp(3f), fillPaint)
+            if (st.acidGate[k]) {
+                val v = ((st.acidSemi[k] + 12) / 36f).coerceIn(0.05f, 1f)
+                val bar = RectF(tmpRect.left, tmpRect.bottom - tmpRect.height() * v, tmpRect.right, tmpRect.bottom)
+                fillPaint.color = if (st.acidAcc[k]) blend(cols[2], Color.WHITE, 0.35f) else cols[2]
+                canvas.drawRoundRect(bar, dp(3f), dp(3f), fillPaint)
+                if (cw > dp(17f)) {
+                    textPaint.textSize = dp(8.5f)
+                    textPaint.color = Color.WHITE
+                    val sm = st.acidSemi[k]
+                    canvas.drawText(noteNm[Math.floorMod(sm, 12)] + (2 + st.acidOct + Math.floorDiv(sm, 12)), tmpRect.centerX(), tmpRect.top + dp(10f), textPaint)
+                }
+            }
+            if (k == cur) {
+                strokePaint.strokeWidth = dp(1.5f)
+                strokePaint.color = Color.WHITE
+                canvas.drawRoundRect(tmpRect, dp(3f), dp(3f), strokePaint)
+            }
+            // Accent / Slide
+            for ((row, on, lab) in listOf(Triple(accRow, st.acidAcc[k], "A"), Triple(sliRow, st.acidSlide[k], "S"))) {
+                tmpRect.set(x0 + dp(1f), row.top, x0 + cw - dp(1f), row.bottom)
+                fillPaint.color = if (on) (if (lab == "A") Color.rgb(255, 170, 40) else Color.rgb(80, 180, 255)) else Color.rgb(28, 29, 36)
+                canvas.drawRoundRect(tmpRect, dp(2f), dp(2f), fillPaint)
+                if (k == 0) {
+                    textPaint.textSize = dp(8f)
+                    textPaint.color = if (on) Color.BLACK else alpha(Color.WHITE, 0.5f)
+                    canvas.drawText(lab, tmpRect.centerX(), tmpRect.centerY() + dp(3f), textPaint)
+                }
+            }
+        }
+        // Spielfläche: Klaviatur-Streifen (X = Ton, Y = Filter)
+        val pr = playRect
+        val notes = 25
+        val nw = pr.width() / notes
+        for (k in 0 until notes) {
+            val n = k % 12
+            val black = n == 1 || n == 3 || n == 6 || n == 8 || n == 10
+            tmpRect.set(pr.left + k * nw, pr.top, pr.left + (k + 1) * nw, pr.bottom)
+            fillPaint.color = if (acidLiveSemi == k) cols[2] else if (black) Color.rgb(20, 20, 26) else Color.rgb(36, 37, 46)
+            canvas.drawRect(tmpRect, fillPaint)
+            if (n == 0) {
+                textPaint.textSize = dp(9f)
+                textPaint.color = alpha(Color.WHITE, 0.6f)
+                canvas.drawText("C${2 + st.acidOct + k / 12}", tmpRect.centerX(), pr.bottom - dp(5f), textPaint)
+            }
+        }
+        strokePaint.strokeWidth = dp(1f)
+        strokePaint.color = alpha(cols[2], 0.6f)
+        canvas.drawRect(pr, strokePaint)
+        textPaint.textSize = dp(9f)
+        textPaint.color = alpha(Color.WHITE, 0.55f)
+        textPaint.textAlign = Paint.Align.LEFT
+        canvas.drawText("↑ FILTER  · X = TON (Gleiten = Slide)", pr.left + dp(5f), pr.top + dp(11f), textPaint)
+        textPaint.textAlign = Paint.Align.CENTER
+        if (Engine.seqRecording) {
+            textPaint.textSize = dp(9f)
+            textPaint.color = Color.rgb(255, 80, 90)
+            textPaint.textAlign = Paint.Align.RIGHT
+            canvas.drawText("● REC → Schritte", pr.right - dp(5f), pr.top + dp(11f), textPaint)
+            textPaint.textAlign = Paint.Align.CENTER
+        }
+    }
+
+    // ---- DRUM
+    private fun layoutDrum() {
+        layoutHeader(5)
+        val r = xyRect
+        val top = instHdr[0].bottom + dp(6f)
+        val vh = dp(22f)
+        val gap = dp(3f)
+        val vw = (r.width() - dp(12f) - (InstState.DV - 1) * gap) / InstState.DV
+        for (v in 0 until InstState.DV) {
+            val x = r.left + dp(6f) + v * (vw + gap)
+            voiceRects[v].set(x, top, x + vw, top + vh)
+        }
+        dStepRow.set(r.left + dp(6f), top + vh + dp(5f), r.right - dp(6f), top + vh + dp(5f) + dp(24f))
+        val pTop = dStepRow.bottom + dp(6f)
+        val cols = 6
+        val rows = 2
+        val pw = (r.width() - dp(12f) - (cols - 1) * gap) / cols
+        val ph = (r.bottom - dp(6f) - pTop - (rows - 1) * gap) / rows
+        for (i in 0 until 12) {
+            val c = i % cols
+            val rw = i / cols
+            val x = r.left + dp(6f) + c * (pw + gap)
+            val y = pTop + rw * (ph + gap)
+            dPadRects[i].set(x, y, x + pw, y + ph)
+        }
+    }
+
+    private val drumHitT = FloatArray(InstState.DV)
+
+    private fun drawDrum(canvas: Canvas, cols: IntArray) {
+        layoutDrum()
+        val st = InstState
+        val presetLabel = if (st.drumPreset >= 0) "▦ ${st.presetNames[st.drumPreset]}" else "▦ PRESET"
+        val labels = arrayOf(if (st.drumOn) "● AN" else "○ AUS", "FX", presetLabel, if (Engine.seqPlaying) "■ STOP" else "▶ PLAY", "LEEREN")
+        val ons = booleanArrayOf(st.drumOn, st.drumFx, false, Engine.seqPlaying, false)
+        for (i in 0 until 5) chip(canvas, instHdr[i], labels[i], ons[i], cols)
+        for (v in 0 until InstState.DV) {
+            val sel = v == st.drumSel
+            val has = st.drumSteps[v].any { it > 0 }
+            chip(canvas, voiceRects[v], st.drumNames[v], sel, cols)
+            if (has && !sel) {
+                dotPaint.color = cols[2]
+                canvas.drawCircle(voiceRects[v].right - dp(4f), voiceRects[v].top + dp(4f), dp(2f), dotPaint)
+            }
+        }
+        // Schritte des gewählten Instruments
+        val cur = Engine.seqCurrentStep()
+        val cw = dStepRow.width() / InstState.STEPS
+        val row = st.drumSteps[st.drumSel]
+        for (k in 0 until InstState.STEPS) {
+            tmpRect.set(dStepRow.left + k * cw + dp(1f), dStepRow.top, dStepRow.left + (k + 1) * cw - dp(1f), dStepRow.bottom)
+            fillPaint.color = when (row[k]) {
+                2 -> blend(cols[2], Color.WHITE, 0.4f)
+                1 -> cols[2]
+                else -> if (k % 4 == 0) Color.rgb(34, 35, 44) else Color.rgb(26, 27, 34)
+            }
+            canvas.drawRoundRect(tmpRect, dp(3f), dp(3f), fillPaint)
+            if (row[k] == 2) {
+                textPaint.textSize = dp(8f)
+                textPaint.color = Color.BLACK
+                canvas.drawText("A", tmpRect.centerX(), tmpRect.centerY() + dp(3f), textPaint)
+            }
+            if (k == cur) {
+                strokePaint.strokeWidth = dp(1.5f)
+                strokePaint.color = Color.WHITE
+                canvas.drawRoundRect(tmpRect, dp(3f), dp(3f), strokePaint)
+            }
+        }
+        // Finger-Drum-Pads
+        for (i in 0 until 12) {
+            val r = dPadRects[i]
+            if (i == 11) {
+                chip(canvas, r, if (drumAccMode) "ACC ✓" else "ACCENT", drumAccMode, cols)
+                continue
+            }
+            drumHitT[i] = max(0f, drumHitT[i] - 0.06f)
+            val sel = i == st.drumSel
+            fillPaint.color = blend(Color.rgb(36, 37, 46), cols[2], 0.25f + 0.75f * drumHitT[i])
+            canvas.drawRoundRect(r, dp(8f), dp(8f), fillPaint)
+            strokePaint.strokeWidth = dp(if (sel) 2f else 1f)
+            strokePaint.color = if (sel) Color.WHITE else alpha(cols[2], 0.5f)
+            canvas.drawRoundRect(r, dp(8f), dp(8f), strokePaint)
+            textPaint.textSize = dp(13f)
+            textPaint.color = Color.WHITE
+            canvas.drawText(st.drumNames[i], r.centerX(), r.centerY() + dp(2f), textPaint)
+            textPaint.textSize = dp(8f)
+            textPaint.color = alpha(Color.WHITE, 0.6f)
+            canvas.drawText(st.drumLong[i], r.centerX(), r.centerY() + dp(13f), textPaint)
+        }
+    }
+
+    // ---- Touch
+    private fun acidSemiAt(x: Float): Int = (((x - playRect.left) / playRect.width()) * 25).toInt().coerceIn(0, 24)
+
+    private fun instDown(id: Int, x: Float, y: Float) {
+        val st = InstState
+        performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+        if (xyMode == 1) {
+            layoutAcid()
+            for (i in 0 until 7) if (instHdr[i].contains(x, y)) {
+                when (i) {
+                    0 -> st.acidOn = !st.acidOn
+                    1 -> st.acidSquare = !st.acidSquare
+                    2 -> st.acidFx = !st.acidFx
+                    3 -> st.acidOct = (st.acidOct - 1).coerceAtLeast(-1)
+                    4 -> st.acidOct = (st.acidOct + 1).coerceAtMost(2)
+                    5 -> st.acidRandom()
+                    else -> st.acidClear()
+                }
+                return
+            }
+            val cw = laneRect.width() / InstState.STEPS
+            if (laneRect.contains(x, y)) {
+                val k = ((x - laneRect.left) / cw).toInt().coerceIn(0, InstState.STEPS - 1)
+                instPointer = id
+                instKind = 2
+                laneStep = k
+                laneWasOn = st.acidGate[k]
+                laneDragged = false
+                laneDownY = y
+                if (!laneWasOn) st.acidGate[k] = true
+                return
+            }
+            if (accRow.contains(x, y) || sliRow.contains(x, y)) {
+                val k = ((x - laneRect.left) / cw).toInt().coerceIn(0, InstState.STEPS - 1)
+                if (accRow.contains(x, y)) st.acidAcc[k] = !st.acidAcc[k] else st.acidSlide[k] = !st.acidSlide[k]
+                return
+            }
+            if (playRect.contains(x, y)) {
+                instPointer = id
+                instKind = 1
+                val sm = acidSemiAt(x)
+                acidLiveSemi = sm
+                st.acidCutMod = (1f - (y - playRect.top) / playRect.height()) * 2f - 1f
+                Engine.acidLiveOn(sm, false)
+                burst(x, y, overlayColors()[2], 8, 140f)
+            }
+        } else {
+            layoutDrum()
+            for (i in 0 until 5) if (instHdr[i].contains(x, y)) {
+                when (i) {
+                    0 -> st.drumOn = !st.drumOn
+                    1 -> st.drumFx = !st.drumFx
+                    2 -> st.drumApplyPreset(st.drumPreset + 1)
+                    3 -> if (Engine.seqPlaying) Engine.seqStop() else Engine.seqPlay()
+                    else -> st.drumClear()
+                }
+                return
+            }
+            for (v in 0 until InstState.DV) if (voiceRects[v].contains(x, y)) {
+                st.drumSel = v
+                Engine.drum?.trigger(v, 0, false)
+                return
+            }
+            if (dStepRow.contains(x, y)) {
+                val k = (((x - dStepRow.left) / dStepRow.width()) * InstState.STEPS).toInt().coerceIn(0, InstState.STEPS - 1)
+                val row = st.drumSteps[st.drumSel]
+                row[k] = (row[k] + 1) % 3
+                return
+            }
+            for (i in 0 until 12) if (dPadRects[i].contains(x, y)) {
+                if (i == 11) {
+                    drumAccMode = !drumAccMode
+                    return
+                }
+                st.drumSel = i
+                drumHitT[i] = 1f
+                Engine.drumHit(i, drumAccMode)
+                burst(x, y, overlayColors()[2], 10, 160f)
+                return
+            }
+        }
+    }
+
+    private fun instMove(x: Float, y: Float) {
+        val st = InstState
+        if (instKind == 1) {
+            val sm = acidSemiAt(x)
+            st.acidCutMod = ((1f - (y - playRect.top) / playRect.height()) * 2f - 1f).coerceIn(-1f, 1f)
+            if (sm != acidLiveSemi) {
+                acidLiveSemi = sm
+                Engine.acidLiveOn(sm, true)
+            }
+        } else if (instKind == 2 && laneStep >= 0) {
+            if (laneDragged || abs(y - laneDownY) > dp(6f)) {
+                laneDragged = true
+                val v = (1f - (y - laneRect.top) / laneRect.height()).coerceIn(0f, 1f)
+                val sm = (v * 36f).toInt() - 12
+                if (sm != st.acidSemi[laneStep]) {
+                    st.acidSemi[laneStep] = sm
+                    Engine.acidLiveOn(sm, laneVoice >= 0)
+                    laneVoice = 1
+                }
+            }
+        }
+    }
+
+    private fun instUp() {
+        val st = InstState
+        if (instKind == 1) {
+            Engine.acidLiveOff()
+            acidLiveSemi = Int.MIN_VALUE
+            st.acidCutMod = 0f
+        } else if (instKind == 2 && laneStep >= 0) {
+            if (!laneDragged && laneWasOn) st.acidGate[laneStep] = false
+            if (laneVoice >= 0) Engine.acidLiveOff()
+            laneVoice = -1
+            laneStep = -1
+        }
+        instPointer = -1
+        instKind = 0
+    }
+
+    private fun instRelease() {
+        if (instPointer >= 0) instUp()
+    }
+
     companion object {
         private val BRAND_ORANGE = Color.rgb(255, 95, 0)
 
         const val VISIBLE_PADS = 12
+        private val ACID_KNOBS = arrayOf("CUTOFF", "RESO", "ENV MOD", "DECAY", "LEVEL")
+        private val DRUM_KNOBS = arrayOf("TUNE", "DECAY", "LEVEL", "DRIVE", "VOL")
         const val RETRO = 4
         const val COMIC = 5
         const val GLASS = 6
