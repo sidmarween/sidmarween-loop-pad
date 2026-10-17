@@ -132,40 +132,58 @@ object Engine {
     private var instRate = 0
 
     /** Ein Sequenzer-Schritt für die Instrumente (sample-genau). */
-    private fun instStep(step: Int, f: Long, w: Long, stepLen: Long) {
+    private fun instStep(n: Long, f: Long, w: Long, stepLen: Long) {
         val st = InstState
         val a = acid
+        val al = st.acidLen.coerceIn(1, InstState.MAX)
+        val step = Math.floorMod(n, al.toLong()).toInt()
         if (a != null && st.acidOn && st.acidGate[step]) {
-            val prev = Math.floorMod(step - 1, STEPS)
-            val next = (step + 1) % STEPS
-            val slideIn = st.acidSlide[prev] && st.acidGate[prev]
-            a.queue(f, true, st.acidSemi[step], st.acidAcc[step], slideIn)
-            if (!(st.acidSlide[step] && st.acidGate[next])) a.queue(f + stepLen / 2, false, 0, false, false)
+            val prev = Math.floorMod(step - 1, al)
+            val next = (step + 1) % al
+            val tied = st.acidTie[step] && st.acidGate[prev]
+            if (!tied) {
+                val slideIn = st.acidSlide[prev] && st.acidGate[prev]
+                a.queue(f, true, st.acidSemi[step], st.acidAcc[step], slideIn, st.acidVel[step])
+            }
+            // Ton endet nach halbem Schritt – außer Slide oder der nächste Schritt hält ihn (Tie)
+            val holds = st.acidGate[next] && (st.acidSlide[step] || st.acidTie[next])
+            if (!holds) a.queue(f + stepLen / 2, false, 0, false, false)
         }
         val d = drum
         if (d != null && st.drumOn) {
+            val ds = Math.floorMod(n, st.drumLen.coerceIn(1, InstState.MAX).toLong()).toInt()
             for (v in 0 until InstState.DV) {
-                val x = st.drumSteps[v][step]
-                if (x > 0) d.trigger(v, (f - w).toInt(), x == 2)
+                val x = st.drumSteps[v][ds]
+                if (x > 0 && !st.drumMute[v]) d.trigger(v, (f - w).toInt(), x == 2, st.drumVel[v][ds])
             }
         }
     }
 
+    /** Aktueller Schritt eines Instrument-Patterns (Länge [len]), oder -1. */
+    fun instCurrentStep(len: Int): Int {
+        if (!seqPlaying) return -1
+        val bar = seqBar()
+        val rel = outClock.frameAt(System.nanoTime(), sampleRate) - seqStart()
+        if (rel < 0) return -1
+        return Math.floorMod(Math.floorDiv(rel * STEPS, bar), len.toLong()).toInt()
+    }
+
     /** Nächster Rasterschritt (für Live-Aufnahme): Schritt und ob er noch bevorsteht. */
-    private fun liveStep(): Pair<Int, Boolean> {
+    private fun liveStep(len: Int = STEPS): Pair<Int, Boolean> {
         val bar = seqBar()
         val origin = seqStart()
         val heard = outClock.frameAt(System.nanoTime(), sampleRate)
         val n = Math.floorDiv((heard - origin) * STEPS + bar / 2, bar)
         val f = stepFrame(origin, bar, n)
-        return Math.floorMod(n, STEPS.toLong()).toInt() to (f >= written)
+        return Math.floorMod(n, len.toLong()).toInt() to (f >= written)
     }
 
     /** Touchpad: ACID-Ton an (slide = vom vorigen Ton gleiten). */
     fun acidLiveOn(semi: Int, slide: Boolean) {
         if (recLive() && !slide) {
-            val (step, ahead) = liveStep()
+            val (step, ahead) = liveStep(InstState.acidLen)
             InstState.acidGate[step] = true
+            InstState.acidTie[step] = false
             InstState.acidSemi[step] = semi
             if (ahead) return
         }
@@ -179,7 +197,7 @@ object Engine {
     /** Touchpad/Pads: DRUM-Instrument anschlagen. */
     fun drumHit(v: Int, accent: Boolean) {
         if (recLive()) {
-            val (step, ahead) = liveStep()
+            val (step, ahead) = liveStep(InstState.drumLen)
             InstState.drumSteps[v][step] = if (accent) 2 else 1
             if (ahead) return
         }
@@ -256,7 +274,7 @@ object Engine {
             val f = if (Math.floorMod(n, 2L) == 1L) base + sw else base
             if (f >= w && f < w + block && base >= origin) {
                 val step = Math.floorMod(n, STEPS.toLong()).toInt()
-                instStep(step, f, w, bar / STEPS)
+                instStep(n, f, w, bar / STEPS)
                 for (p in 0 until PADS) {
                     val vel = seq[p][step]
                     if (vel <= 0f) continue
@@ -3441,18 +3459,30 @@ object Engine {
 
 /** Schritte der Instrumente (ACID/DRUM) als Kopie – für Undo und Szenen. */
 class InstSnap(
-    val semi: IntArray, val gate: BooleanArray, val acc: BooleanArray, val slide: BooleanArray, val drums: Array<IntArray>
+    val semi: IntArray, val gate: BooleanArray, val acc: BooleanArray, val slide: BooleanArray, val drums: Array<IntArray>,
+    val tie: BooleanArray = BooleanArray(InstState.MAX), val acidLen: Int = 16, val drumLen: Int = 16,
+    val acidVel: FloatArray = FloatArray(InstState.MAX) { 1f }, val drumVel: Array<FloatArray> = Array(InstState.DV) { FloatArray(InstState.MAX) { 1f } }
 ) {
     fun restore() {
         val st = InstState
+        java.util.Arrays.fill(st.acidTie, false)
+        java.util.Arrays.fill(st.acidGate, false)
+        java.util.Arrays.fill(st.acidAcc, false)
+        java.util.Arrays.fill(st.acidSlide, false)
+        for (r in st.drumSteps) java.util.Arrays.fill(r, 0)
+        System.arraycopy(tie, 0, st.acidTie, 0, min(tie.size, st.acidTie.size))
+        System.arraycopy(acidVel, 0, st.acidVel, 0, min(acidVel.size, st.acidVel.size))
+        for (v in 0 until min(drumVel.size, InstState.DV)) System.arraycopy(drumVel[v], 0, st.drumVel[v], 0, min(drumVel[v].size, InstState.MAX))
+        st.acidLen = acidLen.coerceIn(16, InstState.MAX)
+        st.drumLen = drumLen.coerceIn(16, InstState.MAX)
         System.arraycopy(semi, 0, st.acidSemi, 0, min(semi.size, st.acidSemi.size))
         System.arraycopy(gate, 0, st.acidGate, 0, min(gate.size, st.acidGate.size))
         System.arraycopy(acc, 0, st.acidAcc, 0, min(acc.size, st.acidAcc.size))
         System.arraycopy(slide, 0, st.acidSlide, 0, min(slide.size, st.acidSlide.size))
-        for (v in 0 until min(drums.size, InstState.DV)) System.arraycopy(drums[v], 0, st.drumSteps[v], 0, min(drums[v].size, InstState.STEPS))
+        for (v in 0 until min(drums.size, InstState.DV)) System.arraycopy(drums[v], 0, st.drumSteps[v], 0, min(drums[v].size, InstState.MAX))
     }
 
-    fun copy() = InstSnap(semi.copyOf(), gate.copyOf(), acc.copyOf(), slide.copyOf(), Array(drums.size) { drums[it].copyOf() })
+    fun copy() = InstSnap(semi.copyOf(), gate.copyOf(), acc.copyOf(), slide.copyOf(), Array(drums.size) { drums[it].copyOf() }, tie.copyOf(), acidLen, drumLen, acidVel.copyOf(), Array(drumVel.size) { drumVel[it].copyOf() })
 
     fun toJson(): org.json.JSONObject {
         val j = org.json.JSONObject()
@@ -3461,6 +3491,9 @@ class InstSnap(
         j.put("acc", org.json.JSONArray().apply { acc.forEach { put(it) } })
         j.put("slide", org.json.JSONArray().apply { slide.forEach { put(it) } })
         j.put("drums", org.json.JSONArray().apply { drums.forEach { r -> put(org.json.JSONArray().apply { r.forEach { put(it) } }) } })
+        j.put("tie", org.json.JSONArray().apply { tie.forEach { put(it) } })
+        j.put("acidLen", acidLen)
+        j.put("drumLen", drumLen)
         return j
     }
 
@@ -3469,19 +3502,20 @@ class InstSnap(
             val st = InstState
             return InstSnap(
                 st.acidSemi.copyOf(), st.acidGate.copyOf(), st.acidAcc.copyOf(), st.acidSlide.copyOf(),
-                Array(InstState.DV) { st.drumSteps[it].copyOf() }
+                Array(InstState.DV) { st.drumSteps[it].copyOf() }, st.acidTie.copyOf(), st.acidLen, st.drumLen,
+                st.acidVel.copyOf(), Array(InstState.DV) { st.drumVel[it].copyOf() }
             )
         }
 
         fun fromJson(j: org.json.JSONObject): InstSnap {
-            val n = InstState.STEPS
+            val n = InstState.MAX
             fun ia(k: String) = IntArray(n).also { a -> j.optJSONArray(k)?.let { for (i in 0 until min(n, it.length())) a[i] = it.optInt(i) } }
             fun ba(k: String) = BooleanArray(n).also { a -> j.optJSONArray(k)?.let { for (i in 0 until min(n, it.length())) a[i] = it.optBoolean(i) } }
             val dr = Array(InstState.DV) { IntArray(n) }
             j.optJSONArray("drums")?.let { d ->
                 for (v in 0 until min(InstState.DV, d.length())) d.optJSONArray(v)?.let { r -> for (i in 0 until min(n, r.length())) dr[v][i] = r.optInt(i) }
             }
-            return InstSnap(ia("semi"), ba("gate"), ba("acc"), ba("slide"), dr)
+            return InstSnap(ia("semi"), ba("gate"), ba("acc"), ba("slide"), dr, ba("tie"), j.optInt("acidLen", 16), j.optInt("drumLen", 16))
         }
     }
 }

@@ -25,14 +25,18 @@ object MidiFile {
     }
 
     /** Noten einer Piano-Roll (Positionen/Längen in Takten, 4/4) als MIDI-Datei (Format 0). C4 = Halbton 0 = Note 60. */
-    fun export(notes: List<Engine.NoteEv>, bpm: Float, name: String): ByteArray {
+    fun export(notes: List<Engine.NoteEv>, bpm: Float, name: String): ByteArray =
+        exportRaw(notes.map { Note(it.pos * 4, it.len * 4, 60 + it.semi, (it.vel * 127).roundToInt()) }, bpm, name, 0)
+
+    /** Noten (Positionen/Längen in Vierteln) als MIDI-Datei; [channel] 0..15 (Drums: 9). */
+    fun exportRaw(notes: List<Note>, bpm: Float, name: String, channel: Int): ByteArray {
         data class Ev(val tick: Int, val on: Boolean, val pitch: Int, val vel: Int)
         val evs = ArrayList<Ev>()
         for (n in notes) {
-            val pitch = (60 + n.semi).coerceIn(0, 127)
-            val t0 = (n.pos * 4 * PPQ).roundToInt()
-            val t1 = max(t0 + 1, ((n.pos + n.len) * 4 * PPQ).roundToInt())
-            evs.add(Ev(t0, true, pitch, (n.vel * 127).roundToInt().coerceIn(1, 127)))
+            val pitch = n.pitch.coerceIn(0, 127)
+            val t0 = (n.beat * PPQ).roundToInt()
+            val t1 = max(t0 + 1, ((n.beat + n.len) * PPQ).roundToInt())
+            evs.add(Ev(t0, true, pitch, n.vel.coerceIn(1, 127)))
             evs.add(Ev(t1, false, pitch, 0))
         }
         evs.sortWith(compareBy({ it.tick }, { if (it.on) 1 else 0 }))
@@ -47,7 +51,7 @@ object MidiFile {
         for (e in evs) {
             varLen(trk, e.tick - last)
             last = e.tick
-            trk.write(if (e.on) 0x90 else 0x80)
+            trk.write((if (e.on) 0x90 else 0x80) or (channel and 15))
             trk.write(e.pitch)
             trk.write(if (e.on) e.vel else 64)
         }

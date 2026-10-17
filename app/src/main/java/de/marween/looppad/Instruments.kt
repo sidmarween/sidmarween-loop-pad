@@ -13,13 +13,27 @@ import kotlin.math.tanh
 
 /** Einstellungen und Pattern der virtuellen Instrumente (bleiben über Audio-Neustarts erhalten). */
 object InstState {
+    /** Schritte der Kompakt-Ansicht (1 Takt). */
     const val STEPS = 16
+    /** Längstes Pattern: 4 Takte à 16 Schritte. */
+    const val MAX = 64
 
     // ---------------------------------------------------------------- ACID (303-artig)
-    val acidSemi = IntArray(STEPS)
-    val acidGate = BooleanArray(STEPS)
-    val acidAcc = BooleanArray(STEPS)
-    val acidSlide = BooleanArray(STEPS)
+    val acidSemi = IntArray(MAX)
+    val acidGate = BooleanArray(MAX)
+    val acidAcc = BooleanArray(MAX)
+    val acidSlide = BooleanArray(MAX)
+    /** Tie: der Schritt hält den Ton des vorigen Schritts (längere Noten, kein neuer Anschlag). */
+    val acidTie = BooleanArray(MAX)
+    /** Lautstärke je Note (Kopf-Schritt), 0..1. */
+    val acidVel = FloatArray(MAX) { 1f }
+    /** Pattern-Länge in Schritten (16, 32, 48, 64). */
+    @Volatile var acidLen = 16
+    /** Glide-Zeit 0..1 (≈ 10 … 250 ms), Accent-Stärke, Verzerrung, Feinstimmung in Halbtönen. */
+    @Volatile var acidGlide = 0.25f
+    @Volatile var acidAccent = 0.6f
+    @Volatile var acidDrive = 0.2f
+    @Volatile var acidTune = 0
     @Volatile var acidOn = true
     @Volatile var acidFx = true
     @Volatile var acidSquare = false
@@ -42,23 +56,35 @@ object InstState {
             acidSlide[k] = r.nextFloat() < 0.22f
         }
         acidGate[0] = true
+        java.util.Arrays.fill(acidTie, false)
+        // weitere Takte wiederholen den ersten
+        for (k in STEPS until MAX) {
+            acidGate[k] = acidGate[k % STEPS]; acidSemi[k] = acidSemi[k % STEPS]
+            acidAcc[k] = acidAcc[k % STEPS]; acidSlide[k] = acidSlide[k % STEPS]
+        }
     }
 
     fun acidClear() {
         java.util.Arrays.fill(acidGate, false)
         java.util.Arrays.fill(acidAcc, false)
         java.util.Arrays.fill(acidSlide, false)
+        java.util.Arrays.fill(acidTie, false)
         java.util.Arrays.fill(acidSemi, 0)
     }
 
-    fun acidHasNotes() = acidGate.any { it }
+    fun acidHasNotes() = (0 until acidLen).any { acidGate[it] }
 
     // ---------------------------------------------------------------- DRUM (909-artig)
     const val DV = 11
     val drumNames = arrayOf("BD", "SD", "LT", "MT", "HT", "RS", "CP", "CH", "OH", "CR", "RD")
     val drumLong = arrayOf("Bass Drum", "Snare", "Low Tom", "Mid Tom", "High Tom", "Rimshot", "Clap", "Closed Hat", "Open Hat", "Crash", "Ride")
     /** 0 = aus, 1 = an, 2 = Accent. */
-    val drumSteps = Array(DV) { IntArray(STEPS) }
+    val drumSteps = Array(DV) { IntArray(MAX) }
+    /** Lautstärke je Schlag, 0..1. */
+    val drumVel = Array(DV) { FloatArray(MAX) { 1f } }
+    @Volatile var drumLen = 16
+    /** Stumm geschaltete Instrumente. */
+    val drumMute = BooleanArray(DV)
     val drumTune = FloatArray(DV) { 0.5f }
     val drumDecay = FloatArray(DV) { 0.5f }
     val drumLevel = FloatArray(DV) { 0.8f }
@@ -92,6 +118,7 @@ object InstState {
                 set(2, 13); set(3, 14); set(4, 15)
             }
         }
+        for (v in 0 until DV) for (k in STEPS until MAX) drumSteps[v][k] = drumSteps[v][k % STEPS]
         drumPreset = i % presetNames.size
     }
 
@@ -99,7 +126,7 @@ object InstState {
         for (v in 0 until DV) java.util.Arrays.fill(drumSteps[v], 0)
     }
 
-    fun drumHasNotes() = drumSteps.any { row -> row.any { it > 0 } }
+    fun drumHasNotes() = drumSteps.any { row -> (0 until drumLen).any { row[it] > 0 } }
 
     // ---------------------------------------------------------------- Projekte
 
@@ -117,6 +144,11 @@ object InstState {
         j.put("drumSteps", ds)
         j.put("drumTune", fa(drumTune)); j.put("drumDecay", fa(drumDecay)); j.put("drumLevel", fa(drumLevel))
         j.put("drumOn", drumOn); j.put("drumFx", drumFx); j.put("drumDrive", drumDrive.toDouble()); j.put("drumVol", drumVol.toDouble())
+        j.put("acidTie", ba(acidTie)); j.put("acidLen", acidLen); j.put("drumLen", drumLen)
+        j.put("acidGlide", acidGlide.toDouble()); j.put("acidAccent", acidAccent.toDouble()); j.put("acidDrive", acidDrive.toDouble()); j.put("acidTune", acidTune)
+        j.put("drumMute", ba(drumMute))
+        j.put("acidVel", fa(acidVel))
+        j.put("drumVel", JSONArray().apply { for (v in 0 until DV) put(fa(drumVel[v])) })
         return j
     }
 
@@ -136,12 +168,25 @@ object InstState {
         rf("drumTune", drumTune); rf("drumDecay", drumDecay); rf("drumLevel", drumLevel)
         drumOn = j.optBoolean("drumOn", true); drumFx = j.optBoolean("drumFx", false)
         drumDrive = j.optDouble("drumDrive", 0.15).toFloat(); drumVol = j.optDouble("drumVol", 0.8).toFloat()
+        java.util.Arrays.fill(acidTie, false)
+        java.util.Arrays.fill(drumMute, false)
+        rb("acidTie", acidTie); rb("drumMute", drumMute)
+        java.util.Arrays.fill(acidVel, 1f)
+        for (r in drumVel) java.util.Arrays.fill(r, 1f)
+        rf("acidVel", acidVel)
+        j.optJSONArray("drumVel")?.let { dv -> for (v in 0 until min(DV, dv.length())) dv.optJSONArray(v)?.let { r -> for (k in 0 until min(MAX, r.length())) drumVel[v][k] = r.optDouble(k, 1.0).toFloat() } }
+        acidLen = j.optInt("acidLen", 16).coerceIn(16, MAX); drumLen = j.optInt("drumLen", 16).coerceIn(16, MAX)
+        acidGlide = j.optDouble("acidGlide", 0.25).toFloat(); acidAccent = j.optDouble("acidAccent", 0.6).toFloat()
+        acidDrive = j.optDouble("acidDrive", 0.2).toFloat(); acidTune = j.optInt("acidTune", 0)
+        // alte Projekte (16 Schritte): Rest leeren
+        if (!j.has("acidLen")) for (k in STEPS until MAX) { acidGate[k] = false; acidTie[k] = false }
+        if (!j.has("drumLen")) for (v in 0 until DV) for (k in STEPS until MAX) drumSteps[v][k] = 0
     }
 }
 
 /** 303-artiger Bass-Synth: Sägezahn/Rechteck, resonantes 4-Pol-Filter, Hüllkurve, Accent und Slide. */
 class AcidSynth(private val sr: Int) {
-    private class Ev(val frame: Long, val on: Boolean, val semi: Int, val acc: Boolean, val slide: Boolean)
+    private class Ev(val frame: Long, val on: Boolean, val semi: Int, val acc: Boolean, val slide: Boolean, val vel: Float = 1f)
 
     private val queue = ArrayList<Ev>()
     private val lock = Any()
@@ -155,12 +200,14 @@ class AcidSynth(private val sr: Int) {
     private var y1 = 0f; private var y2 = 0f; private var y3 = 0f; private var y4 = 0f
     private var accEnv = 0f
 
-    private fun hz(semi: Int): Double = 440.0 * 2.0.pow((36 + 12 * InstState.acidOct + semi - 69) / 12.0)
+    private fun hz(semi: Int): Double = 440.0 * 2.0.pow((36 + 12 * InstState.acidOct + InstState.acidTune + semi - 69) / 12.0)
 
     /** frame < 0 = sofort. */
-    fun queue(frame: Long, on: Boolean, semi: Int, acc: Boolean, slide: Boolean) {
-        synchronized(lock) { queue.add(Ev(frame, on, semi, acc, slide)) }
+    fun queue(frame: Long, on: Boolean, semi: Int, acc: Boolean, slide: Boolean, vel: Float = 1f) {
+        synchronized(lock) { queue.add(Ev(frame, on, semi, acc, slide, vel)) }
     }
+
+    private var velNow = 1f
 
     private fun apply(e: Ev) {
         if (!e.on) {
@@ -168,6 +215,7 @@ class AcidSynth(private val sr: Int) {
             return
         }
         target = hz(e.semi)
+        if (!(e.slide && gate)) velNow = e.vel
         if (e.slide && gate) {
             // Slide: Tonhöhe gleitet, Hüllkurven laufen weiter
         } else {
@@ -198,7 +246,9 @@ class AcidSynth(private val sr: Int) {
         val decT = (0.04 + st.acidDec * 1.6) * sr
         val fDec = exp(-1.0 / decT).toFloat()
         val accDec = exp(-1.0 / (0.12 * sr)).toFloat()
-        val glide = 1.0 - exp(-1.0 / (0.05 * sr))
+        val glide = 1.0 - exp(-1.0 / ((0.01 + st.acidGlide * 0.24) * sr))
+        val accAmt = st.acidAccent * 1.7f
+        val drv = 1f + st.acidDrive * 5f
         val res = st.acidRes * 3.95f
         val vol = st.acidVol * 0.9f
         val square = st.acidSquare
@@ -224,7 +274,7 @@ class AcidSynth(private val sr: Int) {
             amp += (ampTarget - amp) * (if (gate) 0.02f else 0.006f)
             fenv *= fDec
             accEnv *= accDec
-            val accBoost = if (accNow) accEnv * st.acidEnv * 2.5f else 0f
+            val accBoost = if (accNow) accEnv * (0.3f + st.acidEnv) * 2.5f * accAmt / 1.02f else 0f
             val oct = st.acidCut * 7f + (st.acidEnv * 5f) * fenv + accBoost * 2f + st.acidCutMod * 3f
             val fc = min(0.45f * sr, 70f * 2f.pow(oct))
             val g = (1.0 - exp(-2.0 * PI * fc / sr)).toFloat()
@@ -233,8 +283,8 @@ class AcidSynth(private val sr: Int) {
             y2 += g * (y1 - y2)
             y3 += g * (y2 - y3)
             y4 += g * (y3 - y4)
-            val a = amp * (if (accNow) 1f + 0.6f * accEnv else 1f)
-            out[i] += tanh(y4 * (1f + st.acidRes * 1.5f) * 1.4f) * a * vol
+            val a = amp * velNow * (if (accNow) 1f + 0.6f * accAmt * accEnv else 1f)
+            out[i] += tanh(y4 * (1f + st.acidRes * 1.5f) * 1.4f * drv) / (0.75f + 0.25f * drv) * a * vol
         }
         // spätere Ereignisse zurücklegen
         if (ei < evs.size) synchronized(lock) { queue.addAll(evs.subList(ei, evs.size)) }
@@ -266,14 +316,14 @@ class DrumMachine(private val sr: Int) {
         return (seed and 0xFFFF) / 32768f - 1f
     }
 
-    fun trigger(v: Int, delay: Int, accent: Boolean) {
+    fun trigger(v: Int, delay: Int, accent: Boolean, vel: Float = 1f) {
         if (v !in 0 until InstState.DV) return
         synchronized(lock) {
             val vc = voices[v]
             vc.active = true
             vc.delay = max(0, delay)
             vc.t = 0
-            vc.acc = if (accent) 1.45f else 1f
+            vc.acc = (if (accent) 1.45f else 1f) * vel.coerceIn(0.02f, 1f)
             vc.p1 = 0.0
             for (k in vc.ph.indices) vc.ph[k] = 0.0
             // Closed Hat würgt Open Hat ab
@@ -299,6 +349,7 @@ class DrumMachine(private val sr: Int) {
             for (v in 0 until InstState.DV) {
                 val vc = voices[v]
                 if (!vc.active) continue
+                if (st.drumMute[v]) { vc.active = false; continue }
                 val tune = st.drumTune[v]
                 val dec = st.drumDecay[v]
                 val lvl = st.drumLevel[v] * st.drumVol * vc.acc

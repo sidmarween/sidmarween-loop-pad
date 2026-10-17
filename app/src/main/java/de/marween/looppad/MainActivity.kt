@@ -116,6 +116,7 @@ class MainActivity : Activity() {
         pads.onPadFxEditor = { p -> showPadFxEditor(p) }
         pads.onEditorSave = { p, data, slices, cues -> showEditorSave(p, data, slices, cues) }
         pads.onRollIo = { p -> showRollIo(p) }
+        pads.onInstMidi = { k -> showInstMidi(k) }
         pads.onLaunchQuantChanged = {
             prefs.edit().putInt("launchIdx", Engine.launchIdx).apply()
             hint(if (Engine.LAUNCH_Q[Engine.launchIdx] <= 0f) "Start-Raster AUS: Loops starten/stoppen sofort"
@@ -632,6 +633,142 @@ class MainActivity : Activity() {
                 runOnUiThread { toast("Laden fehlgeschlagen: ${e.message ?: e}") }
             }
         }.start()
+    }
+
+    // ================================================================ ACID/DRUM: MIDI-Dateien
+
+    private var instIoKind = 1
+    private var instIoAdd = false
+    /** General-MIDI-Drumnoten für BD, SD, LT, MT, HT, RS, CP, CH, OH, CR, RD. */
+    private val GM = intArrayOf(36, 38, 41, 45, 48, 37, 39, 42, 46, 49, 51)
+
+    private fun showInstMidi(k: Int) {
+        instIoKind = k
+        val name = if (k == 1) "ACID 303" else "DRUM 909"
+        AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
+            .setTitle("$name · Noten")
+            .setItems(arrayOf(
+                "📤 Als MIDI-Datei exportieren (.mid)",
+                "📥 MIDI-Datei laden – ersetzt das Pattern",
+                "📥 MIDI-Datei laden – zum Pattern hinzufügen"
+            )) { _, w ->
+                if (w == 0) {
+                    val stamp = SimpleDateFormat("yyyyMMdd_HHmm", Locale.GERMANY).format(Date())
+                    val i = Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
+                        addCategory(Intent.CATEGORY_OPENABLE)
+                        type = "audio/midi"
+                        putExtra(Intent.EXTRA_TITLE, "MarvPAD_${if (k == 1) "ACID" else "DRUM"}_$stamp.mid")
+                    }
+                    try { startActivityForResult(i, REQ_INST_OUT) } catch (e: Exception) { toast("Kein Dateimanager gefunden") }
+                } else {
+                    instIoAdd = w == 2
+                    val i = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+                        addCategory(Intent.CATEGORY_OPENABLE)
+                        type = "*/*"
+                        putExtra(Intent.EXTRA_MIME_TYPES, arrayOf("audio/midi", "audio/x-midi", "audio/mid", "application/x-midi", "application/octet-stream"))
+                    }
+                    try { startActivityForResult(i, REQ_INST_IN) } catch (e: Exception) { toast("Kein Dateimanager gefunden") }
+                }
+            }
+            .setNegativeButton("Abbrechen", null)
+            .show()
+    }
+
+    private fun writeInstMidi(uri: Uri) {
+        val st = InstState
+        val notes = ArrayList<MidiFile.Note>()
+        if (instIoKind == 1) {
+            val len = st.acidLen
+            var k = 0
+            while (k < len) {
+                if (!st.acidGate[k] || (k > 0 && st.acidTie[k] && st.acidGate[k - 1])) { k++; continue }
+                var n = 1
+                while (k + n < len && st.acidGate[k + n] && st.acidTie[k + n]) n++
+                val slide = st.acidSlide[k + n - 1] && k + n < len && st.acidGate[k + n]
+                val lenBeats = (if (slide) n + 0.1 else n * 0.5 + (n - 1) * 0.5) / 4.0
+                val vel = ((if (st.acidAcc[k]) 127 else 96) * st.acidVel[k]).toInt().coerceIn(1, 127)
+                notes.add(MidiFile.Note(k / 4.0, lenBeats, 36 + 12 * st.acidOct + st.acidTune + st.acidSemi[k], vel))
+                k += n
+            }
+        } else {
+            for (v in 0 until InstState.DV) for (k in 0 until st.drumLen) {
+                val x = st.drumSteps[v][k]
+                if (x == 0) continue
+                notes.add(MidiFile.Note(k / 4.0, 0.25, GM[v], ((if (x == 2) 127 else 96) * st.drumVel[v][k]).toInt().coerceIn(1, 127)))
+            }
+        }
+        if (notes.isEmpty()) { toast("Keine Noten im Pattern"); return }
+        try {
+            val bytes = MidiFile.exportRaw(notes, Engine.currentBpm(), if (instIoKind == 1) "Marv PAD · ACID 303" else "Marv PAD · DRUM 909", if (instIoKind == 1) 0 else 9)
+            contentResolver.openOutputStream(uri)?.use { it.write(bytes) }
+            toast("MIDI-Datei gespeichert (${notes.size} Noten)")
+        } catch (e: Exception) {
+            toast("Export fehlgeschlagen: ${e.message ?: e}")
+        }
+    }
+
+    private fun drumVoiceFor(pitch: Int): Int = when (pitch) {
+        35, 36 -> 0; 38, 40 -> 1; 41, 43 -> 2; 45, 47 -> 3; 48, 50 -> 4; 37 -> 5; 39 -> 6
+        42, 44 -> 7; 46 -> 8; 49, 52, 55, 57 -> 9; 51, 53, 59 -> 10
+        else -> -1
+    }
+
+    private fun readInstMidi(uri: Uri) {
+        val st = InstState
+        try {
+            val bytes = contentResolver.openInputStream(uri)?.use { it.readBytes() } ?: return
+            val parsed = MidiFile.parse(bytes)
+            if (parsed.notes.isEmpty()) { toast("Keine Noten in der Datei"); return }
+            val end = parsed.notes.maxOf { it.beat + it.len }
+            var need = 16
+            while (need < InstState.MAX && need < end * 4 - 1e-6) need += 16
+            Engine.pushPatternUndo("MIDI-Import")
+            var count = 0
+            if (instIoKind == 1) {
+                if (!instIoAdd) st.acidClear()
+                st.acidLen = max(if (instIoAdd) st.acidLen else 16, need)
+                val ns = parsed.notes.sortedBy { it.beat }
+                for ((i, n) in ns.withIndex()) {
+                    val k = Math.round(n.beat * 4).toInt()
+                    if (k !in 0 until st.acidLen) continue
+                    var semi = n.pitch - 36 - 12 * st.acidOct - st.acidTune
+                    while (semi > 24) semi -= 12
+                    while (semi < -12) semi += 12
+                    val steps = max(1, Math.round(n.len * 4).toInt())
+                    val next = ns.getOrNull(i + 1)
+                    val slide = next != null && n.beat + n.len > next.beat + 1e-3
+                    for (j in 0 until steps) {
+                        val s2 = k + j
+                        if (s2 >= st.acidLen) break
+                        st.acidGate[s2] = true
+                        st.acidTie[s2] = j > 0
+                        st.acidSemi[s2] = semi
+                        st.acidAcc[s2] = j == 0 && n.vel >= 110
+                        st.acidSlide[s2] = false
+                        st.acidVel[s2] = (n.vel / 127f).coerceIn(0.05f, 1f)
+                    }
+                    st.acidSlide[min(st.acidLen - 1, k + steps - 1)] = slide
+                    count++
+                }
+            } else {
+                if (!instIoAdd) st.drumClear()
+                st.drumLen = max(if (instIoAdd) st.drumLen else 16, need)
+                var skipped = 0
+                for (n in parsed.notes) {
+                    val v = drumVoiceFor(n.pitch)
+                    val k = Math.round(n.beat * 4).toInt()
+                    if (v < 0) { skipped++; continue }
+                    if (k !in 0 until st.drumLen) continue
+                    st.drumSteps[v][k] = if (n.vel >= 110) 2 else 1
+                    st.drumVel[v][k] = (n.vel / 127f).coerceIn(0.05f, 1f)
+                    count++
+                }
+                if (skipped > 0) toast("$skipped Noten ohne passendes Instrument übersprungen")
+            }
+            toast("$count Noten geladen · ${(if (instIoKind == 1) st.acidLen else st.drumLen) / 16} Takt(e)")
+        } catch (e: Exception) {
+            toast("Import fehlgeschlagen: ${e.message ?: e}")
+        }
     }
 
     // ================================================================ Piano-Roll: MIDI-Dateien
@@ -1948,6 +2085,8 @@ class MainActivity : Activity() {
             REQ_DECK -> loadDeckUri(djDeck, uri)
             REQ_MIDI_OUT -> writeMidi(uri)
             REQ_MIDI_IN -> readMidi(uri)
+            REQ_INST_OUT -> writeInstMidi(uri)
+            REQ_INST_IN -> readInstMidi(uri)
             REQ_IMPORT -> {
                 if (pad < 0) return
                 toast("Importiere …")
@@ -2205,5 +2344,7 @@ class MainActivity : Activity() {
         private const val REQ_DECK = 14
         private const val REQ_MIDI_OUT = 15
         private const val REQ_MIDI_IN = 16
+        private const val REQ_INST_OUT = 17
+        private const val REQ_INST_IN = 18
     }
 }

@@ -803,6 +803,7 @@ class PadView(context: Context) : View(context) {
         drawFooter(canvas)
         if (kbPad >= 0) drawKeyboard(canvas)
         if (edPad >= 0) drawEditor(canvas, dt)
+        if (instEd.isOpen) instEd.draw(canvas, RectF(dp(6f), insetTop + dp(6f), width - dp(6f), height - insetBottom - dp(6f)), overlayColors())
         drawInfo(canvas)
         message?.let { drawMessage(canvas, it) }
 
@@ -2449,6 +2450,10 @@ class PadView(context: Context) : View(context) {
             val ix = e.getX(e.actionIndex)
             val iy = e.getY(e.actionIndex)
             if (infoTouch(ix, iy)) return true
+        }
+        if (instEd.isOpen) {
+            instEd.touch(e)
+            return true
         }
         if (edPad >= 0) {
             editorTouch(e)
@@ -4441,9 +4446,11 @@ class PadView(context: Context) : View(context) {
         kbKeysRect.set(kbRect.left + dp(8f), gridTop, kbRect.right - dp(8f), kbTakeBtn.top - dp(8f))
         val km = kbKeysRect
         val keyW = max(dp(46f), km.width() * 0.15f)
-        kbPiano.set(km.left, km.top, km.left + keyW, km.bottom)
-        mxGrid.set(kbPiano.right + dp(3f), km.top, km.right, km.bottom)
-        mxRows = (km.height() / (dp(15f) * mxRowZoom)).toInt().coerceIn(6, 72)
+        val velH = if (songView) 0f else dp(42f)
+        kbPiano.set(km.left, km.top, km.left + keyW, km.bottom - velH)
+        mxGrid.set(kbPiano.right + dp(3f), km.top, km.right, km.bottom - velH)
+        if (songView) mxVel.setEmpty() else mxVel.set(mxGrid.left, mxGrid.bottom + dp(4f), mxGrid.right, km.bottom)
+        mxRows = (mxGrid.height() / (dp(15f) * mxRowZoom)).toInt().coerceIn(6, 72)
     }
 
     private fun closeKeyboard() {
@@ -4699,6 +4706,22 @@ class PadView(context: Context) : View(context) {
     private val mxDel = RectF()
     private val mxGroup = RectF()
     private val mxEditBtns = arrayOf(mxAll, mxCopy, mxPaste, mxDel, mxGroup, mxQuant)
+    /** Lautstärke-Spur unter der Matrix (Balken je Note, hoch/runter ziehen). */
+    private val mxVel = RectF()
+    private val MX_VEL = 5
+
+    private fun mxVelAt(x: Float, y: Float) {
+        val p = kbPad
+        val v = ((mxVel.bottom - dp(2f) - y) / (mxVel.height() - dp(4f))).coerceIn(0.05f, 1f)
+        val pos = xToPos(x)
+        val tol = mxView() * dp(8f) / mxGrid.width()
+        val hits = Engine.notesOf(p).filter { pos >= it.pos - tol && pos <= it.pos + max(it.len, tol) }
+        if (hits.isEmpty()) return
+        // nächstgelegener Notenanfang; markierte Noten gemeinsam
+        val best = hits.minByOrNull { abs(it.pos - pos) }!!
+        val ids = if (best.id in mxSel && mxSel.size > 1) mxSel.toSet() else hits.filter { abs(it.pos - best.pos) < 1e-6 }.map { it.id }.toSet()
+        Engine.setNoteVel(p, ids, v)
+    }
     /** false = ✏ Stift (setzen/löschen/ziehen), true = ⬚ Auswahl (markieren, Rahmen ziehen, verschieben). */
     private var mxSelMode = false
     /** Horizontaler Zoom (1 = ganze Matrix sichtbar) und Startposition der Ansicht in Takten. */
@@ -4773,6 +4796,14 @@ class PadView(context: Context) : View(context) {
 
     private fun mxGridDown(id: Int, x: Float, y: Float) {
         val p = kbPad
+        if (mxVel.contains(x, y) && mxPtr < 0) {
+            mxPtr = id
+            mxDrag = MX_VEL
+            mxMoved = false
+            Engine.pushPatternUndo("Lautstärke")
+            mxVelAt(x, y)
+            return
+        }
         if (mxPtr >= 0 && mxPtr != id) {
             // zweiter Finger: Zoom (auseinander/zusammen) und Verschieben – solange noch nichts verschoben wurde
             if (mxDrag == MX_MOVE && mxMoved || mxDrag == MX_RESIZE && mxMoved) return
@@ -4874,6 +4905,10 @@ class PadView(context: Context) : View(context) {
         val i = e.findPointerIndex(mxPtr)
         if (i < 0) return
         val x = e.getX(i); val y = e.getY(i)
+        if (mxDrag == MX_VEL) {
+            mxVelAt(x, y)
+            return
+        }
         if (!mxMoved && abs(x - mxDownX) < dp(6f) && abs(y - mxDownY) < dp(6f)) return
         if (!mxMoved) {
             mxMoved = true
@@ -5051,7 +5086,7 @@ class PadView(context: Context) : View(context) {
                 burst(mxClear.centerX(), mxClear.centerY(), Color.rgb(230, 40, 55), 18, 200f)
                 return true
             }
-            mxGrid.contains(x, y) -> {
+            mxGrid.contains(x, y) || mxVel.contains(x, y) -> {
                 mxGridDown(id, x, y)
                 return true
             }
@@ -5253,6 +5288,30 @@ class PadView(context: Context) : View(context) {
         strokePaint.strokeWidth = dp(1f)
         strokePaint.color = alpha(cols[1], 0.4f)
         canvas.drawRect(g, strokePaint)
+        // Lautstärke-Spur
+        val vl = mxVel
+        if (vl.height() > 0f) {
+            fillPaint.color = Color.rgb(22, 23, 29)
+            canvas.drawRect(vl, fillPaint)
+            textPaint.textAlign = Paint.Align.RIGHT
+            textPaint.textSize = dp(9f)
+            textPaint.color = alpha(cols[1], 0.7f)
+            canvas.drawText("VEL", vl.left - dp(4f), vl.centerY() + dp(3f), textPaint)
+            textPaint.textAlign = Paint.Align.CENTER
+            canvas.save()
+            canvas.clipRect(vl)
+            for (ev in list) {
+                val x0 = posToX(ev.pos)
+                if (x0 < vl.left - dp(4f) || x0 > vl.right) continue
+                val top = vl.bottom - dp(2f) - (vl.height() - dp(4f)) * ev.vel.coerceIn(0f, 1f)
+                strokePaint.strokeWidth = dp(3f)
+                strokePaint.color = if (ev.id in mxSel) Color.WHITE else acc
+                canvas.drawLine(x0 + dp(2f), top, x0 + dp(2f), vl.bottom - dp(2f), strokePaint)
+                dotPaint.color = Color.WHITE
+                canvas.drawCircle(x0 + dp(2f), top, dp(2.5f), dotPaint)
+            }
+            canvas.restore()
+        }
         if (Engine.seqRecording) {
             textPaint.textSize = dp(9f)
             textPaint.color = Color.rgb(255, 80, 90)
@@ -6261,6 +6320,14 @@ class PadView(context: Context) : View(context) {
 
     /** 0 = Effekte, 1 = ACID, 2 = DRUM. */
     private var xyMode = 0
+    /** Editor für ACID/DRUM (Klaviatur/Instrumente links, Matrix rechts). */
+    private val instEd = InstEditor(this).also { ed ->
+        ed.onHint = { hint(it) }
+        ed.onRec = { recPressed() }
+        ed.onMidi = { k -> onInstMidi?.invoke(k) }
+    }
+    /** ACID/DRUM: Noten als MIDI-Datei laden/exportieren (1 = ACID, 2 = DRUM). */
+    var onInstMidi: ((Int) -> Unit)? = null
     private val modeRects = Array(3) { RectF() }
     private val modeNames = arrayOf("🎛 EFFEKTE", "🔊 ACID 303", "🥁 DRUM 909")
 
@@ -6355,7 +6422,7 @@ class PadView(context: Context) : View(context) {
     private val noteNm = arrayOf("C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "H")
 
     private fun layoutAcid() {
-        layoutHeader(7)
+        layoutHeader(8)
         val r = xyRect
         val top = instHdr[0].bottom + dp(6f)
         val rest = r.bottom - dp(6f) - top
@@ -6372,10 +6439,10 @@ class PadView(context: Context) : View(context) {
         val st = InstState
         val labels = arrayOf(
             if (st.acidOn) "● AN" else "○ AUS", if (st.acidSquare) "⊓ SQR" else "⩘ SAW", "FX",
-            "OKT−", "OKT+", "🎲 RND", "LEEREN"
+            "OKT−", "OKT+", "🎲 RND", "LEEREN", "✎ EDIT"
         )
-        val ons = booleanArrayOf(st.acidOn, false, st.acidFx, false, false, false, false)
-        for (i in 0 until 7) chip(canvas, instHdr[i], labels[i], ons[i], cols)
+        val ons = booleanArrayOf(st.acidOn, false, st.acidFx, false, false, false, false, false)
+        for (i in 0 until 8) chip(canvas, instHdr[i], labels[i], ons[i], cols)
         // Lauflicht / Schritte
         val cur = Engine.seqCurrentStep()
         val cw = laneRect.width() / InstState.STEPS
@@ -6448,7 +6515,7 @@ class PadView(context: Context) : View(context) {
 
     // ---- DRUM
     private fun layoutDrum() {
-        layoutHeader(5)
+        layoutHeader(6)
         val r = xyRect
         val top = instHdr[0].bottom + dp(6f)
         val vh = dp(22f)
@@ -6479,9 +6546,9 @@ class PadView(context: Context) : View(context) {
         layoutDrum()
         val st = InstState
         val presetLabel = if (st.drumPreset >= 0) "▦ ${st.presetNames[st.drumPreset]}" else "▦ PRESET"
-        val labels = arrayOf(if (st.drumOn) "● AN" else "○ AUS", "FX", presetLabel, if (Engine.seqPlaying) "■ STOP" else "▶ PLAY", "LEEREN")
-        val ons = booleanArrayOf(st.drumOn, st.drumFx, false, Engine.seqPlaying, false)
-        for (i in 0 until 5) chip(canvas, instHdr[i], labels[i], ons[i], cols)
+        val labels = arrayOf(if (st.drumOn) "● AN" else "○ AUS", "FX", presetLabel, if (Engine.seqPlaying) "■ STOP" else "▶ PLAY", "LEEREN", "✎ EDIT")
+        val ons = booleanArrayOf(st.drumOn, st.drumFx, false, Engine.seqPlaying, false, false)
+        for (i in 0 until 6) chip(canvas, instHdr[i], labels[i], ons[i], cols)
         for (v in 0 until InstState.DV) {
             val sel = v == st.drumSel
             val has = st.drumSteps[v].any { it > 0 }
@@ -6545,15 +6612,16 @@ class PadView(context: Context) : View(context) {
         performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
         if (xyMode == 1) {
             layoutAcid()
-            for (i in 0 until 7) if (instHdr[i].contains(x, y)) {
+            for (i in 0 until 8) if (instHdr[i].contains(x, y)) {
                 when (i) {
+                    7 -> instEd.open(1)
                     0 -> st.acidOn = !st.acidOn
                     1 -> st.acidSquare = !st.acidSquare
                     2 -> st.acidFx = !st.acidFx
                     3 -> st.acidOct = (st.acidOct - 1).coerceAtLeast(-1)
                     4 -> st.acidOct = (st.acidOct + 1).coerceAtMost(2)
                     5 -> { Engine.pushPatternUndo("ACID Zufall"); st.acidRandom() }
-                    else -> { Engine.pushPatternUndo("ACID leeren"); st.acidClear() }
+                    6 -> { Engine.pushPatternUndo("ACID leeren"); st.acidClear() }
                 }
                 return
             }
@@ -6587,13 +6655,14 @@ class PadView(context: Context) : View(context) {
             }
         } else {
             layoutDrum()
-            for (i in 0 until 5) if (instHdr[i].contains(x, y)) {
+            for (i in 0 until 6) if (instHdr[i].contains(x, y)) {
                 when (i) {
+                    5 -> instEd.open(2)
                     0 -> st.drumOn = !st.drumOn
                     1 -> st.drumFx = !st.drumFx
                     2 -> { Engine.pushPatternUndo("DRUM Preset"); st.drumApplyPreset(st.drumPreset + 1) }
                     3 -> if (Engine.seqPlaying) Engine.seqStop() else Engine.seqPlay()
-                    else -> { Engine.pushPatternUndo("DRUM leeren"); st.drumClear() }
+                    4 -> { Engine.pushPatternUndo("DRUM leeren"); st.drumClear() }
                 }
                 return
             }
