@@ -52,6 +52,8 @@ class Take(val overdub: Boolean, val fromIn: Long, val downNanos: Long, val oneS
     var src: Int = 0
     /** Live-Aufnahme (Antippen statt Halten). */
     var live: Boolean = false
+    /** Bounce: Pads, die während dieser Wave-Aufnahme mitspielten. */
+    var bounceSrc: IntArray? = null
     /** Bei Resample: Ausgabe-Frames der Aufnahme. */
     @Volatile var fromOut: Long = 0L
     @Volatile var toOut: Long = Long.MAX_VALUE
@@ -1660,6 +1662,14 @@ object Engine {
         val t = Take(false, max(0L, inClock.frameAt(now, sampleRate)), now, padOneShot[p])
         t.src = padSource[p]
         t.live = liveBars != 0
+        if (t.src == 1) {
+            val playing = ArrayList<Int>()
+            for (q in 0 until PADS) {
+                val l = loops.get(q) ?: continue
+                if (q != p && !l.oneShot && !l.muted) playing.add(q)
+            }
+            t.bounceSrc = playing.toIntArray()
+        }
         val heard = outClock.frameAt(now, sampleRate)
         val m = masterLen
         if (liveBars > 0 && m > 0L) {
@@ -1739,9 +1749,26 @@ object Engine {
         padSemi[p] = 0
         if (takes.get(p) == null && loops.get(p) == null) {
             loops.set(p, loop)
+            // Bounce: Quellen stummschalten, damit nichts doppelt klingt (in der Raster-Phase, mit Blende)
+            val src = take.bounceSrc
+            if (bounce && src != null && src.isNotEmpty() && !take.oneShot) {
+                val muted = ArrayList<Int>()
+                for (q in src) {
+                    val l = loops.get(q) ?: continue
+                    if (!l.muted) {
+                        l.muted = true
+                        muted.add(q)
+                    }
+                }
+                if (muted.isNotEmpty()) onBounced?.invoke(p, muted)
+            }
             onRecorded?.invoke(p, data.copyOf(), sampleRate)
         }
     }
+
+    /** Bounce-Funktion (wie beim Mehrspurrekorder): nach einer Wave-Aufnahme die Quell-Pads stumm schalten. */
+    @Volatile var bounce = true
+    var onBounced: ((Int, List<Int>) -> Unit)? = null
 
     /** Pad wartet im Live-Modus auf den nächsten Takt. */
     fun isArmed(p: Int): Boolean {

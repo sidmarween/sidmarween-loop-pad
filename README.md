@@ -81,6 +81,8 @@ Unter jedem Pad sitzt ein kleiner **•••**-Knopf:
 
 ## Resample & Live-Aufnahme
 
+**🔁 Bounce** (wie beim alten Mehrspurrekorder, im Menü ☰ an/aus, Standard: an): Nach einer Aufnahme auf ein Wave-Pad werden alle Pads, die dabei mitgespielt haben, automatisch stummgeschaltet – es spielt nur noch die gebouncte Spur, nichts klingt doppelt oder übersteuert. Antippen holt ein Quell-Pad zurück.
+
 **Eingang pro Pad** (•••-Menü → „Eingang“): **🎙 Mikrofon** oder **〰 Wave** – Wave nimmt auf ein leeres Pad auf, was die App gerade ausgibt (inkl. Effekte und XY-Modulation). So lässt sich ein Pad mit Effekt direkt auf das Nachbar-Pad aufnehmen. Das Symbol unten links am Pad zeigt den Eingang.
 
 Unten zwei Schalter:

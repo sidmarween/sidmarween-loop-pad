@@ -63,6 +63,12 @@ class MainActivity : Activity() {
             if (i < Engine.PADS) Engine.padSource[i] = v.toIntOrNull() ?: 0
         }
         Engine.liveBars = prefs.getInt("liveBars", 0)
+        Engine.bounce = prefs.getBoolean("bounce", true)
+        Engine.onBounced = { pad, muted ->
+            runOnUiThread {
+                toast("Bounce → Pad ${pad + 1} · stumm: " + muted.joinToString(", ") { "Pad ${it + 1}" } + " (antippen holt sie zurück)")
+            }
+        }
         pads.onRecSettingsChanged = {
             saveRecPrefs()
             val sum = Engine.sourceSummary(PadView.VISIBLE_PADS)
@@ -350,6 +356,7 @@ class MainActivity : Activity() {
                 "📂 Projekt laden",
                 "✨ Neues Projekt",
                 "🎙 Meine Aufnahmen",
+                if (Engine.bounce) "🔁 Bounce: AN (Quellen nach Wave-Aufnahme stumm)" else "🔁 Bounce: AUS",
                 "🎨 Design wählen"
             )) { _, which ->
                 when (which) {
@@ -360,6 +367,11 @@ class MainActivity : Activity() {
                         toast("Neues Projekt")
                     }
                     3 -> showRecordings()
+                    4 -> {
+                        Engine.bounce = !Engine.bounce
+                        getSharedPreferences("marvpad", MODE_PRIVATE).edit().putBoolean("bounce", Engine.bounce).apply()
+                        toast(if (Engine.bounce) "Bounce an: nach einer Wave-Aufnahme spielt nur noch das neue Pad" else "Bounce aus: Quell-Pads spielen weiter")
+                    }
                     else -> showDesigns()
                 }
             }
