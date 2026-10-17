@@ -241,9 +241,31 @@ class MainActivity : Activity() {
         ensureStarted()
     }
 
+    /** Dateiauswahl läuft: Audio nicht anhalten (Musik spielt weiter, während man eine Datei wählt). */
+    private var pickerOpen = false
+
+    @Deprecated("Activity-Result-API wird hier bewusst nicht genutzt (keine AndroidX-Abhängigkeit)")
+    override fun startActivityForResult(intent: Intent, requestCode: Int) {
+        pickerOpen = true
+        @Suppress("DEPRECATION")
+        super.startActivityForResult(intent, requestCode)
+    }
+
+    override fun onResume() {
+        super.onResume()
+        pickerOpen = false
+    }
+
     override fun onStop() {
-        Engine.stop()
+        // Während einer Dateiauswahl oder wenn im DJ-Modus ein Deck läuft, spielt die Musik weiter
+        val djPlaying = djMode && (Dj.decks[0].playing || Dj.decks[1].playing)
+        if (!pickerOpen && !djPlaying) Engine.stop()
         super.onStop()
+    }
+
+    override fun onDestroy() {
+        if (isFinishing) Engine.stop()
+        super.onDestroy()
     }
 
     private fun hasMic() = checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
