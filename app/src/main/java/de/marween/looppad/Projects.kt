@@ -57,6 +57,7 @@ object Projects {
             o.put("slices", sv.slices)
             o.put("bars", sv.bars.toDouble())
             o.put("semi", sv.semi)
+            o.put("src", Engine.padSource[p])
             val na = JSONArray()
             for (ev in Engine.getNotes(p)) {
                 val e = JSONArray()
@@ -118,6 +119,7 @@ object Projects {
         } else null
         Engine.restore(pads, master, j.optDouble("bpm", 0.0).toFloat(), pattern)
         for (p in 0 until min(Engine.PADS, pa.length())) {
+            Engine.padSource[p] = pa.getJSONObject(p).optInt("src", Engine.padSource[p])
             val na = pa.getJSONObject(p).optJSONArray("notes") ?: continue
             val list = ArrayList<FloatArray>()
             for (q in 0 until na.length()) {

@@ -59,12 +59,15 @@ class MainActivity : Activity() {
         }
         pads.onTempo = { showTempo() }
         val prefs = getSharedPreferences("marvpad", MODE_PRIVATE)
-        Engine.recSource = prefs.getInt("recSource", 0)
+        prefs.getString("padSource", null)?.split(",")?.forEachIndexed { i, v ->
+            if (i < Engine.PADS) Engine.padSource[i] = v.toIntOrNull() ?: 0
+        }
         Engine.liveBars = prefs.getInt("liveBars", 0)
         pads.onRecSettingsChanged = {
-            prefs.edit().putInt("recSource", Engine.recSource).putInt("liveBars", Engine.liveBars).apply()
+            saveRecPrefs()
+            val sum = Engine.sourceSummary(PadView.VISIBLE_PADS)
             toast(
-                (if (Engine.recSource == 1) "Quelle: Resample (App-Ausgang inkl. Effekte)" else "Quelle: Mikrofon") +
+                (when (sum) { 1 -> "Eingang aller Pads: Wave (App-Audio inkl. Effekte)"; 2 -> "Eingang: gemischt"; else -> "Eingang aller Pads: Mikrofon" }) +
                     " · " + (if (Engine.liveBars > 0) "Live: leeres Pad antippen, Aufnahme ab nächstem Takt (${Engine.liveBars} Takt)" else "Halten zum Aufnehmen")
             )
         }
@@ -153,12 +156,26 @@ class MainActivity : Activity() {
     private var exportData: FloatArray? = null
     private var exportRate = 48000
 
+    private fun saveRecPrefs() {
+        getSharedPreferences("marvpad", MODE_PRIVATE).edit()
+            .putString("padSource", Engine.padSource.joinToString(","))
+            .putInt("liveBars", Engine.liveBars)
+            .apply()
+    }
+
     private fun showPadMenu(p: Int) {
         menuPad = p
         val has = Engine.hasLoop(p)
         val shot = Engine.isOneShot(p)
         val labels = ArrayList<String>()
         val actions = ArrayList<() -> Unit>()
+        val wave = Engine.padSource[p] == 1
+        labels.add(if (wave) "Eingang: 〰 Wave (App-Audio)  →  auf 🎙 Mikrofon" else "Eingang: 🎙 Mikrofon  →  auf 〰 Wave (App-Audio)")
+        actions.add {
+            Engine.padSource[p] = if (wave) 0 else 1
+            saveRecPrefs()
+            toast(if (wave) "Pad ${p + 1} nimmt vom Mikrofon auf" else "Pad ${p + 1} nimmt das App-Audio inkl. Effekte auf")
+        }
         labels.add(if (shot) "Modus: ⚡ ONE SHOT  →  auf ∞ LOOP umschalten" else "Modus: ∞ LOOP  →  auf ⚡ ONE SHOT umschalten")
         actions.add { Engine.setPadMode(p, !shot) }
         labels.add("Aus Bibliothek laden")

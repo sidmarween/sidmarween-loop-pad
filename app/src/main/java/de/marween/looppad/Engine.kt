@@ -1446,7 +1446,7 @@ object Engine {
             return true
         }
         val now = System.nanoTime()
-        if (loop == null && (liveBars > 0 || recSource == 1)) {
+        if (loop == null && (liveBars > 0 || padSource[p] == 1)) {
             startNewTake(p, now)
             return false
         }
@@ -1457,8 +1457,21 @@ object Engine {
 
     // ---------------------------------------------------------------- Resample & Live-Aufnahme
 
-    /** 0 = Mikrofon, 1 = Resample (nimmt auf, was die App ausgibt – inkl. Effekte). */
-    @Volatile var recSource = 0
+    /** Eingang je Pad: 0 = Mikrofon, 1 = Wave (nimmt auf, was die App ausgibt – inkl. Effekte). */
+    val padSource = IntArray(PADS)
+
+    /** Alle Pads auf einen Eingang stellen. */
+    fun setAllSources(src: Int) {
+        for (p in 0 until PADS) padSource[p] = src
+    }
+
+    /** 0 = alle Mikro, 1 = alle Wave, 2 = gemischt (nur sichtbare Pads). */
+    fun sourceSummary(n: Int): Int {
+        var mic = false
+        var wave = false
+        for (p in 0 until min(n, PADS)) if (padSource[p] == 1) wave = true else mic = true
+        return if (mic && wave) 2 else if (wave) 1 else 0
+    }
     /** 0 = Halten zum Aufnehmen, sonst Live-Modus mit fester Länge in Takten (1, 2, 4). */
     @Volatile var liveBars = 0
 
@@ -1477,7 +1490,7 @@ object Engine {
 
     private fun startNewTake(p: Int, now: Long) {
         val t = Take(false, max(0L, inClock.frameAt(now, sampleRate)), now, padOneShot[p])
-        t.src = recSource
+        t.src = padSource[p]
         t.live = liveBars > 0
         val heard = outClock.frameAt(now, sampleRate)
         val m = masterLen

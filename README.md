@@ -68,8 +68,10 @@ Unter jedem Pad sitzt ein kleiner **•••**-Knopf:
 
 ## Resample & Live-Aufnahme
 
+**Eingang pro Pad** (•••-Menü → „Eingang“): **🎙 Mikrofon** oder **〰 Wave** – Wave nimmt auf ein leeres Pad auf, was die App gerade ausgibt (inkl. Effekte und XY-Modulation). So lässt sich ein Pad mit Effekt direkt auf das Nachbar-Pad aufnehmen. Das Symbol unten links am Pad zeigt den Eingang.
+
 Unten zwei Schalter:
-- **🎙 MIKRO ↔ 🔁 RESAMPLE** – Resample nimmt auf ein leeres Pad auf, was die App gerade ausgibt (inkl. Effekte und XY-Modulation). So lässt sich ein Pad mit Effekt direkt auf das Nachbar-Pad aufnehmen.
+- **🎙 ALLE MIKRO ↔ 🔁 ALLE WAVE** – stellt den Eingang aller Pads auf einmal um (zeigt „GEMISCHT“, wenn Pads unterschiedlich eingestellt sind).
 - **✋ HALTEN ↔ ⚡ LIVE 1/2/4 TAKTE** – Im Live-Modus ein leeres Pad nur antippen: es zeigt „BEREIT“, die Aufnahme startet auf dem nächsten Takt, läuft genau die eingestellte Länge, stoppt selbst und spielt sofort synchron weiter. Erneutes Antippen bricht ab. Ohne Tempo: Antippen startet, nochmal Antippen stoppt.
 
 ## Effekte

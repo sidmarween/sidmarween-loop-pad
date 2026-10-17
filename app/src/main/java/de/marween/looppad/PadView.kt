@@ -531,6 +531,7 @@ class PadView(context: Context) : View(context) {
             drawPad(canvas, i, dt)
             drawMore(canvas, i)
             drawKeyButton(canvas, i)
+            drawInputBadge(canvas, i)
         }
         drawSequencer(canvas)
         drawShocks(canvas, dt)
@@ -935,7 +936,7 @@ class PadView(context: Context) : View(context) {
             Engine.PadState.ONESHOT -> String.format(Locale.GERMANY, "⚡ %.1fs", Engine.loopSeconds(i))
             Engine.PadState.PLAYING -> String.format(Locale.GERMANY, "∞ %.1fs", Engine.loopSeconds(i))
             Engine.PadState.MUTED -> "AUS"
-            Engine.PadState.RECORDING -> if (Engine.isArmed(i)) "BEREIT" else String.format(Locale.GERMANY, "%s %.1f", if (Engine.recSource == 1) "RS" else "REC", Engine.recordingSeconds(i))
+            Engine.PadState.RECORDING -> if (Engine.isArmed(i)) "BEREIT" else String.format(Locale.GERMANY, "%s %.1f", if (Engine.padSource[i] == 1) "WAVE" else "REC", Engine.recordingSeconds(i))
             Engine.PadState.OVERDUB -> "DUB"
         }
         if (label.isNotEmpty()) {
@@ -1156,14 +1157,55 @@ class PadView(context: Context) : View(context) {
             canvas.drawText("Tippe auf ein Pad, um es zu löschen", w / 2f, top + dp(15f), textPaint)
         } else {
             val cols = overlayColors()
-            val rs = Engine.recSource == 1
+            val sum = Engine.sourceSummary(VISIBLE_PADS)
             val live = Engine.liveBars > 0
-            footerPill(canvas, srcPill, if (rs) "🔁 RESAMPLE" else "🎙 MIKRO", rs, cols)
+            footerPill(canvas, srcPill, when (sum) { 1 -> "🔁 ALLE WAVE"; 2 -> "🎙/🔁 GEMISCHT"; else -> "🎙 ALLE MIKRO" }, sum != 0, cols)
             footerPill(canvas, modePill, if (live) "⚡ LIVE ${Engine.liveBars} TAKT" + (if (Engine.liveBars > 1) "E" else "") else "✋ HALTEN", live, cols)
         }
         textPaint.textSize = dp(9f)
         textPaint.color = alpha(BRAND_ORANGE, 0.8f)
         canvas.drawText("© marween", w / 2f, height - insetBottom - dp(2f), textPaint)
+    }
+
+    /** Kleines Eingangs-Symbol oben links am Pad (🎙 Mikro / 〰 Wave). */
+    private fun drawInputBadge(canvas: Canvas, i: Int) {
+        val r = padRects[i]
+        if (r.width() <= 0f) return
+        val wave = Engine.padSource[i] == 1
+        val cols = overlayColors()
+        val sz = min(dp(18f), r.width() * 0.2f)
+        val cx = r.left + sz * 0.5f + dp(5f)
+        val cy = r.bottom - sz * 0.5f - dp(5f)
+        if (!wave && Engine.hasLoop(i)) return
+        fillPaint.shader = null
+        fillPaint.color = if (wave) cols[2] else alpha(cols[0], 0.7f)
+        canvas.drawCircle(cx, cy, sz * 0.5f, fillPaint)
+        strokePaint.strokeWidth = dp(1f)
+        strokePaint.color = if (wave) Color.WHITE else alpha(cols[1], 0.5f)
+        canvas.drawCircle(cx, cy, sz * 0.5f, strokePaint)
+        val ic = if (wave) Color.WHITE else alpha(cols[1], 0.8f)
+        strokePaint.color = ic
+        strokePaint.strokeCap = Paint.Cap.ROUND
+        if (wave) {
+            // kleine Welle
+            strokePaint.strokeWidth = dp(1.5f)
+            val pth = Path()
+            val w2 = sz * 0.32f
+            pth.moveTo(cx - w2, cy)
+            pth.cubicTo(cx - w2 * 0.5f, cy - sz * 0.3f, cx - w2 * 0.1f, cy - sz * 0.3f, cx, cy)
+            pth.cubicTo(cx + w2 * 0.1f, cy + sz * 0.3f, cx + w2 * 0.5f, cy + sz * 0.3f, cx + w2, cy)
+            canvas.drawPath(pth, strokePaint)
+        } else {
+            // kleines Mikrofon
+            strokePaint.strokeWidth = dp(1.3f)
+            val mw = sz * 0.14f
+            tmpRect.set(cx - mw, cy - sz * 0.28f, cx + mw, cy + sz * 0.04f)
+            canvas.drawRoundRect(tmpRect, mw, mw, strokePaint)
+            tmpRect.set(cx - mw * 1.9f, cy - sz * 0.12f, cx + mw * 1.9f, cy + sz * 0.16f)
+            canvas.drawArc(tmpRect, 0f, 180f, false, strokePaint)
+            canvas.drawLine(cx, cy + sz * 0.16f, cx, cy + sz * 0.26f, strokePaint)
+        }
+        strokePaint.strokeCap = Paint.Cap.BUTT
     }
 
     private fun footerPill(canvas: Canvas, r: RectF, label: String, on: Boolean, cols: IntArray) {
@@ -1602,7 +1644,7 @@ class PadView(context: Context) : View(context) {
                     return true
                 }
                 if (!clearMode && srcPill.contains(x, y)) {
-                    Engine.recSource = 1 - Engine.recSource
+                    Engine.setAllSources(if (Engine.sourceSummary(VISIBLE_PADS) == 0) 1 else 0)
                     performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
                     burst(x, y, overlayColors()[2], 12, 160f)
                     onRecSettingsChanged?.invoke()
@@ -2193,7 +2235,7 @@ class PadView(context: Context) : View(context) {
             Engine.PadState.ONESHOT -> String.format(Locale.GERMANY, "%.1fs", Engine.loopSeconds(i))
             Engine.PadState.PLAYING -> String.format(Locale.GERMANY, "∞ %.1fs", Engine.loopSeconds(i))
             Engine.PadState.MUTED -> "AUS"
-            Engine.PadState.RECORDING -> if (Engine.isArmed(i)) "BEREIT" else String.format(Locale.GERMANY, "%s %.1f", if (Engine.recSource == 1) "RS" else "REC", Engine.recordingSeconds(i))
+            Engine.PadState.RECORDING -> if (Engine.isArmed(i)) "BEREIT" else String.format(Locale.GERMANY, "%s %.1f", if (Engine.padSource[i] == 1) "WAVE" else "REC", Engine.recordingSeconds(i))
             Engine.PadState.OVERDUB -> "DUB"
         }
         if (label.isNotEmpty()) {
@@ -3228,7 +3270,7 @@ class PadView(context: Context) : View(context) {
             Engine.PadState.ONESHOT -> String.format(Locale.GERMANY, "%.1fs", Engine.loopSeconds(i))
             Engine.PadState.PLAYING -> String.format(Locale.GERMANY, "∞ %.1fs", Engine.loopSeconds(i))
             Engine.PadState.MUTED -> "AUS"
-            Engine.PadState.RECORDING -> if (Engine.isArmed(i)) "BEREIT" else String.format(Locale.GERMANY, "%s %.1f", if (Engine.recSource == 1) "RS" else "REC", Engine.recordingSeconds(i))
+            Engine.PadState.RECORDING -> if (Engine.isArmed(i)) "BEREIT" else String.format(Locale.GERMANY, "%s %.1f", if (Engine.padSource[i] == 1) "WAVE" else "REC", Engine.recordingSeconds(i))
             Engine.PadState.OVERDUB -> "DUB"
         }
         if (label.isNotEmpty()) {
