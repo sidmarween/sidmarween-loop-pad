@@ -68,7 +68,7 @@ Unter jedem Pad sitzt ein kleiner **•••**-Knopf:
 
 ## Effekte
 
-Über den Pads liegt die **XY-Fläche**: Finger drauf = Effekt an, X- und Y-Achse modulieren ihn.
+Über den Pads liegt die **XY-Fläche**: Finger drauf = Effekt an, X- und Y-Achse modulieren ihn. **🔒 HOLD** (Ecke oben rechts) hält den Effekt an der letzten Position aktiv, auch ohne Finger – auf der Fläche ziehen verschiebt ihn weiter, nochmal HOLD schaltet ihn aus.
 Darüber vier **Drehregler** (nach oben/unten ziehen): MIX, zwei effektabhängige Parameter, VOL.
 Der **Effekt-Knopf** schaltet durch (links tippen = zurück, rechts = weiter, lange drücken = Liste):
 

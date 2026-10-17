@@ -55,6 +55,57 @@ class PadView(context: Context) : View(context) {
     private val knobStartY = HashMap<Int, Float>()
     private val knobStartVal = HashMap<Int, Float>()
     private var xyPointer = -1
+    /** HOLD: Effekt bleibt aktiv, auch ohne Finger auf der XY-Fläche. */
+    private var xyHold = false
+    private val holdRect = RectF()
+
+    private fun updateHoldRect() {
+        val r = xyRect
+        val w = dp(70f)
+        val h = dp(30f)
+        holdRect.set(r.right - dp(8f) - w, r.top + dp(8f), r.right - dp(8f), r.top + dp(8f) + h)
+    }
+
+    private fun drawHoldButton(canvas: Canvas) {
+        if (xyRect.width() <= 0f) return
+        updateHoldRect()
+        val r = holdRect
+        val cols = overlayColors()
+        val rr = r.height() / 2f
+        val on = xyHold
+        val pulse = 0.5f + 0.5f * sin(time * 6f)
+        fillPaint.shader = null
+        if (on) {
+            fillPaint.color = alpha(cols[2], 0.25f + 0.2f * pulse)
+            tmpRect.set(r.left - dp(4f), r.top - dp(4f), r.right + dp(4f), r.bottom + dp(4f))
+            canvas.drawRoundRect(tmpRect, rr + dp(4f), rr + dp(4f), fillPaint)
+        }
+        fillPaint.color = if (on) cols[2] else alpha(cols[0], 0.85f)
+        canvas.drawRoundRect(r, rr, rr, fillPaint)
+        strokePaint.strokeWidth = dp(1.5f)
+        strokePaint.color = if (on) Color.WHITE else alpha(cols[1], 0.6f)
+        canvas.drawRoundRect(r, rr, rr, strokePaint)
+        // Schloss-Symbol
+        val lx = r.left + dp(16f)
+        val ly = r.centerY() + dp(2f)
+        val ic = if (on) Color.WHITE else cols[1]
+        fillPaint.color = ic
+        canvas.drawRoundRect(lx - dp(5f), ly - dp(3f), lx + dp(5f), ly + dp(5f), dp(1.5f), dp(1.5f), fillPaint)
+        strokePaint.strokeWidth = dp(1.6f)
+        strokePaint.color = ic
+        tmpRect.set(lx - dp(3.5f), ly - dp(9f), lx + dp(3.5f), ly - dp(1f))
+        canvas.drawArc(tmpRect, 180f, if (on) 180f else 150f, false, strokePaint)
+        textPaint.textSize = dp(11f)
+        textPaint.color = ic
+        canvas.drawText("HOLD", r.centerX() + dp(9f), r.centerY() + dp(4f), textPaint)
+    }
+
+    private fun toggleHold() {
+        xyHold = !xyHold
+        Engine.fxTouch = xyHold || xyPointer >= 0
+        performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+        burst(holdRect.centerX(), holdRect.centerY(), overlayColors()[2], 16, 200f)
+    }
     private var xyDispX = 0.5f
     private var xyDispY = 0.5f
     private var xyGlow = 0f
@@ -412,6 +463,7 @@ class PadView(context: Context) : View(context) {
         drawKnobs(canvas)
         drawFxButton(canvas, dt)
         drawXy(canvas, dt)
+        drawHoldButton(canvas)
         for (i in 0 until VISIBLE_PADS) {
             drawPad(canvas, i, dt)
             drawMore(canvas, i)
@@ -535,7 +587,7 @@ class PadView(context: Context) : View(context) {
             yy += dp(3f)
         }
         val pad = dp(8f)
-        val touching = xyPointer >= 0
+        val touching = xyPointer >= 0 || xyHold
         textPaint.textAlign = Paint.Align.LEFT
         // Zeile 1: Nummer + Name
         textPaint.textSize = dp(9f)
@@ -1244,7 +1296,7 @@ class PadView(context: Context) : View(context) {
     private fun drawXy(canvas: Canvas, dt: Float) {
         val r = xyRect
         if (r.width() <= 0f) return
-        val touching = xyPointer >= 0
+        val touching = xyPointer >= 0 || xyHold
         xyGlow += ((if (touching) 1f else 0f) - xyGlow) * min(1f, dt * 10f)
         if (skinned) { drawXySkin(canvas, dt); return }
         if (light) { drawXyLight(canvas, dt); return }
@@ -1545,6 +1597,10 @@ class PadView(context: Context) : View(context) {
                     performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
                     return true
                 }
+                if (holdRect.contains(x, y) && xyRect.contains(x, y)) {
+                    toggleHold()
+                    return true
+                }
                 if (xyRect.contains(x, y)) {
                     if (xyPointer < 0) {
                         xyPointer = id
@@ -1643,7 +1699,7 @@ class PadView(context: Context) : View(context) {
                 }
                 if (upId == xyPointer) {
                     xyPointer = -1
-                    Engine.fxTouch = false
+                    Engine.fxTouch = xyHold
                     return true
                 }
                 if (pointerKnob.remove(upId) != null) {
@@ -1659,7 +1715,7 @@ class PadView(context: Context) : View(context) {
                 fxPointer = -1
                 removeCallbacks(fxLongPress)
                 xyPointer = -1
-                Engine.fxTouch = false
+                Engine.fxTouch = xyHold
                 pointerKnob.clear()
                 val held = ArrayList<Int>()
                 for ((pid, pad) in pointerPad) if (!shotPointers.contains(pid)) held.add(pad)
@@ -1840,7 +1896,7 @@ class PadView(context: Context) : View(context) {
         canvas.save()
         canvas.clipRect(r.left + dp(3f), r.top + dp(3f), r.right - dp(3f), r.bottom - dp(3f))
         val pad = dp(9f)
-        val touching = xyPointer >= 0
+        val touching = xyPointer >= 0 || xyHold
         textPaint.textAlign = Paint.Align.LEFT
         textPaint.textSize = dp(9f)
         textPaint.color = alpha(txt, 0.7f)
@@ -2288,7 +2344,7 @@ class PadView(context: Context) : View(context) {
 
     private fun drawXyLight(canvas: Canvas, dt: Float) {
         val r = xyRect
-        val touching = xyPointer >= 0
+        val touching = xyPointer >= 0 || xyHold
         val fx = r.left + r.width() * xyDispX
         val fy = r.bottom - r.height() * xyDispY
         if (theme == RETRO) {
@@ -2610,7 +2666,7 @@ class PadView(context: Context) : View(context) {
         val txt = sk.lcdText
         val type = Engine.fxType
         val pad = dp(9f)
-        val touching = xyPointer >= 0
+        val touching = xyPointer >= 0 || xyHold
         canvas.save()
         canvas.clipRect(r.left + dp(2f), r.top + dp(2f), r.right - dp(2f), r.bottom - dp(2f))
         textPaint.textAlign = Paint.Align.LEFT
@@ -2780,7 +2836,7 @@ class PadView(context: Context) : View(context) {
     private fun drawXySkin(canvas: Canvas, dt: Float) {
         val sk = skin
         val r = xyRect
-        val touching = xyPointer >= 0
+        val touching = xyPointer >= 0 || xyHold
         val fx = r.left + r.width() * xyDispX
         val fy = r.bottom - r.height() * xyDispY
         val rr = dp(if (sk.xyStyle == XY_GLOW) 14f else 10f)
