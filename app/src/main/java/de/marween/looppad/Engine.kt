@@ -107,6 +107,11 @@ object Engine {
     @Volatile private var seqOrigin = 0L
 
     private fun seqBar(): Long = if (masterLen > 0L) masterLen else sampleRate * 2L
+
+    /** Shuffle/Swing 0..1: verschiebt jede zweite 1/16 um bis zu eine halbe 1/16 nach hinten (50 % … 75 %). */
+    @Volatile var swing = 0f
+
+    private fun swingOffset(bar: Long): Long = (swing * 0.5f * bar / STEPS).toLong()
     private fun seqStart(): Long = if (masterLen > 0L) masterStart else seqOrigin
     private fun stepFrame(origin: Long, bar: Long, n: Long): Long = origin + Math.floorDiv(n * bar, STEPS.toLong())
 
@@ -163,11 +168,13 @@ object Engine {
         if (bar <= 0L) return
         runRoll(w, block)
         val origin = seqStart()
-        var n = -Math.floorDiv(-(w - origin) * STEPS, bar) // ceil
+        val sw = swingOffset(bar)
+        var n = -Math.floorDiv(-(w - origin) * STEPS, bar) - 1 // ceil, einen früher wegen Swing
         while (true) {
-            val f = stepFrame(origin, bar, n)
-            if (f >= w + block) break
-            if (f >= w) {
+            val base = stepFrame(origin, bar, n)
+            if (base >= w + block) break
+            val f = if (Math.floorMod(n, 2L) == 1L) base + sw else base
+            if (f >= w && f < w + block) {
                 val step = Math.floorMod(n, STEPS.toLong()).toInt()
                 for (p in 0 until PADS) {
                     val vel = seq[p][step]
@@ -273,7 +280,7 @@ object Engine {
                 if (vel <= 0f) continue
                 any = true
                 for (b in 0 until nb) {
-                    val st = b * bar1 + ((k.toLong() * bar1) / STEPS).toInt()
+                    val st = b * bar1 + ((k.toLong() * bar1) / STEPS).toInt() + if (k % 2 == 1) swingOffset(bar1.toLong()).toInt() else 0
                     for (i in d.indices) {
                         val idx = (st + i) % bar
                         out[idx] += d[i] * vel
@@ -291,7 +298,8 @@ object Engine {
                 val rate = 2.0.pow(ev.semi / 12.0)
                 val lenF = max(64, (ev.len * bar1).toInt())
                 for (rep in 0 until nb / rb) {
-                val st = ((rep * rb + ev.pos) * bar1).toInt()
+                val u = (ev.pos * STEPS) % 2.0
+                val st = ((rep * rb + ev.pos) * bar1).toInt() + if (abs(u - 1.0) < 0.25) swingOffset(bar1.toLong()).toInt() else 0
                 val a3 = ev.vel
                 val rel = (sampleRate * 0.03).toInt()
                 var pos = 0.0
@@ -686,7 +694,9 @@ object Engine {
                 val l = loops.get(p) ?: continue
                 val loopLen = bar * rollBars[p]
                 for (ev in list) {
-                    val off = (ev.pos * bar).toLong()
+                    // Swing: Noten auf ungeraden 1/16 nach hinten schieben
+                    val u = (ev.pos * STEPS) % 2.0
+                    val off = (ev.pos * bar).toLong() + if (abs(u - 1.0) < 0.25) swingOffset(bar) else 0L
                     val k = -Math.floorDiv(-(w - origin - off), loopLen)
                     val f = origin + k * loopLen + off
                     if (f >= end || f < w) continue

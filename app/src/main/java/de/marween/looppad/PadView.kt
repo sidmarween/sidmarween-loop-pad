@@ -44,7 +44,7 @@ class PadView(context: Context) : View(context) {
     private val padMeasures = Array(Engine.PADS) { PathMeasure() }
     private val padLengths = FloatArray(Engine.PADS)
     private val clearBtn = RectF()
-    private val knobRects = Array(4) { RectF() }
+    private val knobRects = Array(5) { RectF() }
     private val moreRects = Array(Engine.PADS) { RectF() }
     private val keyRects = Array(Engine.PADS) { RectF() }
     var onPadMenu: ((Int) -> Unit)? = null
@@ -370,9 +370,9 @@ class PadView(context: Context) : View(context) {
         // Drehregler
         val knobTop = by + topH + dp(8f)
         val kh = dp(80f)
-        val kw = (inner - 3 * gap) / 4f
+        val kw = (inner - 4 * gap) / 5f
         knobSize = min(kw, kh - dp(16f))
-        for (k in 0 until 4) {
+        for (k in 0 until 5) {
             val x = margin + k * (kw + gap)
             knobRects[k].set(x, knobTop, x + kw, knobTop + kh)
         }
@@ -1314,14 +1314,21 @@ class PadView(context: Context) : View(context) {
         0 -> "MIX"
         1 -> Fx.P1_LABELS[Engine.fxType]
         2 -> Fx.P2_LABELS[Engine.fxType]
-        else -> "VOL"
+        3 -> "VOL"
+        else -> "SWING"
+    }
+
+    private fun knobValue(k: Int): Float = if (k == 4) Engine.swing else Engine.knobs[k]
+
+    private fun setKnobValue(k: Int, v: Float) {
+        if (k == 4) Engine.swing = v else Engine.knobs[k] = v
     }
 
     private fun drawKnobs(canvas: Canvas) {
-        for (k in 0 until 4) {
+        for (k in 0 until 5) {
             val r = knobRects[k]
             if (r.width() <= 0f) continue
-            val v = Engine.knobs[k].coerceIn(0f, 1f)
+            val v = knobValue(k).coerceIn(0f, 1f)
             val active = pointerKnob.containsValue(k)
             val cx = r.centerX()
             val cy = r.top + knobSize / 2f + dp(2f)
@@ -1340,7 +1347,7 @@ class PadView(context: Context) : View(context) {
             textPaint.textSize = dp(10f)
             textPaint.color = ink(if (active) 1f else 0.75f)
             canvas.drawText(knobLabel(k), cx, r.bottom - dp(1f), textPaint)
-            val step = Fx.stepLabel(Engine.fxType, k, v)
+            val step = if (k == 4) "${50 + (v * 25).toInt()}%" else Fx.stepLabel(Engine.fxType, k, v)
             if (active || step != null) {
                 textPaint.textSize = dp(if (step != null && step.length > 3) 9f else 11f)
                 textPaint.color = if (skinned) skin.knobText else if (light) Color.BLACK else Color.WHITE
@@ -1781,11 +1788,11 @@ class PadView(context: Context) : View(context) {
                     postDelayed(fxLongPress, 450L)
                     return true
                 }
-                for (k in 0 until 4) {
+                for (k in 0 until 5) {
                     if (knobRects[k].contains(x, y)) {
                         pointerKnob[id] = k
                         knobStartY[id] = y
-                        knobStartVal[id] = Engine.knobs[k]
+                        knobStartVal[id] = knobValue(k)
                         return true
                     }
                 }
@@ -1901,7 +1908,7 @@ class PadView(context: Context) : View(context) {
                     val k = pointerKnob[id] ?: continue
                     val sy0 = knobStartY[id] ?: continue
                     val sv = knobStartVal[id] ?: continue
-                    Engine.knobs[k] = (sv + (sy0 - e.getY(pi)) / dp(180f)).coerceIn(0f, 1f)
+                    setKnobValue(k, (sv + (sy0 - e.getY(pi)) / dp(180f)).coerceIn(0f, 1f))
                 }
             }
             MotionEvent.ACTION_UP, MotionEvent.ACTION_POINTER_UP -> {

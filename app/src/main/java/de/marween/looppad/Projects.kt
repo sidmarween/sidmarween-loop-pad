@@ -58,6 +58,7 @@ object Projects {
         for (v in Engine.knobs) kn.put(v.toDouble())
         j.put("knobs", kn)
         j.put("metronome", Engine.metronome)
+        j.put("swing", Engine.swing.toDouble())
         val pa = JSONArray()
         for (p in pads.indices) {
             val sv = pads[p]
@@ -157,6 +158,7 @@ object Projects {
             for (sl in 1 until Engine.SLOTS) Engine.slotOn[sl] = false
         }
         Engine.metronome = j.optBoolean("metronome", false)
+        Engine.swing = j.optDouble("swing", 0.0).toFloat()
         val oldTarget = j.optInt("fxTarget", -1)
         for (p in 0 until Engine.PADS) {
             Engine.padFx[p] = if (p < pa.length()) pa.getJSONObject(p).optBoolean("fx", oldTarget < 0 || oldTarget == p) else true

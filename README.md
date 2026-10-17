@@ -93,7 +93,7 @@ Unten zwei Schalter:
 
 Über den Pads liegt die **XY-Fläche**: Finger drauf = Effekt an, X- und Y-Achse modulieren ihn. **🔒 HOLD** (Ecke oben rechts) hält den Effekt an der letzten Position aktiv, auch ohne Finger – auf der Fläche ziehen verschiebt ihn weiter, nochmal HOLD schaltet ihn aus.
 **● REC** daneben speichert Fingerbewegungen: tippen → Fläche berühren startet die Aufnahme → nochmal tippen beendet sie. Die Bewegung wird auf Schläge gerundet und läuft als **▶ AUTO** synchron zum Takt in Schleife (Cursor fährt mit). Selbst anfassen hat Vorrang; AUTO antippen löscht sie.
-Darüber vier **Drehregler** (nach oben/unten ziehen): MIX, zwei effektabhängige Parameter, VOL.
+Darüber fünf **Drehregler** (nach oben/unten ziehen): MIX, zwei effektabhängige Parameter, VOL und **SWING** (Shuffle: verschiebt jede zweite 1/16 im Sequenzer und in der Matrix nach hinten, 50 % = gerade … 75 % = stark geshuffelt).
 Der **Effekt-Knopf** schaltet durch (links tippen = zurück, rechts = weiter, lange drücken = Liste):
 
 **Filter:** LOWPASS · HIGHPASS · BANDPASS · NOTCH (je 12/24/36/48 dB über den STEIL-Regler) · BELL (Peaking-EQ, ±18 dB, 1–3 Stufen) · PEAK (Resonanzspitze) · COMB (Feedback oder Feedforward)
