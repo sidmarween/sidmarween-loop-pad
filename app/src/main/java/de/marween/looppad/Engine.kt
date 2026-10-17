@@ -302,6 +302,8 @@ object Engine {
         clearUndo()
         clearSolo()
         resetScenes()
+        arrClear()
+        songMode = false
         repeatAllUp()
         for (p in 0 until PADS) {
             takes.set(p, null)
@@ -346,6 +348,7 @@ object Engine {
         restore(Array(PADS) { PadSave(null, false, false) }, 0L, 0f, null)
         InstState.acidClear()
         InstState.drumClear()
+        padFxFromJson(null)
     }
 
     /** Rendert das Sequenzer-Pattern als nahtlosen Ein-Takt-Loop. */
@@ -602,14 +605,14 @@ object Engine {
     /** Vorhören eines Ausschnitts (Wave-Editor). */
     fun preview(data: FloatArray): Int = startVoice(data, -1, 1.0, false)
 
-    private fun renderVoices(out: FloatArray, bus: FloatArray, block: Int, w: Long) {
+    private fun renderVoices(out: FloatArray, bus: FloatArray, block: Int, w: Long, chain: BooleanArray, padBufs: Array<FloatArray>) {
         synchronized(voiceLock) {
             val relStep = 1f / (0.12f * sampleRate)
             for (v in voices) {
                 if (!v.active) continue
                 val d = v.data
                 val len = d.size
-                val dst = if (v.pad >= 0 && padFx[v.pad]) bus else out
+                val dst = if (v.pad in 0 until PADS && chain[v.pad]) padBufs[v.pad] else if (v.pad >= 0 && padFx[v.pad]) bus else out
                 val pg = if (v.pad in 0 until PADS) (loops.get(v.pad)?.gain ?: 1f) else 1f
                 var peak = 0f
                 for (i in 0 until block) {
@@ -1206,6 +1209,7 @@ object Engine {
         if (fxs == null || fxRate != sampleRate) {
             fxs = Array(SLOTS) { Fx(sampleRate) }
             fxRate = sampleRate
+            for (p in 0 until PADS) for (sl in 0 until 3) if (pfxInst[p][sl] != null) pfxInst[p][sl] = Fx(sampleRate)
         }
 
         captured = 0L
@@ -1554,6 +1558,8 @@ object Engine {
         val dryBuf = FloatArray(block)
         val micBuf = FloatArray(block)
         val instScratch = FloatArray(block)
+        val padBufs = Array(PADS) { FloatArray(block) }
+        val chainNow = BooleanArray(PADS)
         micCursor = -1L
         val ts = AudioTimestamp()
         while (running) {
@@ -1566,12 +1572,16 @@ object Engine {
             val mlen = masterLen
             val transport = seqPlaying
             for (p in 0 until PADS) {
+                chainNow[p] = padChainActive(p)
+                if (chainNow[p]) java.util.Arrays.fill(padBufs[p], 0f)
+            }
+            for (p in 0 until PADS) {
                 val loop = loops.get(p)
                 if (loop == null) {
                     levels[p] *= 0.9f
                     continue
                 }
-                val dst = if (padFx[p]) bus else out
+                val dst = if (chainNow[p]) padBufs[p] else if (padFx[p]) bus else out
                 val pa = loop.pendAt
                 if (pa != Long.MIN_VALUE && pa < w + block) {
                     // quantisierter Start/Stopp genau auf dem Rasterpunkt
@@ -1668,7 +1678,22 @@ object Engine {
                 loop.fade = fg
                 levels[p] = max(if (mute) peak * 0.25f else peak, levels[p] * 0.88f)
             }
-            renderVoices(out, bus, block, w)
+            renderVoices(out, bus, block, w, chainNow, padBufs)
+            // Effekt-Kette je Pad (bis zu 3 Effekte), danach in den Mix
+            val micP = fillMic(micBuf, block)
+            for (p in 0 until PADS) {
+                if (!chainNow[p]) continue
+                val pb = padBufs[p]
+                for (sl in 0 until 3) {
+                    val t = pfxType[p][sl]
+                    val fx = pfxInst[p][sl] ?: continue
+                    if (t < 0) continue
+                    val pr = pfxPar[p][sl]
+                    fx.process(pb, block, w, t, pr[0], pr[1], true, pr[2], pr[3], pr[4], masterLen, masterStart, micP)
+                }
+                val dst = if (padFx[p]) bus else out
+                for (i in 0 until block) dst[i] += pb[i]
+            }
             // SOLO auf einem Pad: Instrumente laufen weiter, sind aber nicht zu hören
             val soloed = soloAny
             if (soloed) java.util.Arrays.fill(instScratch, 0f)
@@ -1680,7 +1705,7 @@ object Engine {
             motionTick(w, block)
             val chain = fxs
             if (chain != null) {
-                val mic = fillMic(micBuf, block)
+                val mic = micP
                 val es = editSlot
                 for (s in 0 until SLOTS) {
                     if (!slotOn[s]) continue
@@ -2196,6 +2221,8 @@ object Engine {
             if (!l.oneShot) l.start = start
         }
         sceneBarCount = 0
+        arrBar = 0
+        arrApplyNow = true
         seqPlaying = true
     }
 
@@ -2575,6 +2602,11 @@ object Engine {
         setNotes(dst, getNotes(src))
         padFx[dst] = padFx[src]
         padSource[dst] = padSource[src]
+        padChainOn[dst] = padChainOn[src]
+        for (k in 0 until 3) {
+            setPadFxType(dst, k, pfxType[src][k])
+            System.arraycopy(pfxPar[src][k], 0, pfxPar[dst][k], 0, 5)
+        }
         loops.set(dst, c)
         return true
     }
@@ -2703,6 +2735,10 @@ object Engine {
     /** Pro Mischer-Block: auf jeder Eins vorgemerkte Szene starten bzw. die Kette weiterschalten. */
     private fun sceneTick(w: Long, block: Int) {
         if (!seqPlaying) return
+        if (arrApplyNow) {
+            arrApplyNow = false
+            if (songMode) applyArr(0)
+        }
         val bar = seqBar()
         if (bar <= 0L) return
         val origin = seqStart()
@@ -2710,6 +2746,11 @@ object Engine {
         if (k <= 0L) return
         val f = origin + k * bar
         if (f >= w + block) return
+        arrBar = (arrBar + 1) % max(1, songBars)
+        if (songMode) {
+            applyArr(arrBar)
+            return
+        }
         sceneBarCount++
         if (queuedScene < 0 && sceneChain) {
             val s = scenes[curScene]
@@ -2744,6 +2785,160 @@ object Engine {
         }
         curScene = j.optInt("cur", 0).coerceIn(0, SCENES - 1)
         sceneChain = j.optBoolean("chain", false)
+    }
+
+    // ================================================================ Song-Arrangement (Spuren × Takte, wie Ableton)
+
+    /** 12 Pads + ACID + DRUM. */
+    const val ARR_ROWS = 14
+    const val ARR_MAX = 64
+    val arr = Array(ARR_ROWS) { BooleanArray(ARR_MAX) }
+    /** Szene, die ab diesem Takt gilt (-1 = keine Änderung). */
+    val arrScene = IntArray(ARR_MAX) { -1 }
+    @Volatile var songMode = false
+    @Volatile var songBars = 16
+    @Volatile private var arrBar = 0
+    @Volatile private var arrApplyNow = false
+
+    /** Aktueller Song-Takt (0-basiert). */
+    fun songBar(): Int = arrBar
+
+    private fun applyArr(bar: Int) {
+        if (bar !in 0 until ARR_MAX) return
+        val sc = arrScene[bar]
+        if (sc in 0 until SCENES && sc != curScene && scenes[sc] != null) switchScene(sc)
+        for (r in 0 until min(12, PADS)) loops.get(r)?.muted = !arr[r][bar]
+        InstState.acidOn = arr[12][bar]
+        InstState.drumOn = arr[13][bar]
+    }
+
+    /** Aktuelle Lage (was gerade läuft) in einen Takt schreiben. */
+    fun arrCaptureBar(bar: Int, pads: Int) {
+        if (bar !in 0 until ARR_MAX) return
+        for (r in 0 until min(12, pads)) {
+            val l = loops.get(r)
+            arr[r][bar] = l != null && !l.muted
+        }
+        arr[12][bar] = InstState.acidOn && InstState.acidHasNotes()
+        arr[13][bar] = InstState.drumOn && InstState.drumHasNotes()
+    }
+
+    /** Song aus den Szenen bauen: jede Szene so lange wie eingestellt, nacheinander. */
+    fun arrFillFromScenes(pads: Int) {
+        storeCurrentScene()
+        arrClear()
+        var bar = 0
+        for (i in 0 until SCENES) {
+            val s = scenes[i] ?: continue
+            if (bar >= ARR_MAX) break
+            arrScene[bar] = i
+            val acid = s.pat.inst.gate.any { it }
+            val drums = s.pat.inst.drums.any { r -> r.any { it > 0 } }
+            for (b in bar until min(ARR_MAX, bar + s.bars)) {
+                for (r in 0 until min(12, pads)) arr[r][b] = loops.get(r) != null && !s.mutes[r]
+                arr[12][b] = acid
+                arr[13][b] = drums
+            }
+            bar += s.bars
+        }
+        if (bar > 0) songBars = intArrayOf(4, 8, 16, 32, 64).firstOrNull { it >= bar } ?: 64
+    }
+
+    fun arrClear() {
+        for (row in arr) java.util.Arrays.fill(row, false)
+        java.util.Arrays.fill(arrScene, -1)
+    }
+
+    fun arrToJson(): org.json.JSONObject {
+        val j = org.json.JSONObject()
+        j.put("mode", songMode)
+        j.put("bars", songBars)
+        val a = org.json.JSONArray()
+        for (row in arr) a.put(String(CharArray(ARR_MAX) { if (row[it]) '1' else '0' }))
+        j.put("rows", a)
+        j.put("scenes", org.json.JSONArray().apply { arrScene.forEach { put(it) } })
+        return j
+    }
+
+    fun arrFromJson(j: org.json.JSONObject?) {
+        arrClear()
+        songMode = false
+        songBars = 16
+        if (j == null) return
+        songMode = j.optBoolean("mode", false)
+        songBars = j.optInt("bars", 16).coerceIn(1, ARR_MAX)
+        j.optJSONArray("rows")?.let { a ->
+            for (r in 0 until min(ARR_ROWS, a.length())) {
+                val str = a.optString(r)
+                for (b in 0 until min(ARR_MAX, str.length)) arr[r][b] = str[b] == '1'
+            }
+        }
+        j.optJSONArray("scenes")?.let { a -> for (b in 0 until min(ARR_MAX, a.length())) arrScene[b] = a.optInt(b, -1) }
+    }
+
+    // ================================================================ Effekte je Pad (bis zu 3 pro Pad)
+
+    /** Effekt-Kette des Pads an/aus (kleiner FX-Knopf am Pad). */
+    val padChainOn = BooleanArray(PADS)
+    /** Effekt je Platz (-1 = leer). */
+    val pfxType = Array(PADS) { IntArray(3) { -1 } }
+    /** X, Y, MIX, P1, P2 je Platz. */
+    val pfxPar = Array(PADS) { Array(3) { floatArrayOf(0.5f, 0.5f, 1f, 0.5f, 0.5f) } }
+    private val pfxInst = Array(PADS) { arrayOfNulls<Fx>(3) }
+
+    fun padChainActive(p: Int): Boolean = p in 0 until PADS && padChainOn[p] && pfxType[p].any { it >= 0 }
+
+    fun padFxCount(p: Int): Int = pfxType[p].count { it >= 0 }
+
+    fun setPadFxType(p: Int, slot: Int, type: Int) {
+        if (p !in 0 until PADS || slot !in 0 until 3) return
+        if (type < 0) {
+            pfxType[p][slot] = -1
+            pfxInst[p][slot] = null
+            return
+        }
+        val t = type.coerceIn(0, Fx.COUNT - 1)
+        if (pfxInst[p][slot] == null) pfxInst[p][slot] = Fx(if (sampleRate > 0) sampleRate else 48000)
+        pfxPar[p][slot][3] = Fx.P1_DEFAULT[t]
+        pfxPar[p][slot][4] = Fx.P2_DEFAULT[t]
+        pfxType[p][slot] = t
+    }
+
+    fun padFxToJson(): org.json.JSONArray {
+        val a = org.json.JSONArray()
+        for (p in 0 until PADS) {
+            val o = org.json.JSONObject()
+            o.put("on", padChainOn[p])
+            val sl = org.json.JSONArray()
+            for (k in 0 until 3) {
+                val so = org.json.JSONObject()
+                so.put("type", pfxType[p][k])
+                so.put("par", org.json.JSONArray().apply { pfxPar[p][k].forEach { put(it.toDouble()) } })
+                sl.put(so)
+            }
+            o.put("slots", sl)
+            a.put(o)
+        }
+        return a
+    }
+
+    fun padFxFromJson(a: org.json.JSONArray?) {
+        for (p in 0 until PADS) {
+            padChainOn[p] = false
+            for (k in 0 until 3) setPadFxType(p, k, -1)
+        }
+        if (a == null) return
+        for (p in 0 until min(PADS, a.length())) {
+            val o = a.optJSONObject(p) ?: continue
+            padChainOn[p] = o.optBoolean("on", false)
+            val sl = o.optJSONArray("slots") ?: continue
+            for (k in 0 until min(3, sl.length())) {
+                val so = sl.optJSONObject(k) ?: continue
+                val t = so.optInt("type", -1)
+                setPadFxType(p, k, t)
+                so.optJSONArray("par")?.let { pa -> for (i in 0 until min(5, pa.length())) pfxPar[p][k][i] = pa.optDouble(i).toFloat() }
+            }
+        }
     }
 
     // ================================================================ Clip-Launch & Warp (Ableton-Live-Prinzip)

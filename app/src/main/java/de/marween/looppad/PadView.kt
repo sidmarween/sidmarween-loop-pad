@@ -1496,6 +1496,16 @@ class PadView(context: Context) : View(context) {
     private var twoPad = -1
     private var twoLong = false
     var onImportMenu: ((Int) -> Unit)? = null
+    var onPadFxEditor: ((Int) -> Unit)? = null
+    private var fxBadgePointer = -1
+    private var fxBadgePad = -1
+    private var fxBadgeLong = false
+    private val fxBadgeLongPress = Runnable {
+        if (fxBadgePointer < 0) return@Runnable
+        fxBadgeLong = true
+        performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+        onPadFxEditor?.invoke(fxBadgePad)
+    }
     var onLaunchQuantChanged: (() -> Unit)? = null
     private val quantPill = RectF()
 
@@ -1906,8 +1916,8 @@ class PadView(context: Context) : View(context) {
     /** Trefferfläche des FX-Schalters unten rechts im Pad. */
     private fun fxBadgeRect(i: Int, out: RectF) {
         val r = padRects[i]
-        val h = min(dp(16f), r.width() * 0.18f)
-        val w = h * 1.7f
+        val h = min(dp(18f), r.width() * 0.2f)
+        val w = h * 2.5f
         out.set(r.right - w - dp(5f), r.bottom - h - dp(5f), r.right - dp(5f), r.bottom - dp(5f))
     }
 
@@ -1922,26 +1932,32 @@ class PadView(context: Context) : View(context) {
     private fun drawFxBadge(canvas: Canvas, i: Int) {
         val r = padRects[i]
         if (r.width() <= 0f) return
-        val on = Engine.padFx[i]
+        val n = Engine.padFxCount(i)
+        val on = Engine.padChainActive(i)
         val cols = overlayColors()
-        val h = min(dp(16f), r.width() * 0.18f)
+        val h = min(dp(18f), r.width() * 0.2f)
         fxBadgeRect(i, tmpRect)
         val rr = h / 2f
         fillPaint.shader = null
         fillPaint.color = if (on) cols[2] else alpha(cols[0], 0.8f)
         canvas.drawRoundRect(tmpRect, rr, rr, fillPaint)
         strokePaint.strokeWidth = dp(1f)
-        strokePaint.color = if (on) Color.WHITE else alpha(cols[1], 0.5f)
+        strokePaint.color = if (on) Color.WHITE else alpha(cols[1], if (n > 0) 0.7f else 0.4f)
         canvas.drawRoundRect(tmpRect, rr, rr, strokePaint)
-        textPaint.textSize = h * 0.62f
-        textPaint.color = if (on) Color.WHITE else alpha(cols[1], 0.7f)
-        canvas.drawText("FX", tmpRect.centerX(), tmpRect.centerY() + h * 0.22f, textPaint)
-        if (!on) {
-            strokePaint.strokeWidth = dp(1.4f)
-            strokePaint.color = alpha(cols[1], 0.8f)
-            canvas.drawLine(tmpRect.left + dp(3f), tmpRect.bottom - dp(3f), tmpRect.right - dp(3f), tmpRect.top + dp(3f), strokePaint)
+        textPaint.textSize = h * 0.5f
+        textPaint.color = if (on) Color.WHITE else alpha(cols[1], if (n > 0) 0.85f else 0.55f)
+        textPaint.textAlign = Paint.Align.LEFT
+        canvas.drawText("FX", tmpRect.left + h * 0.32f, tmpRect.centerY() + h * 0.18f, textPaint)
+        textPaint.textAlign = Paint.Align.CENTER
+        // drei Punkte = drei Effekt-Plätze
+        val dx = tmpRect.right - h * 0.95f
+        for (k in 0 until 3) {
+            val filled = Engine.pfxType[i][k] >= 0
+            dotPaint.color = if (filled) (if (on) Color.WHITE else cols[2]) else alpha(if (on) Color.WHITE else cols[1], 0.3f)
+            canvas.drawCircle(dx + k * h * 0.28f, tmpRect.centerY(), h * 0.1f, dotPaint)
         }
     }
+
 
     /** Kleines Eingangs-Symbol oben links am Pad (🎙 Mikro / 〰 Wave). */
     private fun drawInputBadge(canvas: Canvas, i: Int) {
@@ -2624,10 +2640,12 @@ class PadView(context: Context) : View(context) {
                         fxBadgeRect(i, iconRect)
                         iconRect.inset(-dp(3f), -dp(3f))
                         if (iconRect.contains(x, y)) {
-                            Engine.padFx[i] = !Engine.padFx[i]
+                            // kurz = Effekte des Pads an/aus, lang = Effekte wählen (bis zu 3)
+                            fxBadgePointer = id
+                            fxBadgePad = i
+                            fxBadgeLong = false
+                            postDelayed(fxBadgeLongPress, 450L)
                             performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
-                            burst(x, y, overlayColors()[2], 10, 140f)
-                            hint(if (Engine.padFx[i]) "Pad ${i + 1}: mit Effekt" else "Pad ${i + 1}: ohne Effekt")
                             return true
                         }
                     }
@@ -2703,6 +2721,21 @@ class PadView(context: Context) : View(context) {
                 }
                 if (upId == funcPointer) {
                     funcUp()
+                    return true
+                }
+                if (upId == fxBadgePointer) {
+                    removeCallbacks(fxBadgeLongPress)
+                    fxBadgePointer = -1
+                    val i = fxBadgePad
+                    if (!fxBadgeLong && i >= 0) {
+                        if (Engine.padFxCount(i) == 0) {
+                            onPadFxEditor?.invoke(i)
+                        } else {
+                            Engine.padChainOn[i] = !Engine.padChainOn[i]
+                            burst(e.getX(idx), e.getY(idx), overlayColors()[2], 12, 150f)
+                            hint(if (Engine.padChainOn[i]) "Pad ${i + 1}: Effekte an (${Engine.padFxCount(i)})" else "Pad ${i + 1}: Effekte aus")
+                        }
+                    }
                     return true
                 }
                 if (upId == scenePointer) {
@@ -2794,6 +2827,8 @@ class PadView(context: Context) : View(context) {
                 recPointer = -1
                 removeCallbacks(twoLongPress)
                 twoPointer = -1
+                removeCallbacks(fxBadgeLongPress)
+                fxBadgePointer = -1
                 downXY.clear()
                 volStart.clear()
                 for ((pid, gv) in gest) if (gv != 0) { pointerPad.remove(pid); shotPointers.remove(pid) }
@@ -4347,19 +4382,42 @@ class PadView(context: Context) : View(context) {
         kbPad = p
         kbTake = false
         kbLastSemi = Engine.padSemi[p]
+        layoutKeyboard()
+    }
+
+    /** Aufteilung wie in Ableton: Kopf, Werkzeuge, links Klaviatur bzw. Spuren, rechts die Matrix, unten Transport. */
+    private fun layoutKeyboard() {
         val top = xyRect.bottom + dp(8f)
         kbRect.set(dp(8f), top, width - dp(8f), height - insetBottom - dp(8f))
-        val hh = dp(40f)
+        val hh = dp(36f)
         kbClose.set(kbRect.right - dp(8f) - hh, kbRect.top + dp(8f), kbRect.right - dp(8f), kbRect.top + dp(8f) + hh)
-        kbOctUp.set(kbClose.left - dp(8f) - hh, kbClose.top, kbClose.left - dp(8f), kbClose.bottom)
-        kbOctDown.set(kbOctUp.left - dp(6f) - hh, kbClose.top, kbOctUp.left - dp(6f), kbClose.bottom)
-        kbMatrixBtn.set(kbOctDown.left - dp(8f) - hh * 1.3f, kbClose.top, kbOctDown.left - dp(8f), kbClose.bottom)
-        kbTakeBtn.set(kbRect.left + dp(8f), kbRect.bottom - dp(8f) - dp(38f), kbRect.left + dp(8f) + dp(150f), kbRect.bottom - dp(8f))
-        val tb = dp(46f)
+        kbOctUp.set(kbClose.left - dp(6f) - hh, kbClose.top, kbClose.left - dp(6f), kbClose.bottom)
+        kbOctDown.set(kbOctUp.left - dp(4f) - hh, kbClose.top, kbOctUp.left - dp(4f), kbClose.bottom)
+        kbMatrixBtn.set(kbOctDown.left - dp(8f) - hh * 2.4f, kbClose.top, kbOctDown.left - dp(8f), kbClose.bottom)
+        val bh = dp(36f)
+        kbTakeBtn.set(kbRect.left + dp(8f), kbRect.bottom - dp(8f) - bh, kbRect.left + dp(8f) + min(dp(150f), kbRect.width() * 0.4f), kbRect.bottom - dp(8f))
+        val tb = dp(44f)
         kbStop.set(kbRect.right - dp(8f) - tb, kbTakeBtn.top, kbRect.right - dp(8f), kbTakeBtn.bottom)
         kbPlay.set(kbStop.left - dp(6f) - tb, kbTakeBtn.top, kbStop.left - dp(6f), kbTakeBtn.bottom)
         kbRec.set(kbPlay.left - dp(6f) - tb, kbTakeBtn.top, kbPlay.left - dp(6f), kbTakeBtn.bottom)
-        kbKeysRect.set(kbRect.left + dp(8f), kbClose.bottom + dp(10f), kbRect.right - dp(8f), kbTakeBtn.top - dp(16f))
+        // Werkzeugzeile
+        val toolTop = kbClose.bottom + dp(8f)
+        val th = dp(30f)
+        val inner = RectF(kbRect.left + dp(8f), toolTop, kbRect.right - dp(8f), toolTop + th)
+        val n = 4
+        val gap = dp(6f)
+        val bw = (inner.width() - (n - 1) * gap) / n
+        mxBars.set(inner.left, inner.top, inner.left + bw, inner.bottom)
+        mxRaster.set(mxBars.right + gap, inner.top, mxBars.right + gap + bw, inner.bottom)
+        mxQuant.set(mxRaster.right + gap, inner.top, mxRaster.right + gap + bw, inner.bottom)
+        mxClear.set(mxQuant.right + gap, inner.top, inner.right, inner.bottom)
+        // Hauptbereich: links Klaviatur (bzw. Spurnamen), rechts Matrix
+        kbKeysRect.set(kbRect.left + dp(8f), inner.bottom + dp(8f), kbRect.right - dp(8f), kbTakeBtn.top - dp(8f))
+        val km = kbKeysRect
+        val keyW = max(dp(52f), km.width() * 0.17f)
+        kbPiano.set(km.left, km.top, km.left + keyW, km.bottom)
+        mxGrid.set(kbPiano.right + dp(3f), km.top, km.right, km.bottom)
+        mxRows = (km.height() / dp(15f)).toInt().coerceIn(12, 36)
     }
 
     private fun closeKeyboard() {
@@ -4367,38 +4425,25 @@ class PadView(context: Context) : View(context) {
         kbVoices.clear()
         kbPointers.clear()
         kbHeld.clear()
+        songPaintPointer = -1
         kbPad = -1
     }
 
-    private val whiteOffsets = intArrayOf(0, 2, 4, 5, 7, 9, 11)
-    private val blackOffsets = intArrayOf(1, 3, -1, 6, 8, 10, -1)
     private val noteNames = arrayOf("C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "H")
 
-    /** Halbton (relativ zum Original) unter einem Punkt, oder null. */
+    private fun isBlack(semi: Int): Boolean {
+        val n = Math.floorMod(semi, 12)
+        return n == 1 || n == 3 || n == 6 || n == 8 || n == 10
+    }
+
+    /** Halbton (relativ zum Original) unter einem Punkt auf der senkrechten Klaviatur, oder null. */
     private fun keyAt(x: Float, y: Float): Int? {
-        if (mxOpen) return null
-        val r = kbKeysRect
+        if (songView) return null
+        val r = kbPiano
         if (!r.contains(x, y)) return null
-        val whites = 14
-        val kw = r.width() / whites
-        val base = -12 + kbOctave * 12
-        val wi = ((x - r.left) / kw).toInt().coerceIn(0, whites - 1)
-        if (y < r.top + r.height() * 0.6f) {
-            // Schwarze Taste?
-            val fx = (x - r.left) / kw
-            val left = fx.toInt()
-            val frac = fx - left
-            val oct = left / 7
-            if (frac > 0.62f) {
-                val b = blackOffsets[left % 7]
-                if (b >= 0) return base + oct * 12 + b
-            }
-            if (frac < 0.38f && left > 0) {
-                val b = blackOffsets[(left - 1) % 7]
-                if (b >= 0) return base + ((left - 1) / 7) * 12 + b
-            }
-        }
-        return base + (wi / 7) * 12 + whiteOffsets[wi % 7]
+        val rowH = r.height() / mxRows
+        val row = ((y - r.top) / rowH).toInt().coerceIn(0, mxRows - 1)
+        return mxTopSemi() - row
     }
 
     private fun kbNoteOn(pid: Int, semi: Int) {
@@ -4434,13 +4479,18 @@ class PadView(context: Context) : View(context) {
                 val x = e.getX(idx)
                 val y = e.getY(idx)
                 if (!kbRect.contains(x, y)) return false
-                if (mxOpen && matrixTouch(x, y)) return true
+                layoutKeyboard()
+                if (songView && songTouchDown(id, x, y)) return true
+                if (!songView && matrixTouch(x, y)) return true
                 when {
-                    kbMatrixBtn.contains(x, y) -> mxOpen = !mxOpen
+                    kbMatrixBtn.contains(x, y) -> {
+                        songView = !songView
+                        performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+                    }
                     kbClose.contains(x, y) -> closeKeyboard()
-                    kbOctDown.contains(x, y) -> kbOctave = (kbOctave - 1).coerceAtLeast(-2)
-                    kbOctUp.contains(x, y) -> kbOctave = (kbOctave + 1).coerceAtMost(2)
-                    kbTakeBtn.contains(x, y) -> {
+                    kbOctDown.contains(x, y) -> if (songView) songPage = max(0, songPage - 1) else kbOctave = (kbOctave - 1).coerceAtLeast(-3)
+                    kbOctUp.contains(x, y) -> if (songView) songPage = min(songPages() - 1, songPage + 1) else kbOctave = (kbOctave + 1).coerceAtMost(3)
+                    kbTakeBtn.contains(x, y) -> if (!songView) {
                         kbTake = !kbTake
                         if (kbTake) Engine.setPadPitch(kbPad, kbLastSemi)
                     }
@@ -4463,27 +4513,39 @@ class PadView(context: Context) : View(context) {
                 return true
             }
             MotionEvent.ACTION_MOVE -> {
+                var used = false
                 for (pi in 0 until e.pointerCount) {
                     val id = e.getPointerId(pi)
+                    if (id == songPaintPointer) {
+                        songPaint(e.getX(pi), e.getY(pi))
+                        used = true
+                        continue
+                    }
                     val cur = kbPointers[id] ?: continue
                     val k = keyAt(e.getX(pi), e.getY(pi))
                     if (k != null && k != cur) {
                         kbNoteOff(id)
                         kbNoteOn(id, k)
                     }
+                    used = true
                 }
-                return false
+                return used
             }
             MotionEvent.ACTION_UP, MotionEvent.ACTION_POINTER_UP -> {
                 val id = e.getPointerId(e.actionIndex)
+                if (id == songPaintPointer) {
+                    songPaintPointer = -1
+                    return true
+                }
                 if (kbPointers.containsKey(id)) {
                     kbNoteOff(id)
                     return true
                 }
-                return false
+                return kbPad >= 0 && kbRect.contains(e.getX(e.actionIndex), e.getY(e.actionIndex))
             }
             MotionEvent.ACTION_CANCEL -> {
                 for (id in ArrayList(kbPointers.keys)) kbNoteOff(id)
+                songPaintPointer = -1
                 return false
             }
         }
@@ -4508,12 +4570,13 @@ class PadView(context: Context) : View(context) {
         strokePaint.strokeWidth = dp(1.4f)
         strokePaint.color = alpha(cols[1], 0.5f)
         canvas.drawRoundRect(r, rr, rr, strokePaint)
-        textPaint.textSize = dp(12f)
+        textPaint.textSize = min(dp(12f), (r.width() - dp(8f)) / max(2f, label.length * 0.62f))
         textPaint.color = if (active) Color.WHITE else cols[1]
-        canvas.drawText(label, r.centerX(), r.centerY() + dp(4.5f), textPaint)
+        canvas.drawText(label, r.centerX(), r.centerY() + textPaint.textSize * 0.37f, textPaint)
     }
 
     private fun drawKeyboard(canvas: Canvas) {
+        layoutKeyboard()
         val cols = overlayColors()
         val r = kbRect
         val rr = dp(14f)
@@ -4526,114 +4589,64 @@ class PadView(context: Context) : View(context) {
         canvas.drawRoundRect(r, rr, rr, strokePaint)
         // Kopf
         textPaint.textAlign = Paint.Align.LEFT
-        textPaint.textSize = dp(15f)
+        textPaint.textSize = dp(14f)
         textPaint.color = cols[1]
-        canvas.drawText("🎹 Pad ${kbPad + 1}", r.left + dp(14f), kbClose.centerY() - dp(2f), textPaint)
-        textPaint.textSize = dp(10f)
+        val title = if (songView) "🎬 Song" else "🎹 Pad ${kbPad + 1}"
+        canvas.drawText(title, r.left + dp(12f), kbClose.centerY() - dp(1f), textPaint)
+        textPaint.textSize = dp(9.5f)
         textPaint.color = alpha(cols[1], 0.7f)
-        val ps = Engine.padSemi[kbPad]
-        canvas.drawText("Tonhöhe Pad: ${if (ps > 0) "+" else ""}$ps · Oktave ${if (kbOctave > 0) "+" else ""}$kbOctave", r.left + dp(14f), kbClose.centerY() + dp(13f), textPaint)
+        val sub = if (songView) "Seite ${songPage + 1}/${songPages()} · ${Engine.songBars} Takte" else {
+            val ps = Engine.padSemi[kbPad]
+            "Ton ${if (ps > 0) "+" else ""}$ps · Okt ${if (kbOctave > 0) "+" else ""}$kbOctave"
+        }
+        canvas.drawText(sub, r.left + dp(12f), kbClose.centerY() + dp(12f), textPaint)
         textPaint.textAlign = Paint.Align.CENTER
-        smallBtn(canvas, kbMatrixBtn, "▦", mxOpen, cols)
-        smallBtn(canvas, kbOctDown, "−", false, cols)
-        smallBtn(canvas, kbOctUp, "+", false, cols)
+        smallBtn(canvas, kbMatrixBtn, if (songView) "🎹 NOTEN" else "🎬 SONG", false, cols)
+        smallBtn(canvas, kbOctDown, if (songView) "◀" else "−", false, cols)
+        smallBtn(canvas, kbOctUp, if (songView) "▶" else "+", false, cols)
         smallBtn(canvas, kbClose, "✕", false, cols)
-        smallBtn(canvas, kbTakeBtn, if (kbTake) "📌 Ton fürs Pad: AN" else "📌 Ton fürs Pad", kbTake, cols)
+        if (!songView) smallBtn(canvas, kbTakeBtn, if (kbTake) "📌 Ton fürs Pad: AN" else "📌 Ton fürs Pad", kbTake, cols)
+        else smallBtn(canvas, kbTakeBtn, if (Engine.songMode) "▶ SONG-MODUS AN" else "SONG-MODUS AUS", Engine.songMode, cols)
         val recOn = Engine.seqRecording || Engine.songRecording
         smallBtn(canvas, kbRec, if (Engine.songRecording) "● S" else if (Engine.seqRecording) "● P" else "●", recOn, intArrayOf(cols[0], cols[1], Color.rgb(225, 40, 50)))
         smallBtn(canvas, kbPlay, "▶", Engine.seqPlaying, cols)
         smallBtn(canvas, kbStop, "■", false, cols)
-        textPaint.textAlign = Paint.Align.LEFT
-        textPaint.textSize = dp(9.5f)
-        textPaint.color = alpha(cols[1], 0.6f)
-        val info = when {
-            Engine.songRecording -> String.format(Locale.GERMANY, "Song %d:%02d", Engine.songSeconds().toInt() / 60, Engine.songSeconds().toInt() % 60)
-            Engine.seqRecording -> "Matrix-REC · ${rasterLabel()} · ${Engine.rollBars[kbPad]} Takt"
-            else -> "Mehrere Finger = Akkord"
-        }
-        canvas.drawText(info, kbRect.left + dp(14f), kbTakeBtn.top - dp(4f), textPaint)
-        textPaint.textAlign = Paint.Align.CENTER
-
-        if (mxOpen) {
-            drawMatrix(canvas, cols)
-        } else drawKeys(canvas, cols)
-        // aktueller Ton
-        if (kbHeld.isNotEmpty()) {
+        if (songView) drawSong(canvas, cols) else drawMatrix(canvas, cols)
+        // gehaltene Töne
+        if (kbHeld.isNotEmpty() && !songView) {
             val names = kbHeld.sorted().joinToString(" ") { sm -> noteNames[Math.floorMod(sm, 12)] + (4 + Math.floorDiv(sm, 12)) }
-            textPaint.textSize = dp(12f)
+            textPaint.textSize = dp(11f)
             textPaint.color = cols[2]
-            canvas.drawText(names, r.centerX(), kbClose.bottom + dp(2f), textPaint)
+            textPaint.textAlign = Paint.Align.LEFT
+            canvas.drawText(names, kbTakeBtn.right + dp(8f), kbTakeBtn.centerY() + dp(4f), textPaint)
+            textPaint.textAlign = Paint.Align.CENTER
         }
     }
 
-    private fun drawKeys(canvas: Canvas, cols: IntArray) {
-        // Tasten
-        val k = kbKeysRect
-        val whites = 14
-        val kw = k.width() / whites
-        val base = -12 + kbOctave * 12
-        for (wi in 0 until whites) {
-            val semi = base + (wi / 7) * 12 + whiteOffsets[wi % 7]
-            tmpRect.set(k.left + wi * kw + dp(1f), k.top, k.left + (wi + 1) * kw - dp(1f), k.bottom)
-            fillPaint.color = if (kbHeld.contains(semi)) cols[2] else Color.rgb(248, 246, 240)
-            canvas.drawRoundRect(tmpRect, dp(5f), dp(5f), fillPaint)
-            strokePaint.strokeWidth = dp(1f)
-            strokePaint.color = Color.argb(90, 0, 0, 0)
-            canvas.drawRoundRect(tmpRect, dp(5f), dp(5f), strokePaint)
-            if (wi % 7 == 0) {
-                textPaint.textSize = dp(10f)
-                textPaint.color = if (kbHeld.contains(semi)) Color.WHITE else Color.rgb(90, 90, 90)
-                val octNum = 4 + (semi + 120) / 12 - 10
-                canvas.drawText("C$octNum", tmpRect.centerX(), tmpRect.bottom - dp(8f), textPaint)
-            }
-            if (semi == Engine.padSemi[kbPad]) {
-                dotPaint.color = cols[2]
-                canvas.drawCircle(tmpRect.centerX(), tmpRect.bottom - dp(24f), dp(3f), dotPaint)
-            }
-        }
-        for (wi in 0 until whites) {
-            val b = blackOffsets[wi % 7]
-            if (b < 0 || wi == whites - 1) continue
-            val semi = base + (wi / 7) * 12 + b
-            val cx = k.left + (wi + 1) * kw
-            tmpRect.set(cx - kw * 0.32f, k.top, cx + kw * 0.32f, k.top + k.height() * 0.6f)
-            fillPaint.color = if (kbHeld.contains(semi)) cols[2] else Color.rgb(28, 28, 32)
-            canvas.drawRoundRect(tmpRect, dp(4f), dp(4f), fillPaint)
-        }
-    }
+    // ---------------------------------------------------------------- Piano-Roll (wie Ableton: Klaviatur links, Matrix rechts)
 
-    // ---------------------------------------------------------------- Matrix (Piano-Roll)
-
-    private var mxOpen = false
+    private var mxOpen: Boolean
+        get() = !songView
+        set(v) { songView = !v }
+    private var songView = false
     private val kbMatrixBtn = RectF()
+    private val kbPiano = RectF()
     private val mxGrid = RectF()
     private val mxBars = RectF()
     private val mxRaster = RectF()
     private val mxQuant = RectF()
     private val mxClear = RectF()
     private val rasterSteps = intArrayOf(0, 4, 8, 16, 32)
+    private var mxRows = 24
 
     private fun rasterLabel(): String = if (Engine.rollQuant <= 0) "frei" else "1/${Engine.rollQuant}"
 
-    private fun layoutMatrix() {
-        val k = kbKeysRect
-        val bh = dp(30f)
-        val gap = dp(6f)
-        val bw = (k.width() - 3 * gap) / 4f
-        mxBars.set(k.left, k.top, k.left + bw, k.top + bh)
-        mxRaster.set(mxBars.right + gap, k.top, mxBars.right + gap + bw, k.top + bh)
-        mxQuant.set(mxRaster.right + gap, k.top, mxRaster.right + gap + bw, k.top + bh)
-        mxClear.set(mxQuant.right + gap, k.top, k.right, k.top + bh)
-        mxGrid.set(k.left + dp(22f), k.top + bh + dp(6f), k.right, k.bottom)
-    }
-
-    private val mxRows = 24
+    private fun layoutMatrix() = layoutKeyboard()
 
     /** Halbton der obersten Zeile. */
     private fun mxTopSemi(): Int = -12 + kbOctave * 12 + mxRows - 1
 
     private fun matrixTouch(x: Float, y: Float): Boolean {
-        layoutMatrix()
         val p = kbPad
         when {
             mxBars.contains(x, y) -> {
@@ -4681,42 +4694,74 @@ class PadView(context: Context) : View(context) {
         return false
     }
 
+    /** Senkrechte Klaviatur links neben der Matrix. */
+    private fun drawPianoKeys(canvas: Canvas, cols: IntArray) {
+        val k = kbPiano
+        val rowH = k.height() / mxRows
+        val top = mxTopSemi()
+        fillPaint.shader = null
+        fillPaint.color = Color.rgb(248, 246, 240)
+        canvas.drawRect(k, fillPaint)
+        for (row in 0 until mxRows) {
+            val semi = top - row
+            val y0 = k.top + row * rowH
+            val held = kbHeld.contains(semi)
+            if (isBlack(semi)) {
+                fillPaint.color = if (held) cols[2] else Color.rgb(28, 28, 32)
+                canvas.drawRect(k.left, y0, k.left + k.width() * 0.62f, y0 + rowH, fillPaint)
+            } else if (held) {
+                fillPaint.color = cols[2]
+                canvas.drawRect(k.left, y0, k.right, y0 + rowH, fillPaint)
+            }
+            val n = Math.floorMod(semi, 12)
+            // Trennlinien zwischen weißen Tasten (unter C und F)
+            if (n == 0 || n == 5) {
+                strokePaint.strokeWidth = dp(1f)
+                strokePaint.color = Color.argb(110, 0, 0, 0)
+                canvas.drawLine(k.left, y0 + rowH, k.right, y0 + rowH, strokePaint)
+            }
+            if (n == 0) {
+                textPaint.textAlign = Paint.Align.RIGHT
+                textPaint.textSize = min(dp(10f), rowH * 0.9f)
+                textPaint.color = if (held) Color.WHITE else Color.rgb(80, 80, 80)
+                canvas.drawText("C${4 + Math.floorDiv(semi, 12)}", k.right - dp(4f), y0 + rowH * 0.8f, textPaint)
+                textPaint.textAlign = Paint.Align.CENTER
+            }
+            if (semi == Engine.padSemi[kbPad]) {
+                dotPaint.color = cols[2]
+                canvas.drawCircle(k.right - dp(28f), y0 + rowH / 2f, dp(2.5f), dotPaint)
+            }
+        }
+        strokePaint.strokeWidth = dp(1f)
+        strokePaint.color = alpha(cols[1], 0.4f)
+        canvas.drawRect(k, strokePaint)
+    }
+
     private fun drawMatrix(canvas: Canvas, cols: IntArray) {
-        layoutMatrix()
         val p = kbPad
         val bars = Engine.rollBars[p]
         smallBtn(canvas, mxBars, "$bars TAKT" + if (bars > 1) "E" else "", false, cols)
         smallBtn(canvas, mxRaster, "▦ ${rasterLabel()}", Engine.rollQuant > 0, cols)
         smallBtn(canvas, mxQuant, "QUANT.", false, cols)
         smallBtn(canvas, mxClear, "LEEREN", false, cols)
+        drawPianoKeys(canvas, cols)
         val g = mxGrid
         fillPaint.shader = null
-        fillPaint.color = Color.rgb(18, 19, 24)
+        fillPaint.color = Color.rgb(30, 31, 37)
         canvas.drawRect(g, fillPaint)
         val rowH = g.height() / mxRows
         val top = mxTopSemi()
-        // Zeilen (schwarze Tasten dunkler) + Notennamen
         for (row in 0 until mxRows) {
             val semi = top - row
-            val n = Math.floorMod(semi, 12)
-            val black = n == 1 || n == 3 || n == 6 || n == 8 || n == 10
             val y0 = g.top + row * rowH
-            if (black) {
-                fillPaint.color = Color.rgb(12, 12, 16)
+            if (isBlack(semi)) {
+                fillPaint.color = Color.rgb(22, 23, 28)
                 canvas.drawRect(g.left, y0, g.right, y0 + rowH, fillPaint)
             }
-            if (n == 0) {
-                strokePaint.strokeWidth = dp(1f)
-                strokePaint.color = Color.argb(70, 255, 255, 255)
-                canvas.drawLine(g.left, y0 + rowH, g.right, y0 + rowH, strokePaint)
-                textPaint.textAlign = Paint.Align.RIGHT
-                textPaint.textSize = min(dp(9f), rowH * 1.4f)
-                textPaint.color = alpha(cols[1], 0.7f)
-                canvas.drawText("C${4 + Math.floorDiv(semi, 12)}", g.left - dp(3f), y0 + rowH * 0.85f, textPaint)
-                textPaint.textAlign = Paint.Align.CENTER
-            }
+            strokePaint.strokeWidth = dp(if (Math.floorMod(semi, 12) == 0) 1f else 0.5f)
+            strokePaint.color = Color.argb(if (Math.floorMod(semi, 12) == 0) 80 else 26, 255, 255, 255)
+            canvas.drawLine(g.left, y0 + rowH, g.right, y0 + rowH, strokePaint)
         }
-        // Spalten: Takte, Schläge, Raster
         val total = bars * 16
         val colW = g.width() / total
         val q = Engine.rollQuant
@@ -4734,14 +4779,18 @@ class PadView(context: Context) : View(context) {
             strokePaint.color = Color.argb(a, 255, 255, 255)
             canvas.drawLine(x, g.top, x, g.bottom, strokePaint)
         }
-        // Noten
+        // Taktnummern
+        textPaint.textSize = dp(8.5f)
+        textPaint.color = alpha(cols[1], 0.55f)
+        textPaint.textAlign = Paint.Align.LEFT
+        for (b in 0 until bars) canvas.drawText("${b + 1}", g.left + b * 16 * colW + dp(2f), g.top + dp(9f), textPaint)
+        textPaint.textAlign = Paint.Align.CENTER
         val acc = cols[2]
         for (ev in Engine.notesOf(p)) {
             val row = top - ev.semi
             val x0 = g.left + (ev.pos / bars).toFloat() * g.width()
             val x1 = min(g.right, g.left + ((ev.pos + ev.len) / bars).toFloat() * g.width())
             if (row < 0 || row >= mxRows) {
-                // außerhalb des sichtbaren Bereichs: kleiner Pfeil
                 textPaint.textSize = dp(9f)
                 textPaint.color = acc
                 canvas.drawText(if (row < 0) "▲" else "▼", x0 + dp(4f), if (row < 0) g.top + dp(9f) else g.bottom - dp(2f), textPaint)
@@ -4755,13 +4804,176 @@ class PadView(context: Context) : View(context) {
             strokePaint.color = Color.WHITE
             canvas.drawRoundRect(tmpRect, dp(2f), dp(2f), strokePaint)
         }
-        // Abspielposition
         val pr = Engine.rollProgress(p)
         if (pr >= 0f) {
             val x = g.left + g.width() * pr
             strokePaint.strokeWidth = dp(2f)
             strokePaint.color = if (Engine.seqRecording) Color.rgb(230, 40, 55) else Color.WHITE
             canvas.drawLine(x, g.top, x, g.bottom, strokePaint)
+        }
+        strokePaint.strokeWidth = dp(1f)
+        strokePaint.color = alpha(cols[1], 0.4f)
+        canvas.drawRect(g, strokePaint)
+        if (Engine.seqRecording) {
+            textPaint.textSize = dp(9f)
+            textPaint.color = Color.rgb(255, 80, 90)
+            textPaint.textAlign = Paint.Align.RIGHT
+            canvas.drawText("● REC · ${rasterLabel()}", g.right - dp(4f), g.bottom - dp(4f), textPaint)
+            textPaint.textAlign = Paint.Align.CENTER
+        }
+    }
+
+    // ---------------------------------------------------------------- Song-Matrix (Arrangement: Spuren × Takte)
+
+    private var songPage = 0
+    private var songPaintPointer = -1
+    private var songPaintVal = false
+    private val SONG_COLS = 16
+
+    private fun songPages(): Int = max(1, (Engine.songBars + SONG_COLS - 1) / SONG_COLS)
+
+    private fun songRowName(r: Int): String = when {
+        r < VISIBLE_PADS -> "P${r + 1}" + when {
+            !Engine.hasLoop(r) -> ""
+            Engine.isOneShot(r) -> " ⚡"
+            else -> " ∞"
+        }
+        r == VISIBLE_PADS -> "ACID"
+        else -> "DRUM"
+    }
+
+    private fun songCell(x: Float, y: Float): Pair<Int, Int>? {
+        val g = mxGrid
+        if (!g.contains(x, y)) return null
+        val rows = Engine.ARR_ROWS
+        val r = ((y - g.top) / (g.height() / rows)).toInt().coerceIn(0, rows - 1)
+        val c = ((x - g.left) / (g.width() / SONG_COLS)).toInt().coerceIn(0, SONG_COLS - 1)
+        val bar = songPage * SONG_COLS + c
+        if (bar >= Engine.songBars) return null
+        return r to bar
+    }
+
+    private fun songTouchDown(id: Int, x: Float, y: Float): Boolean {
+        when {
+            mxBars.contains(x, y) -> {
+                val opts = intArrayOf(4, 8, 16, 32, 64)
+                val i = opts.indexOf(Engine.songBars)
+                Engine.songBars = opts[(i + 1) % opts.size]
+                songPage = min(songPage, songPages() - 1)
+                return true
+            }
+            mxRaster.contains(x, y) -> {
+                // aktuelle Lage (welche Pads laufen) in den Takt unter dem Abspielpunkt bzw. Takt 1 schreiben
+                val bar = if (Engine.songMode && Engine.seqPlaying) Engine.songBar() else songPage * SONG_COLS
+                Engine.arrCaptureBar(bar, VISIBLE_PADS)
+                hint("Takt ${bar + 1}: aktuelle Pads übernommen")
+                return true
+            }
+            mxQuant.contains(x, y) -> {
+                Engine.arrFillFromScenes(VISIBLE_PADS)
+                hint("Song aus den Szenen gebaut (jede Szene so viele Takte wie eingestellt)")
+                return true
+            }
+            mxClear.contains(x, y) -> {
+                Engine.arrClear()
+                burst(mxClear.centerX(), mxClear.centerY(), Color.rgb(230, 40, 55), 18, 200f)
+                return true
+            }
+            kbTakeBtn.contains(x, y) -> {
+                Engine.songMode = !Engine.songMode
+                hint(if (Engine.songMode) "Song-Modus an: ▶ spielt den Song ab Takt 1 – die Matrix schaltet die Spuren" else "Song-Modus aus: Pads wieder frei")
+                return true
+            }
+            kbPiano.contains(x, y) -> {
+                val rows = Engine.ARR_ROWS
+                val r = ((y - kbPiano.top) / (kbPiano.height() / rows)).toInt().coerceIn(0, rows - 1)
+                when {
+                    r < VISIBLE_PADS -> if (Engine.hasLoop(r)) Engine.toggleMute(r)
+                    r == VISIBLE_PADS -> InstState.acidOn = !InstState.acidOn
+                    else -> InstState.drumOn = !InstState.drumOn
+                }
+                performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+                return true
+            }
+        }
+        val cell = songCell(x, y) ?: return false
+        songPaintVal = !Engine.arr[cell.first][cell.second]
+        Engine.arr[cell.first][cell.second] = songPaintVal
+        songPaintPointer = id
+        performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+        return true
+    }
+
+    private fun songPaint(x: Float, y: Float) {
+        val cell = songCell(x, y) ?: return
+        Engine.arr[cell.first][cell.second] = songPaintVal
+    }
+
+    private fun drawSong(canvas: Canvas, cols: IntArray) {
+        smallBtn(canvas, mxBars, "${Engine.songBars} TAKTE", false, cols)
+        smallBtn(canvas, mxRaster, "＋ LIVE", false, cols)
+        smallBtn(canvas, mxQuant, "AUS SZENEN", false, cols)
+        smallBtn(canvas, mxClear, "LEEREN", false, cols)
+        val rows = Engine.ARR_ROWS
+        val k = kbPiano
+        val g = mxGrid
+        val rowH = g.height() / rows
+        fillPaint.shader = null
+        // Spurnamen links
+        for (r in 0 until rows) {
+            val y0 = k.top + r * rowH
+            tmpRect.set(k.left, y0 + dp(1f), k.right, y0 + rowH - dp(1f))
+            val on = when {
+                r < VISIBLE_PADS -> Engine.hasLoop(r) && !Engine.isMuted(r)
+                r == VISIBLE_PADS -> InstState.acidOn
+                else -> InstState.drumOn
+            }
+            fillPaint.color = if (on) blend(cols[0], cols[2], 0.45f) else blend(cols[0], cols[1], 0.08f)
+            canvas.drawRoundRect(tmpRect, dp(4f), dp(4f), fillPaint)
+            textPaint.textAlign = Paint.Align.LEFT
+            textPaint.textSize = min(dp(10.5f), rowH * 0.6f)
+            textPaint.color = if (on) Color.WHITE else alpha(cols[1], 0.75f)
+            canvas.drawText(songRowName(r), tmpRect.left + dp(5f), tmpRect.centerY() + textPaint.textSize * 0.36f, textPaint)
+            textPaint.textAlign = Paint.Align.CENTER
+        }
+        fillPaint.color = Color.rgb(24, 25, 31)
+        canvas.drawRect(g, fillPaint)
+        val colW = g.width() / SONG_COLS
+        val cur = if (Engine.songMode && Engine.seqPlaying) Engine.songBar() else -1
+        for (c in 0 until SONG_COLS) {
+            val bar = songPage * SONG_COLS + c
+            val x0 = g.left + c * colW
+            if (bar >= Engine.songBars) {
+                fillPaint.color = Color.argb(150, 0, 0, 0)
+                canvas.drawRect(x0, g.top, x0 + colW, g.bottom, fillPaint)
+                continue
+            }
+            if (bar == cur) {
+                fillPaint.color = Color.argb(60, 255, 255, 255)
+                canvas.drawRect(x0, g.top, x0 + colW, g.bottom, fillPaint)
+            }
+            for (r in 0 until rows) {
+                if (!Engine.arr[r][bar]) continue
+                val y0 = g.top + r * rowH
+                tmpRect.set(x0 + dp(1.5f), y0 + dp(1.5f), x0 + colW - dp(1.5f), y0 + rowH - dp(1.5f))
+                fillPaint.color = if (r >= VISIBLE_PADS) blend(cols[2], Color.rgb(80, 180, 255), 0.5f) else cols[2]
+                canvas.drawRoundRect(tmpRect, dp(3f), dp(3f), fillPaint)
+            }
+            strokePaint.strokeWidth = dp(if (bar % 4 == 0) 1.2f else 0.5f)
+            strokePaint.color = Color.argb(if (bar % 4 == 0) 110 else 40, 255, 255, 255)
+            canvas.drawLine(x0, g.top, x0, g.bottom, strokePaint)
+            if (bar % 4 == 0 || colW > dp(18f)) {
+                textPaint.textSize = dp(8.5f)
+                textPaint.color = alpha(cols[1], 0.6f)
+                textPaint.textAlign = Paint.Align.LEFT
+                canvas.drawText("${bar + 1}", x0 + dp(2f), g.top - dp(2f), textPaint)
+                textPaint.textAlign = Paint.Align.CENTER
+            }
+        }
+        for (r in 0..rows) {
+            strokePaint.strokeWidth = dp(0.5f)
+            strokePaint.color = Color.argb(30, 255, 255, 255)
+            canvas.drawLine(g.left, g.top + r * rowH, g.right, g.top + r * rowH, strokePaint)
         }
         strokePaint.strokeWidth = dp(1f)
         strokePaint.color = alpha(cols[1], 0.4f)
@@ -5149,27 +5361,37 @@ class PadView(context: Context) : View(context) {
                 else -> Triple(edRect, "Wave-Editor", "Hier schneidest du Aufnahmen und zerlegst sie in Slices. ✕ oben rechts schließt den Editor.")
             }
         }
-        // ---- Tastatur / Matrix
+        // ---- Tastatur / Matrix / Song
         if (kbPad >= 0 && kbRect.contains(x, y)) {
-            if (mxOpen) {
-                layoutMatrix()
+            layoutKeyboard()
+            if (songView) {
+                when {
+                    mxBars.contains(x, y) -> return Triple(mxBars, "Song-Länge", "Wie viele Takte der Song hat: 4, 8, 16, 32 oder 64. ◀ ▶ oben blättern durch die Takte.")
+                    mxRaster.contains(x, y) -> return Triple(mxRaster, "＋ LIVE", "Übernimmt, welche Pads gerade laufen (und ob ACID/DRUM an sind), in den aktuellen Takt.")
+                    mxQuant.contains(x, y) -> return Triple(mxQuant, "Aus Szenen", "Baut den Song aus deinen Szenen: jede Szene so viele Takte wie bei ihr eingestellt, nacheinander.")
+                    mxClear.contains(x, y) -> return Triple(mxClear, "Leeren", "Löscht das ganze Arrangement.")
+                    kbTakeBtn.contains(x, y) -> return Triple(kbTakeBtn, "Song-Modus", "Ist er an, spielt ▶ den Song ab Takt 1: In jedem Takt laufen genau die Spuren, die in der Matrix markiert sind (Loops, ⚡-Pads mit ihren Schritten und Noten, ACID und DRUM).")
+                    kbPiano.contains(x, y) -> return Triple(kbPiano, "Spuren", "Die 12 Pads, ACID und DRUM. Antippen schaltet die Spur live stumm/an.")
+                    mxGrid.contains(x, y) -> return Triple(mxGrid, "Song-Matrix", "Spuren senkrecht, Takte waagrecht – wie die Arrangement-Ansicht in Ableton. Feld antippen schaltet die Spur in diesem Takt an/aus, über mehrere Felder ziehen malt.")
+                }
+            } else {
                 when {
                     mxBars.contains(x, y) -> return Triple(mxBars, "Takte", "Länge der Matrix für dieses Pad: 1, 2, 4 oder 8 Takte. Die Noten laufen in dieser Länge als Schleife.")
                     mxRaster.contains(x, y) -> return Triple(mxRaster, "Raster", "Raster für die Aufnahme: frei (genau wie gespielt), 1/4, 1/8, 1/16 oder 1/32. Wird schon beim Einspielen angewendet.")
                     mxQuant.contains(x, y) -> return Triple(mxQuant, "Quantisieren", "Setzt alle vorhandenen Noten nachträglich auf das gewählte Raster.")
                     mxClear.contains(x, y) -> return Triple(mxClear, "Leeren", "Löscht alle Noten dieses Pads.")
-                    mxGrid.contains(x, y) -> return Triple(mxGrid, "Matrix (Piano-Roll)", "Tonhöhe senkrecht, Zeit waagrecht. Leeres Feld antippen setzt eine Note, eine Note antippen löscht sie. Die weiße Linie ist die Abspielposition.")
+                    kbPiano.contains(x, y) -> return Triple(kbPiano, "Klaviatur", "Wie in Ableton links an der Seite: Tasten spielen das Pad-Sample in dieser Tonhöhe. Mehrere Finger = Akkord, auf- und abwischen wechselt den Ton. Bei REC landen die Töne in der Matrix.")
+                    mxGrid.contains(x, y) -> return Triple(mxGrid, "Matrix (Piano-Roll)", "Tonhöhe senkrecht (passend zur Klaviatur links), Zeit waagrecht. Leeres Feld antippen setzt eine Note, eine Note antippen löscht sie. Die Linie ist die Abspielposition.")
                 }
             }
             return when {
-                kbMatrixBtn.contains(x, y) -> Triple(kbMatrixBtn, "▦ Matrix", "Schaltet zwischen Klaviatur und Matrix (Piano-Roll) um. In der Matrix siehst und bearbeitest du die aufgenommenen Töne.")
-                kbOctDown.contains(x, y) || kbOctUp.contains(x, y) -> Triple(RectF(kbOctDown.left, kbOctDown.top, kbOctUp.right, kbOctUp.bottom), "Oktave − / +", "Verschiebt die Tastatur um eine Oktave nach unten oder oben.")
+                kbMatrixBtn.contains(x, y) -> Triple(kbMatrixBtn, "NOTEN / SONG", "Wechselt zwischen der Piano-Roll dieses Pads und der Song-Matrix, in der du ganze Songs aus deinen Spuren baust.")
+                kbOctDown.contains(x, y) || kbOctUp.contains(x, y) -> Triple(RectF(kbOctDown.left, kbOctDown.top, kbOctUp.right, kbOctUp.bottom), if (songView) "◀ ▶ Seite" else "Oktave − / +", if (songView) "Blättert die Song-Matrix um 16 Takte." else "Verschiebt Klaviatur und Matrix um eine Oktave.")
                 kbTakeBtn.contains(x, y) -> Triple(kbTakeBtn, "📌 Ton fürs Pad", "Ist das an, wird der zuletzt gespielte Ton zur festen Tonhöhe des Pads – auch beim Antippen und im Sequenzer.")
-                kbRec.contains(x, y) -> Triple(kbRec, "● REC", "Aufnahme starten: Pattern (deine Töne landen in der Matrix) oder Song (alles, was du hörst). Nochmal drücken beendet.")
-                kbPlay.contains(x, y) -> Triple(kbPlay, "▶ Play", "Startet Sequenzer und Matrix.")
-                kbStop.contains(x, y) -> Triple(kbStop, "■ Stop", "Hält Sequenzer und Matrix an und beendet eine laufende Aufnahme.")
-                kbKeysRect.contains(x, y) -> Triple(kbKeysRect, "Klaviatur", "Spielt das Sample des Pads in verschiedenen Tonhöhen. Mehrere Finger = Akkord, über die Tasten wischen wechselt den Ton.")
-                else -> Triple(kbRect, "🎹 Tastatur", "Spielt das Pad-Sample melodisch. ✕ schließt die Tastatur.")
+                kbRec.contains(x, y) -> Triple(kbRec, "● REC", "Pattern-Aufnahme: deine Töne landen in der Matrix. Nochmal drücken beendet.")
+                kbPlay.contains(x, y) -> Triple(kbPlay, "▶ Play", "Startet alles auf der Eins (im Song-Modus ab Takt 1 des Songs).")
+                kbStop.contains(x, y) -> Triple(kbStop, "■ Stop", "Hält alles an und beendet eine laufende Aufnahme.")
+                else -> Triple(kbRect, "🎹 Piano-Roll", "Klaviatur links, Matrix rechts – wie in Ableton. ✕ schließt.")
             }
         }
         // ---- Kopfzeile
@@ -5249,7 +5471,7 @@ class PadView(context: Context) : View(context) {
                     else -> "HALTEN: Aufnahme läuft, solange der Finger liegt."
                 }
                 fxBadgeRect(i, iconRect)
-                if (iconRect.contains(x, y)) return Triple(RectF(iconRect), "FX-Schalter", "Schaltet für Pad ${i + 1} den Effekt an oder aus (durchgestrichen = trocken).")
+                if (iconRect.contains(x, y)) return Triple(RectF(iconRect), "FX des Pads", "Eigene Effekt-Kette für Pad ${i + 1} mit bis zu 3 Effekten (die Punkte zeigen die belegten Plätze). Antippen = an/aus, lange drücken = Effekte wählen und einstellen. Unabhängig davon wirkt die XY-Fläche auf alle Pads mit „Effekt (XY)“ im •••-Menü.")
                 importRect(i, iconRect)
                 if (!Engine.hasLoop(i) && iconRect.contains(x, y)) return Triple(RectF(iconRect), "📂 Laden", "WAV/MP3-Datei, Bibliothek oder eigene Aufnahme laden. Tempo und Länge werden erkannt und der Clip auf das Master-Tempo gewarpt (Tonhöhe bleibt). Danach wartet er – antippen startet ihn auf der Eins.")
                 val gestures = " Gesten: ← wischen = löschen, ↕ wischen = Lautstärke, zwei Finger = stumm (lang: Solo)."

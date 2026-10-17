@@ -92,6 +92,7 @@ class MainActivity : Activity() {
         Engine.tapOverdub = prefs.getBoolean("tapOverdub", true)
         pads.statusColors = prefs.getBoolean("statusColors", true)
         pads.onImportMenu = { p -> showImportMenu(p) }
+        pads.onPadFxEditor = { p -> showPadFxEditor(p) }
         pads.onLaunchQuantChanged = {
             prefs.edit().putInt("launchIdx", Engine.launchIdx).apply()
             hint(if (Engine.LAUNCH_Q[Engine.launchIdx] <= 0f) "Start-Raster AUS: Loops starten/stoppen sofort"
@@ -272,7 +273,9 @@ class MainActivity : Activity() {
             actions.add { pads.openKeyboard(p) }
         }
         val fxOn = Engine.padFx[p]
-        labels.add(if (fxOn) "🎛 Effekt: AN  →  Pad ohne Effekt" else "🎛 Effekt: AUS  →  Pad durch den Effekt")
+        labels.add("✨ Eigene Effekte des Pads (bis zu 3) …")
+        actions.add { showPadFxEditor(p) }
+        labels.add(if (fxOn) "🎛 XY-Effekt: AN  →  Pad ohne XY-Effekt" else "🎛 XY-Effekt: AUS  →  Pad durch den XY-Effekt")
         actions.add {
             Engine.padFx[p] = !fxOn
             toast(if (fxOn) "Pad ${p + 1}: ohne Effekt" else "Pad ${p + 1}: mit Effekt")
@@ -1078,6 +1081,92 @@ class MainActivity : Activity() {
     private fun hint(msg: String) {
         lastHint?.cancel()
         lastHint = Toast.makeText(this, msg, Toast.LENGTH_SHORT).also { it.show() }
+    }
+
+    // ---------------------------------------------------------------- Effekte je Pad
+
+    /** Bis zu drei Effekte für ein Pad wählen und einstellen. */
+    private fun showPadFxEditor(p: Int) {
+        val d = resources.displayMetrics.density
+        val pad = (16 * d).toInt()
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(pad, pad / 2, pad, pad / 2)
+        }
+        val scroll = android.widget.ScrollView(this).apply { addView(box) }
+        val master = CheckBox(this).apply {
+            text = "Effekte für Pad ${p + 1} an"
+            isChecked = Engine.padChainOn[p]
+            setTextColor(Color.WHITE)
+            setOnCheckedChangeListener { _, c -> Engine.padChainOn[p] = c }
+        }
+        box.addView(master)
+        box.addView(TextView(this).apply {
+            text = "Die Effekte laufen nacheinander (1 › 2 › 3) nur auf diesem Pad – auch bei Noten aus der Piano-Roll. Der kleine FX-Knopf am Pad schaltet sie an/aus."
+            textSize = 12f
+            setTextColor(Color.rgb(170, 170, 170))
+            setPadding(0, 0, 0, pad / 2)
+        })
+        val slotBoxes = Array(3) { LinearLayout(this).apply { orientation = LinearLayout.VERTICAL } }
+        fun buildSlot(k: Int) {
+            val sb = slotBoxes[k]
+            sb.removeAllViews()
+            val t = Engine.pfxType[p][k]
+            sb.addView(TextView(this).apply {
+                text = "Platz ${k + 1}"
+                textSize = 13f
+                setTextColor(Color.rgb(255, 120, 30))
+                typeface = Typeface.DEFAULT_BOLD
+                setPadding(0, pad / 2, 0, 0)
+            })
+            sb.addView(Button(this).apply {
+                text = if (t >= 0) Fx.NAMES[t] + "  ▾" else "— leer —  ▾"
+                setOnClickListener {
+                    val names = arrayOf("— leer —") + Fx.NAMES
+                    AlertDialog.Builder(this@MainActivity, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
+                        .setTitle("Pad ${p + 1} · Platz ${k + 1}")
+                        .setItems(names) { _, w ->
+                            Engine.setPadFxType(p, k, w - 1)
+                            if (w > 0) {
+                                Engine.padChainOn[p] = true
+                                master.isChecked = true
+                            }
+                            buildSlot(k)
+                        }
+                        .show()
+                }
+            })
+            if (t < 0) return
+            val labels = arrayOf("X · " + Fx.X_LABELS[t], "Y · " + Fx.Y_LABELS[t], "MIX", Fx.P1_LABELS[t], Fx.P2_LABELS[t])
+            for (i in 0 until 5) {
+                val lab = TextView(this).apply { textSize = 11f; setTextColor(Color.rgb(200, 200, 200)) }
+                fun show(v: Float) { lab.text = "${labels[i]}: ${(v * 100).toInt()}%" }
+                show(Engine.pfxPar[p][k][i])
+                sb.addView(lab)
+                sb.addView(SeekBar(this).apply {
+                    max = 1000
+                    progress = (Engine.pfxPar[p][k][i] * 1000).toInt()
+                    setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                        override fun onProgressChanged(sbar: SeekBar?, pr: Int, fromUser: Boolean) {
+                            if (!fromUser) return
+                            Engine.pfxPar[p][k][i] = pr / 1000f
+                            show(pr / 1000f)
+                        }
+                        override fun onStartTrackingTouch(sbar: SeekBar?) {}
+                        override fun onStopTrackingTouch(sbar: SeekBar?) {}
+                    })
+                })
+            }
+        }
+        for (k in 0 until 3) {
+            buildSlot(k)
+            box.addView(slotBoxes[k])
+        }
+        AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
+            .setTitle("✨ Effekte Pad ${p + 1}")
+            .setView(scroll)
+            .setPositiveButton("Fertig", null)
+            .show()
     }
 
     // ---------------------------------------------------------------- Szenen
