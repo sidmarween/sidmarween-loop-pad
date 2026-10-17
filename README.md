@@ -21,6 +21,15 @@ Angelehnt an Native Instruments Maschine – Leiste links und rechts vom Effekt-
 - **● REC antippen** = Pattern-Aufnahme direkt (steht alles: 1 Takt Einzählen), nochmal antippen = Punch-out, alles läuft weiter. **REC lange drücken** = Song-Aufnahme, Pattern als WAV, Einzähler an/aus.
 - **↶ UNDO / ↷ REDO** – Aufnahmen, Overdubs, Löschen, Laden, Schritte, Noten und Pattern-Aufnahmen zurücknehmen bzw. wiederholen.
 
+## Live-Konzept: Clips wie in Ableton Live
+
+- **Status-Farben** auf jedem Pad: Rot pulsierend = Aufnahme (Ring zeigt den Takt), Grün = spielt (Lichtring läuft im Tempo), Gelb = Overdub, Blinken = wartet auf das Start-Raster, Grau ▶ = geladen und bereit. Leere Pads zeigen **+ MIC / + WAVE**. Im Menü abschaltbar.
+- **📂 auf leeren Pads** – WAV/MP3, Bibliothek oder eigene Aufnahme laden. Tempo und Länge werden erkannt (Dateiname, Länge, Rhythmus-Analyse) und der Clip per Time-Stretch auf das Master-Tempo **gewarpt – ohne Tonhöhenänderung**. Ändert sich das Tempo, werden alle Loops neu gedehnt und bleiben im Takt.
+- **Start-Raster ⏱** (unten rechts): AUS, 1/4, 1/2, 1, 2, 4 Takte – angetippte Loops starten/stoppen genau dort (Pad blinkt bis dahin). Geladene Clips warten, bis man sie antippt.
+- **Tipp auf laufenden Loop = Overdub** (gelb, nochmal tippen beendet) – im Menü auf „Stopp“ umschaltbar. Halten = Overdub, solange der Finger liegt.
+- **Gesten**: ← wischen = Pad löschen (UNDO holt es zurück), ↕ wischen = Pad-Lautstärke, zwei Finger = stumm (lang: Solo).
+- **FX-Schalter** unten rechts in jedem Pad: antippen = Pad mit/ohne Effekt.
+
 ## Menü ☰ (oben rechts)
 
 - **🔌 Audio-Geräte** – Ein- und Ausgang getrennt wählen (USB-Audio-Interface, USB-Mikrofon, USB-Headset, Kopfhörer, Lautsprecher …) oder Automatisch. Class-compliant USB-Audio-Geräte (USB-C oder OTG) bindet Android selbst ein; Marv PAD erkennt Ein-/Ausstecken und startet das Audio automatisch neu, Loops bleiben erhalten. Die Auswahl wird gemerkt.

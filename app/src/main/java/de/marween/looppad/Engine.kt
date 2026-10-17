@@ -2818,13 +2818,15 @@ object Engine {
     /** Bricht eine laufende Aufnahme/Overdub ab (Wischgeste) und stellt den Loop wieder her. */
     fun abortTake(p: Int) {
         val t = takes.get(p) ?: return
+        // ein beendeter (eingerasteter) Overdub wird nur noch fertig geschrieben – nicht verwerfen
+        if (t.released && t.latched) return
         if (!takes.compareAndSet(p, t, null)) return
         val b = t.before
         val l = loops.get(p)
         if (t.overdub && b != null && l != null && b.size == l.data.size) System.arraycopy(b, 0, l.data, 0, b.size)
     }
 
-    fun isLatched(p: Int): Boolean = takes.get(p)?.latched ?: false
+    fun isLatched(p: Int): Boolean = takes.get(p)?.let { it.latched && !it.released } ?: false
 
     /**
      * Datei-Clip laden (Ableton-Stil): Tempo/Länge erkannt, auf das Master-Tempo gewarpt.
