@@ -58,6 +58,16 @@ class MainActivity : Activity() {
             }.start()
         }
         pads.onTempo = { showTempo() }
+        val prefs = getSharedPreferences("marvpad", MODE_PRIVATE)
+        Engine.recSource = prefs.getInt("recSource", 0)
+        Engine.liveBars = prefs.getInt("liveBars", 0)
+        pads.onRecSettingsChanged = {
+            prefs.edit().putInt("recSource", Engine.recSource).putInt("liveBars", Engine.liveBars).apply()
+            toast(
+                (if (Engine.recSource == 1) "Quelle: Resample (App-Ausgang inkl. Effekte)" else "Quelle: Mikrofon") +
+                    " · " + (if (Engine.liveBars > 0) "Live: leeres Pad antippen, Aufnahme ab nächstem Takt (${Engine.liveBars} Takt)" else "Halten zum Aufnehmen")
+            )
+        }
         pads.onRecMenu = { showRecMenu() }
         pads.onSongStopped = { finishSong() }
         pads.theme = getSharedPreferences("marvpad", MODE_PRIVATE).getInt("design", PadView.NOIR)

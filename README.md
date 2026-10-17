@@ -66,6 +66,12 @@ Unter jedem Pad sitzt ein kleiner **•••**-Knopf:
 - **Loop exportieren** – speichert den Loop als WAV (mono, 16 Bit).
 - **Loop löschen**
 
+## Resample & Live-Aufnahme
+
+Unten zwei Schalter:
+- **🎙 MIKRO ↔ 🔁 RESAMPLE** – Resample nimmt auf ein leeres Pad auf, was die App gerade ausgibt (inkl. Effekte und XY-Modulation). So lässt sich ein Pad mit Effekt direkt auf das Nachbar-Pad aufnehmen.
+- **✋ HALTEN ↔ ⚡ LIVE 1/2/4 TAKTE** – Im Live-Modus ein leeres Pad nur antippen: es zeigt „BEREIT“, die Aufnahme startet auf dem nächsten Takt, läuft genau die eingestellte Länge, stoppt selbst und spielt sofort synchron weiter. Erneutes Antippen bricht ab. Ohne Tempo: Antippen startet, nochmal Antippen stoppt.
+
 ## Effekte
 
 Über den Pads liegt die **XY-Fläche**: Finger drauf = Effekt an, X- und Y-Achse modulieren ihn. **🔒 HOLD** (Ecke oben rechts) hält den Effekt an der letzten Position aktiv, auch ohne Finger – auf der Fläche ziehen verschiebt ihn weiter, nochmal HOLD schaltet ihn aus.

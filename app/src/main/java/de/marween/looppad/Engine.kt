@@ -48,6 +48,13 @@ class Take(val overdub: Boolean, val fromIn: Long, val downNanos: Long, val oneS
     @Volatile var fromQ: Long = fromIn
     /** Ausgabe-Frame, an dem der Loop startet (Rasterpunkt), oder NO_GRID. */
     @Volatile var qOut: Long = NO_GRID
+    /** 0 = Mikrofon, 1 = Resample (Master-Ausgang). */
+    var src: Int = 0
+    /** Live-Aufnahme (Antippen statt Halten). */
+    var live: Boolean = false
+    /** Bei Resample: Ausgabe-Frames der Aufnahme. */
+    @Volatile var fromOut: Long = 0L
+    @Volatile var toOut: Long = Long.MAX_VALUE
 
     companion object {
         const val NO_GRID = Long.MIN_VALUE
@@ -899,6 +906,7 @@ object Engine {
         val newSize = sampleRate * (MAX_SECONDS + 2)
         if (ring.size != newSize) ring = FloatArray(newSize)
         ringSize = newSize
+        if (outRing.size != newSize) outRing = FloatArray(newSize)
 
         val t: AudioTrack = try {
             buildTrack()
@@ -1079,6 +1087,7 @@ object Engine {
         val maxFrames = sampleRate.toLong() * MAX_SECONDS
         for (p in 0 until PADS) {
             val take = takes.get(p) ?: continue
+            if (take.src == 1) continue
             if (!take.armed && now - take.downNanos >= MIN_HOLD_NANOS) {
                 take.armed = true
                 if (take.overdub) loops.get(p)?.muted = false
@@ -1183,6 +1192,23 @@ object Engine {
         synchronized(take) {
             if (take.released) return
             take.upNanos = upNanos
+            if (take.src == 1) {
+                val rawOut = max(take.fromOut + 1, outClock.frameAt(upNanos, sampleRate))
+                val m1 = masterLen
+                if (m1 <= 0L || take.oneShot) {
+                    take.toOut = rawOut
+                } else {
+                    val len = quantizeLen(rawOut - take.fromOut)
+                    val unit = min(len, m1)
+                    val ms = masterStart
+                    val qOut = ms + Math.floorDiv(take.fromOut - ms + unit / 2, unit) * unit
+                    take.qOut = qOut
+                    take.fromOut = qOut
+                    take.toOut = qOut + len
+                }
+                take.released = true
+                return
+            }
             val rawTo = max(take.fromIn, inClock.frameAt(upNanos, sampleRate))
             val m = masterLen
             if (take.overdub || m <= 0L || take.oneShot) {
@@ -1318,6 +1344,8 @@ object Engine {
                 )
             }
             if (tgt >= 0) for (i in 0 until block) out[i] += bus[i]
+            writeOutRing(out, w, block)
+            processResampleTakes(w, block)
             val vol = knobs[3] * 1.25f
             var mpeak = 0f
             for (i in 0 until block) {
@@ -1390,7 +1418,16 @@ object Engine {
 
     /** Gibt true zurück, wenn ein ONE SHOT angeschlagen wurde (keine Aufnahme). */
     fun padDown(p: Int): Boolean {
-        if (!running || takes.get(p) != null) return false
+        if (!running) return false
+        val existing = takes.get(p)
+        if (existing != null) {
+            if (existing.live) {
+                // Live: zweites Antippen beendet eine offene Aufnahme bzw. bricht eine geplante ab
+                if (!existing.released) releaseTake(existing, System.nanoTime())
+                else takes.compareAndSet(p, existing, null)
+            }
+            return false
+        }
         val loop = loops.get(p)
         if (loop != null && loop.oneShot) {
             seqSelected = p
@@ -1409,9 +1446,127 @@ object Engine {
             return true
         }
         val now = System.nanoTime()
+        if (loop == null && (liveBars > 0 || recSource == 1)) {
+            startNewTake(p, now)
+            return false
+        }
         val from = max(0L, inClock.frameAt(now, sampleRate))
         takes.set(p, Take(loop != null, from, now, padOneShot[p]))
         return false
+    }
+
+    // ---------------------------------------------------------------- Resample & Live-Aufnahme
+
+    /** 0 = Mikrofon, 1 = Resample (nimmt auf, was die App ausgibt – inkl. Effekte). */
+    @Volatile var recSource = 0
+    /** 0 = Halten zum Aufnehmen, sonst Live-Modus mit fester Länge in Takten (1, 2, 4). */
+    @Volatile var liveBars = 0
+
+    private var outRing = FloatArray(0)
+
+    private fun writeOutRing(out: FloatArray, w: Long, block: Int) {
+        val size = outRing.size
+        if (size == 0) return
+        var idx = (w % size).toInt()
+        for (i in 0 until block) {
+            outRing[idx] = out[i]
+            idx++
+            if (idx == size) idx = 0
+        }
+    }
+
+    private fun startNewTake(p: Int, now: Long) {
+        val t = Take(false, max(0L, inClock.frameAt(now, sampleRate)), now, padOneShot[p])
+        t.src = recSource
+        t.live = liveBars > 0
+        val heard = outClock.frameAt(now, sampleRate)
+        val m = masterLen
+        if (t.live && m > 0L) {
+            var len = m * liveBars
+            val maxF = sampleRate.toLong() * MAX_SECONDS
+            while (len > maxF && len > m) len -= m
+            if (len > maxF) len = maxF
+            // nächster Taktanfang – kurz nach der Eins zählt noch die Eins
+            val prev = masterStart + Math.floorDiv(heard - masterStart, m) * m
+            val start = if (heard - prev < m / 16) prev else prev + m
+            t.qOut = start
+            if (t.src == 1) {
+                t.fromOut = start
+                t.toOut = start + len
+            } else {
+                val qIn = inClock.frameAt(outClock.nanosAt(start, sampleRate), sampleRate)
+                t.fromQ = qIn
+                t.cursor = qIn
+                t.toIn = qIn + len
+            }
+            t.armed = true
+            t.released = true
+        } else if (t.src == 1) {
+            t.fromOut = heard
+        }
+        takes.set(p, t)
+    }
+
+    private fun processResampleTakes(w: Long, block: Int) {
+        val end = w + block
+        val maxF = sampleRate.toLong() * MAX_SECONDS
+        for (p in 0 until PADS) {
+            val take = takes.get(p) ?: continue
+            if (take.src != 1) continue
+            if (!take.released && end - take.fromOut >= maxF) {
+                synchronized(take) {
+                    if (!take.released) {
+                        take.toOut = take.fromOut + maxF
+                        take.upNanos = System.nanoTime()
+                        take.released = true
+                    }
+                }
+            }
+            if (take.released && end >= take.toOut) {
+                if (takes.compareAndSet(p, take, null)) {
+                    val e = end
+                    Thread { finishResample(p, take, e) }.start()
+                }
+            }
+        }
+    }
+
+    private fun finishResample(p: Int, take: Take, endWritten: Long) {
+        val size = outRing.size
+        if (size == 0) return
+        var from = take.fromOut
+        if (from < endWritten - size + 1) from = endWritten - size + 1
+        val len = (take.toOut - from).toInt()
+        val minFrames = (sampleRate * (MIN_HOLD_NANOS / 1_000_000L) / 1000L).toInt()
+        if (len < minFrames) return
+        val data = FloatArray(len)
+        for (i in 0 until len) data[i] = outRing[Math.floorMod(from + i, size.toLong()).toInt()]
+        val fade = min(len / 4, sampleRate * FADE_MS / 1000)
+        for (i in 0 until fade) {
+            val g = i.toFloat() / fade
+            data[i] *= g
+            data[len - 1 - i] *= g
+        }
+        val loop = Loop(data)
+        loop.start = from
+        if (take.oneShot) {
+            loop.oneShot = true
+        } else if (masterLen == 0L) {
+            masterStart = loop.start
+            masterLen = len.toLong()
+        }
+        padSemi[p] = 0
+        if (takes.get(p) == null && loops.get(p) == null) {
+            loops.set(p, loop)
+            onRecorded?.invoke(p, data.copyOf(), sampleRate)
+        }
+    }
+
+    /** Pad wartet im Live-Modus auf den nächsten Takt. */
+    fun isArmed(p: Int): Boolean {
+        val t = takes.get(p) ?: return false
+        if (!t.live || t.qOut == Take.NO_GRID) return false
+        return outClock.frameAt(System.nanoTime(), sampleRate) < t.qOut
     }
 
     /** Schaltet ein Pad zwischen LOOP und ONE SHOT um (auch mit vorhandener Aufnahme). */
@@ -1451,7 +1606,7 @@ object Engine {
     /** Gibt true zurück, wenn es nur ein kurzer Tipp war (keine Aufnahme). */
     fun padUp(p: Int): Boolean {
         val take = takes.get(p) ?: return false
-        if (take.released) return false
+        if (take.live || take.released) return false
         val now = System.nanoTime()
         if (now - take.downNanos < MIN_HOLD_NANOS) {
             takes.compareAndSet(p, take, null)
@@ -1583,6 +1738,10 @@ object Engine {
 
     fun recordingSeconds(p: Int): Float {
         val take = takes.get(p) ?: return 0f
+        if (take.live && take.qOut != Take.NO_GRID) {
+            val heard = outClock.frameAt(System.nanoTime(), sampleRate)
+            return max(0L, heard - take.qOut).toFloat() / sampleRate
+        }
         val end = if (take.released) take.upNanos else System.nanoTime()
         return (end - take.downNanos) / 1e9f
     }

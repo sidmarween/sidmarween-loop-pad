@@ -203,6 +203,7 @@ class PadView(context: Context) : View(context) {
     private val displayRect = RectF()
     var onDesignMenu: (() -> Unit)? = null
     var onTempo: (() -> Unit)? = null
+    var onRecSettingsChanged: (() -> Unit)? = null
 
     private fun bpmLabel(): String {
         val b = Engine.currentBpm()
@@ -934,7 +935,7 @@ class PadView(context: Context) : View(context) {
             Engine.PadState.ONESHOT -> String.format(Locale.GERMANY, "⚡ %.1fs", Engine.loopSeconds(i))
             Engine.PadState.PLAYING -> String.format(Locale.GERMANY, "∞ %.1fs", Engine.loopSeconds(i))
             Engine.PadState.MUTED -> "AUS"
-            Engine.PadState.RECORDING -> String.format(Locale.GERMANY, "REC %.1f", Engine.recordingSeconds(i))
+            Engine.PadState.RECORDING -> if (Engine.isArmed(i)) "BEREIT" else String.format(Locale.GERMANY, "%s %.1f", if (Engine.recSource == 1) "RS" else "REC", Engine.recordingSeconds(i))
             Engine.PadState.OVERDUB -> "DUB"
         }
         if (label.isNotEmpty()) {
@@ -1139,20 +1140,43 @@ class PadView(context: Context) : View(context) {
         }
     }
 
+    private val srcPill = RectF()
+    private val modePill = RectF()
+
     private fun drawFooter(canvas: Canvas) {
         val w = width.toFloat()
-        val y = height - insetBottom - dp(22f)
-        textPaint.textSize = dp(11f)
+        val top = height - insetBottom - dp(33f)
+        val ph = dp(22f)
+        val pw = min(dp(160f), (w - dp(48f)) / 2f)
+        srcPill.set(w / 2f - dp(6f) - pw, top, w / 2f - dp(6f), top + ph)
+        modePill.set(w / 2f + dp(6f), top, w / 2f + dp(6f) + pw, top + ph)
         if (clearMode) {
+            textPaint.textSize = dp(11f)
             textPaint.color = Color.rgb(255, 80, 100)
-            canvas.drawText("Tippe auf ein Pad, um es zu löschen", w / 2f, y, textPaint)
+            canvas.drawText("Tippe auf ein Pad, um es zu löschen", w / 2f, top + dp(15f), textPaint)
         } else {
-            textPaint.color = ink(0.55f)
-            canvas.drawText("Halten = Aufnahme/Overdub · Tippen = An/Aus · ⚡ = One Shot", w / 2f, y, textPaint)
+            val cols = overlayColors()
+            val rs = Engine.recSource == 1
+            val live = Engine.liveBars > 0
+            footerPill(canvas, srcPill, if (rs) "🔁 RESAMPLE" else "🎙 MIKRO", rs, cols)
+            footerPill(canvas, modePill, if (live) "⚡ LIVE ${Engine.liveBars} TAKT" + (if (Engine.liveBars > 1) "E" else "") else "✋ HALTEN", live, cols)
         }
-        textPaint.textSize = dp(10f)
+        textPaint.textSize = dp(9f)
         textPaint.color = alpha(BRAND_ORANGE, 0.8f)
-        canvas.drawText("© marween", w / 2f, height - insetBottom - dp(6f), textPaint)
+        canvas.drawText("© marween", w / 2f, height - insetBottom - dp(2f), textPaint)
+    }
+
+    private fun footerPill(canvas: Canvas, r: RectF, label: String, on: Boolean, cols: IntArray) {
+        val rr = r.height() / 2f
+        fillPaint.shader = null
+        fillPaint.color = if (on) cols[2] else alpha(cols[0], 0.85f)
+        canvas.drawRoundRect(r, rr, rr, fillPaint)
+        strokePaint.strokeWidth = dp(1.2f)
+        strokePaint.color = if (on) Color.WHITE else alpha(cols[1], 0.5f)
+        canvas.drawRoundRect(r, rr, rr, strokePaint)
+        textPaint.textSize = dp(10.5f)
+        textPaint.color = if (on) Color.WHITE else cols[1]
+        canvas.drawText(label, r.centerX(), r.centerY() + dp(3.8f), textPaint)
     }
 
     // ---------------------------------------------------------------- Regler, Effekt-Knopf, XY-Fläche
@@ -1575,6 +1599,20 @@ class PadView(context: Context) : View(context) {
                 val y = e.getY(idx)
                 if (message != null) {
                     onMessageTap?.invoke()
+                    return true
+                }
+                if (!clearMode && srcPill.contains(x, y)) {
+                    Engine.recSource = 1 - Engine.recSource
+                    performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+                    burst(x, y, overlayColors()[2], 12, 160f)
+                    onRecSettingsChanged?.invoke()
+                    return true
+                }
+                if (!clearMode && modePill.contains(x, y)) {
+                    Engine.liveBars = when (Engine.liveBars) { 0 -> 1; 1 -> 2; 2 -> 4; else -> 0 }
+                    performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+                    burst(x, y, overlayColors()[2], 12, 160f)
+                    onRecSettingsChanged?.invoke()
                     return true
                 }
                 for (i in 0 until VISIBLE_PADS) {
@@ -2155,7 +2193,7 @@ class PadView(context: Context) : View(context) {
             Engine.PadState.ONESHOT -> String.format(Locale.GERMANY, "%.1fs", Engine.loopSeconds(i))
             Engine.PadState.PLAYING -> String.format(Locale.GERMANY, "∞ %.1fs", Engine.loopSeconds(i))
             Engine.PadState.MUTED -> "AUS"
-            Engine.PadState.RECORDING -> String.format(Locale.GERMANY, "REC %.1f", Engine.recordingSeconds(i))
+            Engine.PadState.RECORDING -> if (Engine.isArmed(i)) "BEREIT" else String.format(Locale.GERMANY, "%s %.1f", if (Engine.recSource == 1) "RS" else "REC", Engine.recordingSeconds(i))
             Engine.PadState.OVERDUB -> "DUB"
         }
         if (label.isNotEmpty()) {
@@ -3190,7 +3228,7 @@ class PadView(context: Context) : View(context) {
             Engine.PadState.ONESHOT -> String.format(Locale.GERMANY, "%.1fs", Engine.loopSeconds(i))
             Engine.PadState.PLAYING -> String.format(Locale.GERMANY, "∞ %.1fs", Engine.loopSeconds(i))
             Engine.PadState.MUTED -> "AUS"
-            Engine.PadState.RECORDING -> String.format(Locale.GERMANY, "REC %.1f", Engine.recordingSeconds(i))
+            Engine.PadState.RECORDING -> if (Engine.isArmed(i)) "BEREIT" else String.format(Locale.GERMANY, "%s %.1f", if (Engine.recSource == 1) "RS" else "REC", Engine.recordingSeconds(i))
             Engine.PadState.OVERDUB -> "DUB"
         }
         if (label.isNotEmpty()) {
