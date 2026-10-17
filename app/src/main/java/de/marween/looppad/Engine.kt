@@ -1308,7 +1308,7 @@ object Engine {
         val h = max(1L, held).toDouble()
         var best = m
         var bestErr = Double.MAX_VALUE
-        for (b in intArrayOf(1, 2, 4, 8, 16)) {
+        for (b in intArrayOf(1, 2, 4, 8, 16, 32)) {
             val l = m * b
             if (l > maxFrames && b > 1) break
             val err = abs(kotlin.math.ln(h / l.toDouble()))
@@ -1613,7 +1613,7 @@ object Engine {
             return true
         }
         val now = System.nanoTime()
-        if (loop == null && (liveBars > 0 || padSource[p] == 1)) {
+        if (loop == null && (liveBars != 0 || padSource[p] == 1)) {
             startNewTake(p, now)
             return false
         }
@@ -1640,6 +1640,7 @@ object Engine {
         return if (mic && wave) 2 else if (wave) 1 else 0
     }
     /** 0 = Halten zum Aufnehmen, sonst Live-Modus mit fester Länge in Takten (1, 2, 4). */
+    /** 0 = HALTEN, -1 = TIPPEN (Start/Stopp per Tipp), >0 = LIVE mit fester Länge in Takten. */
     @Volatile var liveBars = 0
 
     private var outRing = FloatArray(0)
@@ -1658,10 +1659,10 @@ object Engine {
     private fun startNewTake(p: Int, now: Long) {
         val t = Take(false, max(0L, inClock.frameAt(now, sampleRate)), now, padOneShot[p])
         t.src = padSource[p]
-        t.live = liveBars > 0
+        t.live = liveBars != 0
         val heard = outClock.frameAt(now, sampleRate)
         val m = masterLen
-        if (t.live && m > 0L) {
+        if (liveBars > 0 && m > 0L) {
             var len = m * liveBars
             val maxF = sampleRate.toLong() * MAX_SECONDS
             while (len > maxF && len > m) len -= m

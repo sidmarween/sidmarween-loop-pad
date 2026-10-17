@@ -1212,9 +1212,14 @@ class PadView(context: Context) : View(context) {
         } else {
             val cols = overlayColors()
             val sum = Engine.sourceSummary(VISIBLE_PADS)
-            val live = Engine.liveBars > 0
+            val live = Engine.liveBars != 0
             footerPill(canvas, srcPill, when (sum) { 1 -> "🔁 ALLE WAVE"; 2 -> "🎙/🔁 GEMISCHT"; else -> "🎙 ALLE MIKRO" }, sum != 0, cols)
-            footerPill(canvas, modePill, if (live) "⚡ LIVE ${Engine.liveBars} TAKT" + (if (Engine.liveBars > 1) "E" else "") else "✋ HALTEN", live, cols)
+            val ml = when {
+                Engine.liveBars < 0 -> "👆 TIPPEN"
+                Engine.liveBars > 0 -> "⚡ LIVE ${Engine.liveBars} TAKT" + (if (Engine.liveBars > 1) "E" else "")
+                else -> "✋ HALTEN"
+            }
+            footerPill(canvas, modePill, ml, live, cols)
         }
         textPaint.textSize = dp(9f)
         textPaint.color = alpha(BRAND_ORANGE, 0.8f)
@@ -1733,7 +1738,7 @@ class PadView(context: Context) : View(context) {
                     return true
                 }
                 if (!clearMode && modePill.contains(x, y)) {
-                    Engine.liveBars = when (Engine.liveBars) { 0 -> 1; 1 -> 2; 2 -> 4; 4 -> 8; 8 -> 16; else -> 0 }
+                    Engine.liveBars = when (Engine.liveBars) { 0 -> -1; -1 -> 1; 1 -> 2; 2 -> 4; 4 -> 8; 8 -> 16; else -> 0 }
                     performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
                     burst(x, y, overlayColors()[2], 12, 160f)
                     onRecSettingsChanged?.invoke()

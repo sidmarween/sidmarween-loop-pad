@@ -68,7 +68,11 @@ class MainActivity : Activity() {
             val sum = Engine.sourceSummary(PadView.VISIBLE_PADS)
             toast(
                 (when (sum) { 1 -> "Eingang aller Pads: Wave (App-Audio inkl. Effekte)"; 2 -> "Eingang: gemischt"; else -> "Eingang aller Pads: Mikrofon" }) +
-                    " · " + (if (Engine.liveBars > 0) "Live: leeres Pad antippen, Aufnahme ab nächstem Takt (${Engine.liveBars} Takt)" else "Halten zum Aufnehmen")
+                    " · " + when {
+                    Engine.liveBars < 0 -> "TIPPEN: 1. Tipp startet, 2. Tipp beendet – Loop rastet auf 1–32 Takte ein"
+                    Engine.liveBars > 0 -> "LIVE: leeres Pad antippen, Aufnahme ab nächstem Takt (${Engine.liveBars} Takt)"
+                    else -> "HALTEN: Aufnahme solange der Finger liegt – Loop rastet auf 1–32 Takte ein"
+                }
             )
         }
         pads.onRecMenu = { showRecMenu() }
