@@ -29,6 +29,7 @@ import android.graphics.Typeface
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlin.math.max
 import kotlin.math.min
 
 class MainActivity : Activity() {
@@ -113,7 +114,8 @@ class MainActivity : Activity() {
         pads.statusColors = prefs.getBoolean("statusColors", true)
         pads.onImportMenu = { p -> showImportMenu(p) }
         pads.onPadFxEditor = { p -> showPadFxEditor(p) }
-        pads.onEditorSave = { p, data, slices -> showEditorSave(p, data, slices) }
+        pads.onEditorSave = { p, data, slices, cues -> showEditorSave(p, data, slices, cues) }
+        pads.onRollIo = { p -> showRollIo(p) }
         pads.onLaunchQuantChanged = {
             prefs.edit().putInt("launchIdx", Engine.launchIdx).apply()
             hint(if (Engine.LAUNCH_Q[Engine.launchIdx] <= 0f) "Start-Raster AUS: Loops starten/stoppen sofort"
@@ -139,6 +141,7 @@ class MainActivity : Activity() {
         dj.onPadsMode = { switchMode(false) }
         dj.onHint = { hint(it) }
         dj.onSkinMenu = { showDesigns() }
+        dj.onSamplerLoad = { p -> showSamplerLoad(p) }
         djMode = prefs.getBoolean("djMode", false)
         // MIDI
         Midi.load(prefs)
@@ -429,10 +432,18 @@ class MainActivity : Activity() {
     private var pendingStems: List<FloatArray>? = null
     private var pendingStemName = ""
 
-    private fun showEditorSave(p: Int, data: FloatArray, slices: Int) {
+    private fun showEditorSave(p: Int, data: FloatArray, slices: Int, cues: IntArray) {
         val labels = ArrayList<String>()
         val actions = ArrayList<() -> Unit>()
         val defName = "Pad ${p + 1} · " + SimpleDateFormat("dd.MM. HH:mm", Locale.GERMANY).format(Date())
+        // Hot Cues: gesetzte Cue-Punkte – sonst die Slice-Grenzen
+        val hot = IntArray(4) { -1 }
+        val set = cues.filter { it >= 0 }.sorted()
+        if (set.isNotEmpty()) for (k in 0 until min(4, set.size)) hot[k] = set[k]
+        else if (slices > 1) for (k in 0 until min(4, slices)) hot[k] = (k.toLong() * data.size / slices).toInt()
+        val nHot = hot.count { it >= 0 }
+        labels.add("💿 In die DJ-Bibliothek (Startpunkt = S" + (if (nHot > 0) " + $nHot Hot Cues" else "") + ")")
+        actions.add { askName(defName, "Titel in der DJ-Bibliothek") { name -> saveToDjLibrary(name, data, hot) } }
         labels.add("💾 Ausschnitt als Sample in die Bibliothek")
         actions.add { askCategory("Ausschnitt speichern") { cat -> askName(defName) { name -> saveToLibrary(cat, listOf(data), name, Engine.isOneShot(p), null) } } }
         if (slices > 1) {
@@ -453,6 +464,227 @@ class MainActivity : Activity() {
             .setItems(labels.toTypedArray()) { _, w -> actions[w]() }
             .setNegativeButton("Abbrechen", null)
             .show()
+    }
+
+    private fun saveToDjLibrary(name: String, data: FloatArray, hot: IntArray) {
+        val rate = Engine.sampleRate
+        Thread {
+            try {
+                val bpm = Warp.bpmFromName(name) ?: if (data.size < rate * 30) Warp.analyze(data, rate, name).bpm else {
+                    val tmp = Dj.Deck(9)
+                    Dj.load(tmp, Dj.fromMono(data, rate), name, null)
+                    tmp.bpm
+                }
+                val hs = DoubleArray(4) { k -> if (hot[k] >= 0) hot[k].toDouble() / rate else -1.0 }
+                DjLibrary.add(this, data, rate, name, bpm, 0.0, 0.0, hs)
+                runOnUiThread { hint(String.format(Locale.GERMANY, "💿 „%s“ in der DJ-Bibliothek · %.1f BPM · Startpunkt + %d Hot Cues", name, bpm, hs.count { it >= 0 })) }
+            } catch (e: Throwable) {
+                runOnUiThread { toast("Speichern fehlgeschlagen: ${e.message ?: e}") }
+            }
+        }.start()
+    }
+
+    // ================================================================ DJ-Bibliothek
+
+    private fun pickDjLib(title: String, onPick: (DjLibrary.Item) -> Unit) {
+        val items = DjLibrary.list(this)
+        if (items.isEmpty()) {
+            toast("DJ-Bibliothek ist leer – im Wave-Editor „💾 → 💿 DJ-Bibliothek“ wählen")
+            return
+        }
+        val labels = items.map { String.format(Locale.GERMANY, "%s · %.1f BPM · %s", it.title, it.bpm, Dj.fmt(it.seconds)) }
+        AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
+            .setTitle(title)
+            .setItems(labels.toTypedArray()) { _, i -> onPick(items[i]) }
+            .setNeutralButton("Löschen …") { _, _ ->
+                AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
+                    .setTitle("Aus der DJ-Bibliothek löschen")
+                    .setItems(labels.toTypedArray()) { _, i -> confirm("Löschen?", items[i].title) { DjLibrary.delete(this, items[i].id) } }
+                    .show()
+            }
+            .setNegativeButton("Abbrechen", null)
+            .show()
+    }
+
+    private fun loadDeckLib(k: Int, it: DjLibrary.Item) {
+        val dd = Dj.decks[k]
+        dd.loading = true
+        Thread {
+            try {
+                val data = AudioFiles.decodeFile(it.file, Engine.sampleRate, 600)
+                val r = Engine.sampleRate.toDouble()
+                Dj.load(dd, Dj.fromMono(data, Engine.sampleRate), it.title, it.bpm)
+                dd.grid = it.grid * r
+                dd.cuePoint = it.cue * r
+                for (h in 0..3) dd.hot[h] = if (it.hot[h] >= 0) it.hot[h] * r else -1.0
+                dd.seekTo = dd.cuePoint
+                dd.libId = it.id
+                runOnUiThread { hint(String.format(Locale.GERMANY, "Deck %s: %s · %.1f BPM · Cue-Punkte geladen", "AB"[k], it.title, it.bpm)) }
+            } catch (e: Throwable) {
+                runOnUiThread { toast("Laden fehlgeschlagen: ${e.message ?: e}") }
+            } finally {
+                dd.loading = false
+            }
+        }.start()
+    }
+
+    /** Sampler-Pad im DJ-Modus belegen – das Pad startet beim Antippen synchron ab dem Startpunkt. */
+    private fun showSamplerLoad(p: Int) {
+        val items = arrayListOf("💿 Aus der DJ-Bibliothek (ab Startpunkt)")
+        val acts = arrayListOf<() -> Unit>({ pickDjLib("DJ-Bibliothek → Pad ${p + 1}") { it -> loadPadFromLib(p, it) } })
+        for (k in 0..1) {
+            val dd = Dj.decks[k]
+            if (dd.loaded()) {
+                items.add("${if (k == 0) "🅰" else "🅱"} Deck ${"AB"[k]} ab Cue-Punkt (${dd.title})")
+                acts.add { loadPadFromDeck(p, k) }
+            }
+        }
+        items.add("📂 Datei oder 📚 Bibliothek …")
+        acts.add {
+            Engine.padOneShot[p] = false
+            showImportMenu(p)
+        }
+        if (Engine.hasLoop(p)) {
+            items.add("🗑 Pad leeren")
+            acts.add { Engine.clear(p) }
+        }
+        AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
+            .setTitle("Sampler-Pad ${p + 1}")
+            .setItems(items.toTypedArray()) { _, w -> acts[w]() }
+            .setNegativeButton("Abbrechen", null)
+            .show()
+    }
+
+    /** Ausschnitt ab dem Startpunkt auf ganze Takte (2er-Potenz) zuschneiden und als synchronen Clip aufs Pad legen. */
+    private fun clipToPad(p: Int, src: FloatArray, startFrame: Int, bpm: Float, title: String) {
+        val rate = Engine.sampleRate
+        val beat = rate * 60.0 / bpm
+        val avail = (src.size - startFrame) / (beat * 4)
+        val master = if (Engine.currentBpm() > 0f) Engine.currentBpm() else bpm
+        var bars = 1f
+        while (bars * 2 <= avail && bars * 2 * 240f / master <= 60f) bars *= 2f
+        if (avail < 1.0) bars = max(0.25f, (Math.floor(avail * 4) / 4).toFloat())
+        val len = (bars * 4 * beat).toInt().coerceAtMost(src.size - startFrame)
+        if (len < rate / 20) { runOnUiThread { toast("Zu kurz ab dem Startpunkt") }; return }
+        val clip = src.copyOfRange(startFrame, startFrame + len)
+        Engine.padOneShot[p] = false
+        val desc = Engine.importClip(p, clip, Warp.Info(bpm, bars, "DJ"))
+        Engine.padSyncStart[p] = true
+        runOnUiThread { hint("Pad ${p + 1}: $title · $desc · antippen startet synchron ab dem Startpunkt") }
+    }
+
+    private fun loadPadFromLib(p: Int, it: DjLibrary.Item) {
+        Thread {
+            try {
+                val data = AudioFiles.decodeFile(it.file, Engine.sampleRate, 600)
+                clipToPad(p, data, (it.cue * Engine.sampleRate).toInt().coerceIn(0, data.size - 1), it.bpm, it.title)
+            } catch (e: Throwable) {
+                runOnUiThread { toast("Laden fehlgeschlagen: ${e.message ?: e}") }
+            }
+        }.start()
+    }
+
+    private fun loadPadFromDeck(p: Int, k: Int) {
+        val dd = Dj.decks[k]
+        val d = dd.data ?: return
+        val ch = dd.ch
+        val srcRate = dd.srcRate
+        val cue = dd.cuePoint
+        val bpm = dd.bpm
+        val title = dd.title
+        Thread {
+            try {
+                // höchstens 64 s ab dem Cue-Punkt, mono, auf die Engine-Rate
+                val rate = Engine.sampleRate
+                val start = cue.toInt().coerceIn(0, dd.len - 1)
+                val n = min(dd.len - start, srcRate * 64)
+                val outN = (n.toLong() * rate / srcRate).toInt()
+                val mono = FloatArray(outN)
+                for (i in 0 until outN) {
+                    val f = start + (i.toLong() * srcRate / rate).toInt()
+                    mono[i] = if (ch == 2) (d[2 * f] + d[2 * f + 1]) / 65536f else d[f] / 32768f
+                }
+                clipToPad(p, mono, 0, if (bpm > 0f) bpm else 120f, title)
+            } catch (e: Throwable) {
+                runOnUiThread { toast("Laden fehlgeschlagen: ${e.message ?: e}") }
+            }
+        }.start()
+    }
+
+    // ================================================================ Piano-Roll: MIDI-Dateien
+
+    private var rollIoPad = 0
+    private var rollIoAdd = false
+
+    private fun showRollIo(p: Int) {
+        rollIoPad = p
+        val n = Engine.noteCount(p)
+        AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
+            .setTitle("Pad ${p + 1} · Noten ($n)")
+            .setItems(arrayOf(
+                "📤 Noten als MIDI-Datei exportieren (.mid)",
+                "📥 MIDI-Datei importieren – ersetzt die Noten",
+                "📥 MIDI-Datei importieren – zu den Noten hinzufügen"
+            )) { _, w ->
+                when (w) {
+                    0 -> {
+                        if (n == 0) { toast("Keine Noten zum Exportieren"); return@setItems }
+                        val stamp = SimpleDateFormat("yyyyMMdd_HHmm", Locale.GERMANY).format(Date())
+                        val i = Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
+                            addCategory(Intent.CATEGORY_OPENABLE)
+                            type = "audio/midi"
+                            putExtra(Intent.EXTRA_TITLE, "MarvPAD_Pad${p + 1}_$stamp.mid")
+                        }
+                        try { startActivityForResult(i, REQ_MIDI_OUT) } catch (e: Exception) { toast("Kein Dateimanager gefunden") }
+                    }
+                    else -> {
+                        rollIoAdd = w == 2
+                        val i = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+                            addCategory(Intent.CATEGORY_OPENABLE)
+                            type = "*/*"
+                            putExtra(Intent.EXTRA_MIME_TYPES, arrayOf("audio/midi", "audio/x-midi", "audio/mid", "application/x-midi", "application/octet-stream"))
+                        }
+                        try { startActivityForResult(i, REQ_MIDI_IN) } catch (e: Exception) { toast("Kein Dateimanager gefunden") }
+                    }
+                }
+            }
+            .setNegativeButton("Abbrechen", null)
+            .show()
+    }
+
+    private fun writeMidi(uri: Uri) {
+        val p = rollIoPad
+        try {
+            val bytes = MidiFile.export(Engine.notesOf(p), Engine.currentBpm(), "Marv PAD · Pad ${p + 1}")
+            contentResolver.openOutputStream(uri)?.use { it.write(bytes) }
+            toast("MIDI-Datei gespeichert (${Engine.noteCount(p)} Noten)")
+        } catch (e: Exception) {
+            toast("Export fehlgeschlagen: ${e.message ?: e}")
+        }
+    }
+
+    private fun readMidi(uri: Uri) {
+        val p = rollIoPad
+        try {
+            val bytes = contentResolver.openInputStream(uri)?.use { it.readBytes() } ?: return
+            val parsed = MidiFile.parse(bytes)
+            if (parsed.notes.isEmpty()) { toast("Keine Noten in der Datei"); return }
+            val endBeats = parsed.notes.maxOf { it.beat + it.len }
+            var bars = 1
+            while (bars < 16 && bars * 4 < endBeats - 1e-6) bars *= 2
+            Engine.pushPatternUndo("MIDI-Import")
+            if (!rollIoAdd) Engine.clearNotes(p)
+            if (bars > Engine.rollBars[p]) Engine.setRollBars(p, bars)
+            val list = parsed.notes.filter { it.beat / 4.0 < Engine.rollBars[p] }.map {
+                Engine.NoteEv(it.beat / 4.0, it.len / 4.0, it.pitch - 60, (it.vel / 127f).coerceIn(0.05f, 1f))
+            }
+            val ids = Engine.addNotes(p, list)
+            val cut = parsed.notes.size - ids.size
+            toast("${ids.size} Noten importiert" + (if (cut > 0) " · $cut hinter Takt 16 weggelassen" else "") +
+                (if (parsed.bpm > 0f) String.format(Locale.GERMANY, " · Datei: %.0f BPM", parsed.bpm) else ""))
+        } catch (e: Exception) {
+            toast("Import fehlgeschlagen: ${e.message ?: e}")
+        }
     }
 
     private fun splitSlices(data: FloatArray, n: Int): List<FloatArray> {
@@ -1142,11 +1374,13 @@ class MainActivity : Activity() {
             "📂 Datei (MP3, WAV, M4A, OGG …)",
             "📚 Bibliothek (Loops & eigene Samples)",
             "🎙 Meine Aufnahmen",
-            "▦ Von einem Pad übernehmen"
+            "▦ Von einem Pad übernehmen",
+            "💿 DJ-Bibliothek (mit Cue-Punkten)"
         )
         if (dd.loaded()) {
             items.add(String.format(Locale.GERMANY, "🎚 Tempo/Raster korrigieren (%.1f BPM)", dd.bpm))
             items.add("⏏ Auswerfen")
+            items.add(if (dd.libId != null) "💾 Cue-Punkte in der DJ-Bibliothek speichern" else "💿 Track mit Cue-Punkten in die DJ-Bibliothek")
         }
         AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
             .setTitle("Deck ${"AB"[k]} laden")
@@ -1184,17 +1418,53 @@ class MainActivity : Activity() {
                             }
                             .show()
                     }
-                    4 -> fixDeckTempo(k)
-                    5 -> {
+                    4 -> pickDjLib("DJ-Bibliothek → Deck ${"AB"[k]}") { loadDeckLib(k, it) }
+                    5 -> fixDeckTempo(k)
+                    6 -> {
                         dd.playing = false
                         dd.data = null
                         dd.len = 0
                         dd.title = ""
+                        dd.libId = null
                     }
+                    7 -> saveDeckToLib(k)
                 }
             }
             .setNegativeButton("Abbrechen", null)
             .show()
+    }
+
+    /** Cue-Punkte des Decks in der DJ-Bibliothek sichern (bzw. den Track neu aufnehmen). */
+    private fun saveDeckToLib(k: Int) {
+        val dd = Dj.decks[k]
+        val r = dd.srcRate.toDouble()
+        val hot = DoubleArray(4) { if (dd.hot[it] >= 0) dd.hot[it] / r else -1.0 }
+        val id = dd.libId
+        if (id != null) {
+            DjLibrary.update(this, id, dd.bpm, dd.grid / r, dd.cuePoint / r, hot)
+            hint("💾 Cue-Punkte gespeichert")
+            return
+        }
+        val d = dd.data ?: return
+        askName(dd.title, "Titel in der DJ-Bibliothek") { name ->
+            Thread {
+                try {
+                    // als Mono-WAV in Engine-Rate (max. 10 Minuten)
+                    val rate = Engine.sampleRate
+                    val outN = (dd.len.toLong() * rate / dd.srcRate).toInt()
+                    val mono = FloatArray(outN)
+                    for (i in 0 until outN) {
+                        val f = min(dd.len - 1, (i.toLong() * dd.srcRate / rate).toInt())
+                        mono[i] = if (dd.ch == 2) (d[2 * f] + d[2 * f + 1]) / 65536f else d[f] / 32768f
+                    }
+                    val it = DjLibrary.add(this, mono, rate, name, dd.bpm, dd.grid / r, dd.cuePoint / r, hot)
+                    dd.libId = it.id
+                    runOnUiThread { hint("💿 „$name“ mit Cue-Punkten in der DJ-Bibliothek") }
+                } catch (e: Throwable) {
+                    runOnUiThread { toast("Speichern fehlgeschlagen: ${e.message ?: e}") }
+                }
+            }.start()
+        }
     }
 
     private fun fixDeckTempo(k: Int) {
@@ -1647,6 +1917,8 @@ class MainActivity : Activity() {
         when (requestCode) {
             REQ_STEMS -> writeStems(uri)
             REQ_DECK -> loadDeckUri(djDeck, uri)
+            REQ_MIDI_OUT -> writeMidi(uri)
+            REQ_MIDI_IN -> readMidi(uri)
             REQ_IMPORT -> {
                 if (pad < 0) return
                 toast("Importiere …")
@@ -1902,5 +2174,7 @@ class MainActivity : Activity() {
         private const val REQ_COPY = 12
         private const val REQ_STEMS = 13
         private const val REQ_DECK = 14
+        private const val REQ_MIDI_OUT = 15
+        private const val REQ_MIDI_IN = 16
     }
 }

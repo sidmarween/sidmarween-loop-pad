@@ -78,6 +78,8 @@ object Dj {
         @Volatile var peaks: ByteArray = ByteArray(0)
         @Volatile var lows: ByteArray = ByteArray(0)
         @Volatile var loading = false
+        /** Eintrag der DJ-Bibliothek (für das Speichern geänderter Cue-Punkte). */
+        @Volatile var libId: String? = null
 
         /** Abspielposition (Frames der Quelle) – nur der Mischer-Thread schreibt, die Oberfläche liest. */
         @Volatile var pos = 0.0
@@ -568,6 +570,7 @@ object Dj {
         d.pos = grid
         d.seekTo = grid
         d.pitch = 0f
+        d.libId = null
         d.data = t.data
     }
 

@@ -134,6 +134,8 @@ class DjView(context: Context) : View(context) {
     var onPadsMode: (() -> Unit)? = null
     var onHint: ((String) -> Unit)? = null
     var onSkinMenu: (() -> Unit)? = null
+    /** Sampler-Pad lange gedrückt: Audio darauf laden (Pad). */
+    var onSamplerLoad: ((Int) -> Unit)? = null
 
     // ================================================================ Zustand der Oberfläche
     /** Fokus-Deck für die 4 Regler und die XY-Fläche. */
@@ -141,6 +143,8 @@ class DjView(context: Context) : View(context) {
     /** Pads: 0 = Hot Cues/Loops, 1 = Sampler (Pads der App). */
     private var padMode = 0
     private var xyHold = false
+    /** Sampler: nächstes angetipptes Pad wird neu geladen. */
+    private var loadArm = false
     private var xyX = 0.5f
     private var xyY = 0f
     private var xyActive = false
@@ -1423,7 +1427,7 @@ class DjView(context: Context) : View(context) {
                 0 -> (if (Engine.seqPlaying) "■ STOP" else "▶ PLAY") to Engine.seqPlaying
                 1 -> "ACID" to InstState.acidOn
                 2 -> "DRUM" to InstState.drumOn
-                3 -> "METRO" to Engine.metronome
+                3 -> "⏏ LADEN" to loadArm
                 4 -> "🎙 MIC" to Engine.monitorOn
                 else -> "TAP" to false
             }
@@ -1616,6 +1620,19 @@ class DjView(context: Context) : View(context) {
         // Pads zuerst – sie müssen sofort reagieren
         for (i in 0 until 18) if (hit(pads[i], x, y, dp(2f))) {
             ptrs[id] = Ptr(K.PAD, i, 0, x, y, now)
+            if (padMode == 1 && i < 12 && !Engine.hasLoop(i)) {
+                // leeres Sampler-Pad: Audio laden
+                onSamplerLoad?.invoke(i)
+                ptrs.remove(id)
+                return
+            }
+            if (padMode == 1 && i < 12 && loadArm) {
+                // ⏏ LADEN aktiv: dieses Pad neu belegen
+                loadArm = false
+                ptrs.remove(id)
+                onSamplerLoad?.invoke(i)
+                return
+            }
             padPress(i, true)
             return
         }
@@ -1775,7 +1792,7 @@ class DjView(context: Context) : View(context) {
             }
             2 -> {
                 padMode = 1 - padMode
-                onHint?.invoke(if (padMode == 0) "Pads: Hot Cues, Beat-Jump und Loops je Deck" else "Pads: Sampler – die 12 Pads der App, darunter Transport, ACID, DRUM, Metronom, Mikro, Tap")
+                onHint?.invoke(if (padMode == 0) "Pads: Hot Cues, Beat-Jump und Loops je Deck" else "Pads: Sampler – die 12 Pads der App (leeres Pad antippen = Audio laden, spielt synchron ab dem Startpunkt), darunter Transport, ACID, DRUM, Laden, Mikro, Tap")
             }
         }
     }
@@ -1853,7 +1870,10 @@ class DjView(context: Context) : View(context) {
                 0 -> if (Engine.seqPlaying) Engine.seqStop() else Engine.seqPlay()
                 1 -> InstState.acidOn = !InstState.acidOn
                 2 -> InstState.drumOn = !InstState.drumOn
-                3 -> Engine.metronome = !Engine.metronome
+                3 -> {
+                    loadArm = !loadArm
+                    if (loadArm) onHint?.invoke("Jetzt ein Pad antippen, um Audio darauf zu laden (startet synchron ab dem Startpunkt)")
+                }
                 4 -> {
                     Engine.monitorOn = !Engine.monitorOn
                     onHint?.invoke(if (Engine.monitorOn) "🎙 Mikrofon live – mit Kopfhörern, sonst pfeift es" else "Mikrofon aus")

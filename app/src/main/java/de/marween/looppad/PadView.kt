@@ -4410,6 +4410,7 @@ class PadView(context: Context) : View(context) {
         kbOctUp.set(kbClose.left - dp(6f) - hh, kbClose.top, kbClose.left - dp(6f), kbClose.bottom)
         kbOctDown.set(kbOctUp.left - dp(4f) - hh, kbClose.top, kbOctUp.left - dp(4f), kbClose.bottom)
         kbMatrixBtn.set(kbOctDown.left - dp(8f) - hh * 2.4f, kbClose.top, kbOctDown.left - dp(8f), kbClose.bottom)
+        kbIoBtn.set(kbMatrixBtn.left - dp(6f) - hh * 1.7f, kbClose.top, kbMatrixBtn.left - dp(6f), kbClose.bottom)
         val bh = dp(36f)
         kbTakeBtn.set(kbRect.left + dp(8f), kbRect.bottom - dp(8f) - bh, kbRect.left + dp(8f) + min(dp(150f), kbRect.width() * 0.4f), kbRect.bottom - dp(8f))
         val tb = dp(44f)
@@ -4509,6 +4510,7 @@ class PadView(context: Context) : View(context) {
                 if (songView && songTouchDown(id, x, y)) return true
                 if (!songView && matrixTouch(id, x, y)) return true
                 when {
+                    kbIoBtn.contains(x, y) && !songView -> onRollIo?.invoke(kbPad)
                     kbMatrixBtn.contains(x, y) -> {
                         songView = !songView
                         performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
@@ -4639,6 +4641,7 @@ class PadView(context: Context) : View(context) {
         canvas.drawText(sub, r.left + dp(12f), kbClose.centerY() + dp(12f), textPaint)
         textPaint.textAlign = Paint.Align.CENTER
         smallBtn(canvas, kbMatrixBtn, if (songView) "🎹 NOTEN" else "🎬 SONG", false, cols)
+        if (!songView) smallBtn(canvas, kbIoBtn, "⇅ MIDI", false, cols)
         smallBtn(canvas, kbOctDown, if (songView) "◀" else "−", false, cols)
         smallBtn(canvas, kbOctUp, if (songView) "▶" else "+", false, cols)
         smallBtn(canvas, kbClose, "✕", false, cols)
@@ -4667,6 +4670,9 @@ class PadView(context: Context) : View(context) {
         set(v) { songView = !v }
     private var songView = false
     private val kbMatrixBtn = RectF()
+    private val kbIoBtn = RectF()
+    /** Piano-Roll: Noten als MIDI-Datei importieren/exportieren (Pad). */
+    var onRollIo: ((Int) -> Unit)? = null
     private val kbPiano = RectF()
     private val mxGrid = RectF()
     private val mxBars = RectF()
@@ -5473,7 +5479,7 @@ class PadView(context: Context) : View(context) {
     private val edBtnPads = RectF()
     private val edBtnSave = RectF()
     /** Wave-Editor: Ausschnitt bzw. Slices in die Bibliothek speichern (Pad, Audio, Slices). */
-    var onEditorSave: ((Int, FloatArray, Int) -> Unit)? = null
+    var onEditorSave: ((Int, FloatArray, Int, IntArray) -> Unit)? = null
     private val edBtnClose = RectF()
     private var edPeaks = FloatArray(0)
     // Lupe / Zoom: sichtbarer Bereich (Frames) und Werkzeuge
@@ -5485,6 +5491,10 @@ class PadView(context: Context) : View(context) {
     private val edToS = RectF()
     private val edToE = RectF()
     private val edSnapBtn = RectF()
+    private val edCueBtn = RectF()
+    /** Cue-Punkte (Frames im Audio, -1 = leer) – für die DJ-Bibliothek. */
+    private val edCues = IntArray(4) { -1 }
+    private var edCueMode = false
     private var edLoupeX = -1f
     private var edPanX = 0f
     private var edPanV0 = 0
@@ -5507,6 +5517,8 @@ class PadView(context: Context) : View(context) {
         edV0 = 0
         edV1 = d.size
         edNorm = 0f
+        edCueMode = false
+        java.util.Arrays.fill(edCues, -1)
         edSlices = max(1, Engine.padSlices(p))
         edBars = if (Engine.padSlices(p) > 1) Engine.padBars(p) else Engine.suggestBars(d.size)
         edMsg = ""
@@ -5521,8 +5533,8 @@ class PadView(context: Context) : View(context) {
         edBtnClose.set(edRect.right - dp(10f) - hh, edRect.top + dp(10f), edRect.right - dp(10f), edRect.top + dp(10f) + hh)
         val ty = edBtnClose.bottom + dp(8f)
         val tg = dp(6f)
-        val tbw = (edRect.width() - dp(24f) - 4 * tg) / 5f
-        val tools = arrayOf(edZoomOut, edZoomIn, edToS, edToE, edSnapBtn)
+        val tbw = (edRect.width() - dp(24f) - 5 * tg) / 6f
+        val tools = arrayOf(edZoomOut, edZoomIn, edToS, edToE, edSnapBtn, edCueBtn)
         for (i in tools.indices) tools[i].set(edRect.left + dp(12f) + i * (tbw + tg), ty, edRect.left + dp(12f) + i * (tbw + tg) + tbw, ty + dp(32f))
         edWave.set(edRect.left + dp(12f), ty + dp(32f) + dp(10f), edRect.right - dp(12f), ty + dp(42f) + edRect.height() * 0.32f)
         val ks = dp(96f)
@@ -5635,6 +5647,27 @@ class PadView(context: Context) : View(context) {
                         edPinchV0 = edV0
                         edPinchV1 = edV1
                     }
+                    edCueMode && edWave.contains(x, y) -> {
+                        // Cue-Punkt setzen bzw. (nahe an einem) entfernen
+                        val near = edCues.indexOfFirst { it >= 0 && abs(frameToX(it) - x) < dp(18f) }
+                        if (near >= 0) {
+                            edCues[near] = -1
+                            edToast("Cue ${near + 1} entfernt")
+                        } else {
+                            val slot = edCues.indexOfFirst { it < 0 }
+                            if (slot < 0) edToast("Alle 4 Cue-Punkte belegt – einen antippen zum Entfernen")
+                            else {
+                                var f = xToFrame(x)
+                                if (edSnap) f = zeroCross(f)
+                                edCues[slot] = f
+                                edToast("Cue ${slot + 1} gesetzt")
+                            }
+                        }
+                    }
+                    edCueBtn.contains(x, y) -> {
+                        edCueMode = !edCueMode
+                        edToast(if (edCueMode) "📍 Cue-Modus: in die Wellenform tippen setzt Hot Cues 1–4 (Startpunkt = S)" else "Cue-Modus aus – Marker S/E ziehen")
+                    }
                     edWave.contains(x, y) || (y > edWave.bottom && y < edWave.bottom + dp(30f) && x >= edWave.left && x <= edWave.right) -> {
                         val sx = frameToX(edStart)
                         val ex = frameToX(edEnd)
@@ -5684,7 +5717,11 @@ class PadView(context: Context) : View(context) {
                         }
                     }
                     edBtnSave.contains(x, y) -> {
-                        if (edEnd - edStart > 2) onEditorSave?.invoke(edPad, edData.copyOfRange(edStart, edEnd), edSlices)
+                        if (edEnd - edStart > 2) {
+                            // Cue-Punkte relativ zum Ausschnitt (nur die innerhalb von S…E)
+                            val cues = IntArray(4) { k -> val c = edCues[k]; if (c in edStart until edEnd) c - edStart else -1 }
+                            onEditorSave?.invoke(edPad, edData.copyOfRange(edStart, edEnd), edSlices, cues)
+                        }
                     }
                     edBtnPads.contains(x, y) -> {
                         val n = max(2, edSlices)
@@ -5787,6 +5824,7 @@ class PadView(context: Context) : View(context) {
             edV0 = 0
             edV1 = d.size
             edNorm = 0f
+            java.util.Arrays.fill(edCues, -1)
             computePeaks()
         }
         edToast(msg)
@@ -5824,6 +5862,7 @@ class PadView(context: Context) : View(context) {
         smallBtn(canvas, edToS, "⌖ S", false, cols)
         smallBtn(canvas, edToE, "⌖ E", false, cols)
         smallBtn(canvas, edSnapBtn, "0-SNAP", edSnap, cols)
+        smallBtn(canvas, edCueBtn, "📍 CUE", edCueMode, cols)
         canvas.save()
         canvas.clipRect(w.left, w.top, w.right, w.bottom + dp(24f))
         val n = edPeaks.size
@@ -5874,6 +5913,22 @@ class PadView(context: Context) : View(context) {
                 val x = sx + (ex - sx) * k / edSlices
                 canvas.drawLine(x, w.top + dp(4f), x, w.bottom - dp(4f), strokePaint)
             }
+        }
+        // Cue-Punkte (Hot Cues 1–4)
+        val cueCols = intArrayOf(Color.rgb(255, 60, 90), Color.rgb(60, 220, 120), Color.rgb(70, 150, 255), Color.rgb(200, 90, 255))
+        for (k in 0..3) {
+            val cf = edCues[k]
+            if (cf < 0) continue
+            val x = frameToX(cf)
+            if (x < w.left || x > w.right) continue
+            strokePaint.strokeWidth = dp(2f)
+            strokePaint.color = cueCols[k]
+            canvas.drawLine(x, w.top, x, w.bottom, strokePaint)
+            fillPaint.color = cueCols[k]
+            canvas.drawCircle(x, w.top + dp(9f), dp(8f), fillPaint)
+            textPaint.textSize = dp(10f)
+            textPaint.color = Color.WHITE
+            canvas.drawText("${k + 1}", x, w.top + dp(12.5f), textPaint)
         }
         // Marker
         for ((x, lab) in arrayOf(sx to "S", ex to "E")) {
@@ -5997,6 +6052,7 @@ class PadView(context: Context) : View(context) {
             return when {
                 edZoomIn.contains(x, y) || edZoomOut.contains(x, y) -> Triple(RectF(edZoomOut.left, edZoomOut.top, edZoomIn.right, edZoomIn.bottom), "Lupe / Zoom", "Vergrößert die Wellenform bis auf einzelne Samples. Auch mit zwei Fingern in der Wellenform aufziehen. Vergrößert: mit einem Finger abseits der Marker verschieben.")
                 edToS.contains(x, y) || edToE.contains(x, y) -> Triple(RectF(edToS.left, edToS.top, edToE.right, edToE.bottom), "Zum Marker", "Springt mit der Lupe direkt an den Start- (S) bzw. Endpunkt (E) – zum genauen Schneiden.")
+                edCueBtn.contains(x, y) -> Triple(edCueBtn, "Cue-Punkte", "Cue-Modus: in die Wellenform tippen setzt Hot Cues 1–4, einen antippen entfernt ihn. Beim Speichern in die DJ-Bibliothek werden sie mitgespeichert – der Startpunkt (Cue) ist der Marker S.")
                 edSnapBtn.contains(x, y) -> Triple(edSnapBtn, "0-SNAP", "Marker rasten auf den nächsten Nulldurchgang der Welle ein – so knackt der Schnitt nicht.")
                 edWave.contains(x, y) || (y > edWave.bottom && y < edWave.bottom + dp(30f)) -> Triple(edWave, "Wellenform", "Zeigt das Audio des Pads. Die Marker S (Start) und E (Ende) an der Wellenform ziehen, um den Ausschnitt zu wählen. Weiße Linien zeigen die Slices.")
                 edKnobSlices.contains(x, y) -> Triple(edKnobSlices, "SLICES", "Hoch/runter ziehen: teilt den Ausschnitt in 2–32 gleich lange Stücke. AUS = nicht slicen.")

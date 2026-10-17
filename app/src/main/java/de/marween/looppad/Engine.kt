@@ -3317,7 +3317,8 @@ object Engine {
             }
             return 0
         }
-        val q = LAUNCH_Q[launchIdx]
+        // DJ-Clips: ohne Start-Raster trotzdem auf den nächsten Schlag – und immer ab dem Startpunkt
+        val q = if (padSyncStart[p] && turnOn && LAUNCH_Q[launchIdx] <= 0f) 0.25f else LAUNCH_Q[launchIdx]
         val m = masterLen
         if (q <= 0f || m <= 0L) {
             l.muted = !turnOn
@@ -3356,7 +3357,11 @@ object Engine {
      * Datei-Clip laden (Ableton-Stil): Tempo/Länge erkannt, auf das Master-Tempo gewarpt.
      * Der Clip wartet (bereit), bis man das Pad antippt. Liefert eine Beschreibung.
      */
+    /** Pads, die beim Antippen immer vom Startpunkt im Takt starten (DJ-Clips). */
+    val padSyncStart = BooleanArray(PADS)
+
     fun importClip(p: Int, src: FloatArray, info: Warp.Info): String {
+        padSyncStart[p] = false
         if (src.isEmpty()) return "Leere Datei"
         if (padOneShot[p]) {
             importLoop(p, src)
