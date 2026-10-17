@@ -69,6 +69,7 @@ Unter jedem Pad sitzt ein kleiner **•••**-Knopf:
 ## Effekte
 
 Über den Pads liegt die **XY-Fläche**: Finger drauf = Effekt an, X- und Y-Achse modulieren ihn. **🔒 HOLD** (Ecke oben rechts) hält den Effekt an der letzten Position aktiv, auch ohne Finger – auf der Fläche ziehen verschiebt ihn weiter, nochmal HOLD schaltet ihn aus.
+**● REC** daneben speichert Fingerbewegungen: tippen → Fläche berühren startet die Aufnahme → nochmal tippen beendet sie. Die Bewegung wird auf Schläge gerundet und läuft als **▶ AUTO** synchron zum Takt in Schleife (Cursor fährt mit). Selbst anfassen hat Vorrang; AUTO antippen löscht sie.
 Darüber vier **Drehregler** (nach oben/unten ziehen): MIX, zwei effektabhängige Parameter, VOL.
 Der **Effekt-Knopf** schaltet durch (links tippen = zurück, rechts = weiter, lange drücken = Liste):
 

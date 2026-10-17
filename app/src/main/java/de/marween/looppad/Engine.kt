@@ -297,6 +297,125 @@ object Engine {
         return out
     }
 
+    // ---------------------------------------------------------------- Bewegungs-Aufnahme (XY-Automation)
+
+    const val MOT_IDLE = 0
+    const val MOT_ARMED = 1
+    const val MOT_REC = 2
+    const val MOT_PLAY = 3
+
+    @Volatile var motionState = MOT_IDLE
+        private set
+    /** Finger liegt wirklich auf der XY-Fläche (hat Vorrang vor der Automation). */
+    @Volatile var liveTouch = false
+    @Volatile var motCurX = 0.5f
+        private set
+    @Volatile var motCurY = 0.5f
+        private set
+    @Volatile var motCurTouch = false
+        private set
+
+    private const val MOT_CAP = 40000
+    private val motX = FloatArray(MOT_CAP)
+    private val motY = FloatArray(MOT_CAP)
+    private val motT = BooleanArray(MOT_CAP)
+    @Volatile private var motCount = 0
+    private var motStart = 0L
+    private var motLen = 1L
+    private var motBlock = 256
+    @Volatile private var motStopReq = false
+    private var effX = 0.5f
+    private var effY = 0.5f
+    private var effTouch = false
+
+    /** REC-Knopf der XY-Fläche: scharf schalten → (Aufnahme) → abspielen → aus. */
+    fun motionButton() {
+        when (motionState) {
+            MOT_IDLE -> motionState = MOT_ARMED
+            MOT_ARMED -> motionState = MOT_IDLE
+            MOT_REC -> motStopReq = true
+            else -> {
+                motionState = MOT_IDLE
+                motCount = 0
+            }
+        }
+    }
+
+    fun motionSeconds(): Float = when (motionState) {
+        MOT_REC -> motCount * motBlock.toFloat() / sampleRate
+        MOT_PLAY -> motLen.toFloat() / sampleRate
+        else -> 0f
+    }
+
+    /** Fortschritt der Wiedergabe 0..1 (oder -1). */
+    fun motionProgress(): Float {
+        if (motionState != MOT_PLAY || motLen <= 0) return -1f
+        val heard = outClock.frameAt(System.nanoTime(), sampleRate)
+        return Math.floorMod(heard - motStart, motLen).toFloat() / motLen
+    }
+
+    private fun finishMotion() {
+        val n = motCount
+        if (n < 4) {
+            motionState = MOT_IDLE
+            motCount = 0
+            return
+        }
+        var len = n.toLong() * motBlock
+        val bar = masterLen
+        if (bar > 0L) {
+            val beat = max(1L, bar / 4)
+            len = max(beat, ((len + beat / 2) / beat) * beat)
+            motStart = masterStart + Math.floorDiv(motStart - masterStart + beat / 2, beat) * beat
+        }
+        motLen = len
+        motionState = MOT_PLAY
+    }
+
+    /** Pro Mischer-Block: Bewegung aufnehmen bzw. abspielen und die wirksamen XY-Werte bestimmen. */
+    private fun motionTick(w: Long, block: Int) {
+        effX = fxX
+        effY = fxY
+        effTouch = fxTouch
+        when (motionState) {
+            MOT_ARMED -> if (liveTouch) {
+                motBlock = block
+                motCount = 0
+                motStart = w
+                motionState = MOT_REC
+            }
+            MOT_REC -> {
+                val c = motCount
+                if (c < MOT_CAP) {
+                    motX[c] = fxX
+                    motY[c] = fxY
+                    motT[c] = liveTouch
+                    motCount = c + 1
+                }
+                if (motStopReq || motCount >= MOT_CAP) {
+                    motStopReq = false
+                    finishMotion()
+                }
+            }
+            MOT_PLAY -> {
+                val n = motCount
+                if (n > 0 && motLen > 0) {
+                    val rel = Math.floorMod(w - motStart, motLen)
+                    val idx = ((rel * n) / motLen).toInt().coerceIn(0, n - 1)
+                    motCurX = motX[idx]
+                    motCurY = motY[idx]
+                    motCurTouch = motT[idx]
+                    if (!liveTouch) {
+                        effX = motCurX
+                        effY = motCurY
+                        effTouch = motCurTouch || fxTouch
+                    }
+                }
+            }
+        }
+        if (motStopReq && motionState != MOT_REC) motStopReq = false
+    }
+
     // ---------------------------------------------------------------- Effekt-Ziel
 
     /** -1 = Effekt auf den ganzen Song, sonst nur auf dieses Pad. */
@@ -1190,10 +1309,11 @@ object Engine {
                 levels[p] = max(if (mute) peak * 0.25f else peak, levels[p] * 0.88f)
             }
             renderVoices(out, bus, tgt, block, w)
+            motionTick(w, block)
             val f = fx
             if (f != null) {
                 f.process(
-                    if (tgt >= 0) bus else out, block, w, fxType, fxX, fxY, fxTouch,
+                    if (tgt >= 0) bus else out, block, w, fxType, effX, effY, effTouch,
                     knobs[0], knobs[1], knobs[2], masterLen, masterStart, fillMic(micBuf, block)
                 )
             }

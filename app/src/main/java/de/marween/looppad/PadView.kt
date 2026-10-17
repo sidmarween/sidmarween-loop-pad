@@ -100,6 +100,63 @@ class PadView(context: Context) : View(context) {
         canvas.drawText("HOLD", r.centerX() + dp(9f), r.centerY() + dp(4f), textPaint)
     }
 
+    private val motRect = RectF()
+
+    private fun autoTouching(): Boolean = Engine.motionState == Engine.MOT_PLAY && xyPointer < 0 && Engine.motCurTouch
+
+    private fun drawMotionButton(canvas: Canvas) {
+        if (xyRect.width() <= 0f) return
+        val w = dp(84f)
+        motRect.set(holdRect.left - dp(8f) - w, holdRect.top, holdRect.left - dp(8f), holdRect.bottom)
+        val r = motRect
+        val cols = overlayColors()
+        val st = Engine.motionState
+        val red = Color.rgb(230, 40, 55)
+        val pulse = 0.5f + 0.5f * sin(time * 8f)
+        val rr = r.height() / 2f
+        val fill = when (st) {
+            Engine.MOT_ARMED -> blend(alpha(cols[0], 0.9f), red, 0.35f * pulse)
+            Engine.MOT_REC -> blend(red, Color.WHITE, 0.25f * pulse)
+            Engine.MOT_PLAY -> cols[2]
+            else -> alpha(cols[0], 0.85f)
+        }
+        fillPaint.shader = null
+        fillPaint.color = fill
+        canvas.drawRoundRect(r, rr, rr, fillPaint)
+        // Fortschritt beim Abspielen
+        val mp = Engine.motionProgress()
+        if (mp >= 0f) {
+            canvas.save()
+            canvas.clipRect(r.left, r.top, r.left + r.width() * mp, r.bottom)
+            fillPaint.color = alpha(Color.WHITE, 0.25f)
+            canvas.drawRoundRect(r, rr, rr, fillPaint)
+            canvas.restore()
+        }
+        strokePaint.strokeWidth = dp(1.5f)
+        strokePaint.color = if (st == Engine.MOT_IDLE) alpha(cols[1], 0.6f) else Color.WHITE
+        canvas.drawRoundRect(r, rr, rr, strokePaint)
+        val label = when (st) {
+            Engine.MOT_ARMED -> "● BEREIT"
+            Engine.MOT_REC -> String.format(Locale.GERMANY, "● %.1fs", Engine.motionSeconds())
+            Engine.MOT_PLAY -> "▶ AUTO"
+            else -> "● REC"
+        }
+        textPaint.textSize = dp(11f)
+        textPaint.color = if (st == Engine.MOT_IDLE) cols[1] else Color.WHITE
+        canvas.drawText(label, r.centerX(), r.centerY() + dp(4f), textPaint)
+        if (st == Engine.MOT_ARMED) {
+            textPaint.textSize = dp(10f)
+            textPaint.color = alpha(cols[1], 0.75f)
+            canvas.drawText("Fläche berühren = Aufnahme startet", xyRect.centerX(), r.bottom + dp(16f), textPaint)
+        }
+    }
+
+    private fun motionPressed() {
+        Engine.motionButton()
+        performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+        burst(motRect.centerX(), motRect.centerY(), Color.rgb(230, 40, 55), 14, 180f)
+    }
+
     private fun toggleHold() {
         xyHold = !xyHold
         Engine.fxTouch = xyHold || xyPointer >= 0
@@ -462,8 +519,13 @@ class PadView(context: Context) : View(context) {
         drawTopBar(canvas)
         drawKnobs(canvas)
         drawFxButton(canvas, dt)
+        if (Engine.motionState == Engine.MOT_PLAY && xyPointer < 0) {
+            xyDispX = Engine.motCurX
+            xyDispY = Engine.motCurY
+        }
         drawXy(canvas, dt)
         drawHoldButton(canvas)
+        drawMotionButton(canvas)
         for (i in 0 until VISIBLE_PADS) {
             drawPad(canvas, i, dt)
             drawMore(canvas, i)
@@ -587,7 +649,7 @@ class PadView(context: Context) : View(context) {
             yy += dp(3f)
         }
         val pad = dp(8f)
-        val touching = xyPointer >= 0 || xyHold
+        val touching = xyPointer >= 0 || xyHold || autoTouching()
         textPaint.textAlign = Paint.Align.LEFT
         // Zeile 1: Nummer + Name
         textPaint.textSize = dp(9f)
@@ -1296,7 +1358,7 @@ class PadView(context: Context) : View(context) {
     private fun drawXy(canvas: Canvas, dt: Float) {
         val r = xyRect
         if (r.width() <= 0f) return
-        val touching = xyPointer >= 0 || xyHold
+        val touching = xyPointer >= 0 || xyHold || autoTouching()
         xyGlow += ((if (touching) 1f else 0f) - xyGlow) * min(1f, dt * 10f)
         if (skinned) { drawXySkin(canvas, dt); return }
         if (light) { drawXyLight(canvas, dt); return }
@@ -1601,10 +1663,15 @@ class PadView(context: Context) : View(context) {
                     toggleHold()
                     return true
                 }
+                if (motRect.contains(x, y) && xyRect.contains(x, y)) {
+                    motionPressed()
+                    return true
+                }
                 if (xyRect.contains(x, y)) {
                     if (xyPointer < 0) {
                         xyPointer = id
                         setXy(x, y)
+                        Engine.liveTouch = true
                         Engine.fxTouch = true
                         burst(x, y, neon(Fx.HUES[Engine.fxType]), 20, 240f)
                     }
@@ -1699,6 +1766,7 @@ class PadView(context: Context) : View(context) {
                 }
                 if (upId == xyPointer) {
                     xyPointer = -1
+                    Engine.liveTouch = false
                     Engine.fxTouch = xyHold
                     return true
                 }
@@ -1715,6 +1783,7 @@ class PadView(context: Context) : View(context) {
                 fxPointer = -1
                 removeCallbacks(fxLongPress)
                 xyPointer = -1
+                Engine.liveTouch = false
                 Engine.fxTouch = xyHold
                 pointerKnob.clear()
                 val held = ArrayList<Int>()
@@ -1896,7 +1965,7 @@ class PadView(context: Context) : View(context) {
         canvas.save()
         canvas.clipRect(r.left + dp(3f), r.top + dp(3f), r.right - dp(3f), r.bottom - dp(3f))
         val pad = dp(9f)
-        val touching = xyPointer >= 0 || xyHold
+        val touching = xyPointer >= 0 || xyHold || autoTouching()
         textPaint.textAlign = Paint.Align.LEFT
         textPaint.textSize = dp(9f)
         textPaint.color = alpha(txt, 0.7f)
@@ -2344,7 +2413,7 @@ class PadView(context: Context) : View(context) {
 
     private fun drawXyLight(canvas: Canvas, dt: Float) {
         val r = xyRect
-        val touching = xyPointer >= 0 || xyHold
+        val touching = xyPointer >= 0 || xyHold || autoTouching()
         val fx = r.left + r.width() * xyDispX
         val fy = r.bottom - r.height() * xyDispY
         if (theme == RETRO) {
@@ -2666,7 +2735,7 @@ class PadView(context: Context) : View(context) {
         val txt = sk.lcdText
         val type = Engine.fxType
         val pad = dp(9f)
-        val touching = xyPointer >= 0 || xyHold
+        val touching = xyPointer >= 0 || xyHold || autoTouching()
         canvas.save()
         canvas.clipRect(r.left + dp(2f), r.top + dp(2f), r.right - dp(2f), r.bottom - dp(2f))
         textPaint.textAlign = Paint.Align.LEFT
@@ -2836,7 +2905,7 @@ class PadView(context: Context) : View(context) {
     private fun drawXySkin(canvas: Canvas, dt: Float) {
         val sk = skin
         val r = xyRect
-        val touching = xyPointer >= 0 || xyHold
+        val touching = xyPointer >= 0 || xyHold || autoTouching()
         val fx = r.left + r.width() * xyDispX
         val fy = r.bottom - r.height() * xyDispY
         val rr = dp(if (sk.xyStyle == XY_GLOW) 14f else 10f)
