@@ -159,6 +159,7 @@ object Engine {
         if (!seqPlaying) return
         val bar = seqBar()
         if (bar <= 0L) return
+        runRoll(w, block)
         val origin = seqStart()
         var n = -Math.floorDiv(-(w - origin) * STEPS, bar) // ceil
         while (true) {
@@ -175,7 +176,6 @@ object Engine {
                         l.shotStart = f
                     }
                 }
-                triggerNotes(step, n, f, w, bar / STEPS)
             }
             n++
         }
@@ -218,6 +218,7 @@ object Engine {
             java.util.Arrays.fill(seq[p], 0f)
             clearNotes(p)
             padOneShot[p] = false
+            rollBars[p] = 1
         }
         fixedBpm = bpm
         masterLen = master
@@ -254,8 +255,11 @@ object Engine {
 
     /** Rendert das Sequenzer-Pattern als nahtlosen Ein-Takt-Loop. */
     fun renderPattern(): FloatArray? {
-        val bar = seqBar().toInt()
-        if (bar <= 0) return null
+        val bar1 = seqBar().toInt()
+        if (bar1 <= 0) return null
+        var nb = 1
+        for (p in 0 until PADS) if (noteCount(p) > 0) nb = max(nb, rollBars[p])
+        val bar = bar1 * nb
         val out = FloatArray(bar)
         var any = false
         for (p in 0 until PADS) {
@@ -266,23 +270,27 @@ object Engine {
                 val vel = seq[p][k]
                 if (vel <= 0f) continue
                 any = true
-                val st = ((k.toLong() * bar) / STEPS).toInt()
-                for (i in d.indices) {
-                    val idx = (st + i) % bar
-                    out[idx] += d[i] * vel
+                for (b in 0 until nb) {
+                    val st = b * bar1 + ((k.toLong() * bar1) / STEPS).toInt()
+                    for (i in d.indices) {
+                        val idx = (st + i) % bar
+                        out[idx] += d[i] * vel
+                    }
                 }
             }
         }
-        val stepLen = bar / STEPS
         for (p in 0 until PADS) {
             val l = loops.get(p) ?: continue
             val d = l.data
             if (d.size < 2) continue
-            for (a in getNotes(p)) {
+            val rb = rollBars[p]
+            for (ev in notesOf(p)) {
                 any = true
-                val st = (a[0].toLong() * bar / STEPS).toInt()
-                val rate = 2.0.pow(a[1] / 12.0)
-                val lenF = (a[2] * stepLen).toInt()
+                val rate = 2.0.pow(ev.semi / 12.0)
+                val lenF = max(64, (ev.len * bar1).toInt())
+                for (rep in 0 until nb / rb) {
+                val st = ((rep * rb + ev.pos) * bar1).toInt()
+                val a3 = ev.vel
                 val rel = (sampleRate * 0.03).toInt()
                 var pos = 0.0
                 for (i in 0 until lenF + rel) {
@@ -293,10 +301,11 @@ object Engine {
                         i0 = pos.toInt().coerceIn(0, d.size - 2)
                     }
                     val fr = (pos - i0).toFloat()
-                    var v = (d[i0] + (d[i0 + 1] - d[i0]) * fr) * a[3]
+                    var v = (d[i0] + (d[i0 + 1] - d[i0]) * fr) * a3
                     if (i >= lenF) v *= 1f - (i - lenF).toFloat() / rel
                     out[(st + i) % bar] += v
                     pos += rate
+                }
                 }
             }
         }
@@ -541,24 +550,43 @@ object Engine {
         }
     }
 
-    // ---------------------------------------------------------------- Noten-Pattern (Tastatur-Aufnahme)
+    // ---------------------------------------------------------------- Matrix / Piano-Roll (Tastatur-Aufnahme)
 
-    /** Eine aufgenommene Note: Schritt, Halbton, Länge in Schritten, Lautstärke. */
-    class NoteEv(val step: Int, val semi: Int, var len: Int, val vel: Float, val startN: Long, var validFrom: Long)
+    /** Eine Note: Position und Länge in Takten (frei, nicht zwingend auf Raster), Halbton, Lautstärke. */
+    class NoteEv(var pos: Double, var len: Double, val semi: Int, val vel: Float) {
+        /** Ausgabe-Frame, vor dem die Note nicht (nochmal) ausgelöst wird – verhindert Doppelschlag nach Live-Aufnahme. */
+        @Volatile var validFrom: Long = Long.MIN_VALUE
+        var startHeard: Long = 0L
+    }
 
     private val notes = Array(PADS) { ArrayList<NoteEv>() }
     private val notesLock = Any()
+    /** Länge der Matrix je Pad in Takten (1, 2, 4, 8). */
+    val rollBars = IntArray(PADS) { 1 }
+    /** Raster bei der Aufnahme: 0 = frei, sonst Teilung pro Takt (4, 8, 16, 32). */
+    @Volatile var rollQuant = 16
+
+    private fun qPos(v: Double, q: Int): Double = if (q <= 0) v else kotlin.math.round(v * q) / q
+    private fun qLen(v: Double, q: Int): Double = if (q <= 0) max(1.0 / 64, v) else max(1.0 / q, kotlin.math.round(v * q) / q)
 
     /** Beginnt eine Note in der Pattern-Aufnahme (nur wenn REC Pattern läuft). */
     fun recordNoteOn(p: Int, semi: Int): NoteEv? {
         if (!seqRecording || !seqPlaying || p !in 0 until PADS) return null
         val bar = seqBar()
         val origin = seqStart()
+        val bars = rollBars[p]
+        val loopLen = bar * bars
         val heard = outClock.frameAt(System.nanoTime(), sampleRate)
-        val n = Math.floorDiv((heard - origin) * STEPS + bar / 2, bar)
-        val ev = NoteEv(Math.floorMod(n, STEPS.toLong()).toInt(), semi, 1, 1f, n, n + 1)
+        val rel = Math.floorMod(heard - origin, loopLen)
+        var pos = rel.toDouble() / bar
+        pos = qPos(pos, rollQuant)
+        if (pos >= bars) pos -= bars
+        val ev = NoteEv(pos, 1.0 / max(4, rollQuant), semi, 1f)
+        ev.startHeard = heard
+        // in diesem Durchlauf schon live gespielt → erst im nächsten Durchlauf wieder auslösen
+        ev.validFrom = heard + loopLen / 2
         synchronized(notesLock) {
-            notes[p].removeAll { it.step == ev.step && it.semi == semi }
+            notes[p].removeAll { abs(it.pos - ev.pos) < 1e-6 && it.semi == semi }
             notes[p].add(ev)
         }
         return ev
@@ -566,51 +594,108 @@ object Engine {
 
     fun recordNoteOff(ev: NoteEv) {
         val bar = seqBar()
-        val origin = seqStart()
         val heard = outClock.frameAt(System.nanoTime(), sampleRate)
-        val nEnd = Math.floorDiv((heard - origin) * STEPS + bar / 2, bar)
-        ev.len = (nEnd - ev.startN).toInt().coerceIn(1, STEPS)
+        val raw = max(1L, heard - ev.startHeard).toDouble() / bar
+        ev.len = qLen(raw, rollQuant)
     }
 
+    /** Sequenzer-Anzeige: liegt im ersten Takt eine Note auf diesem 1/16-Schritt? */
     fun noteAt(p: Int, step: Int): Boolean {
         if (p !in 0 until PADS) return false
-        synchronized(notesLock) { return notes[p].any { it.step == step } }
+        synchronized(notesLock) { return notes[p].any { ((it.pos * STEPS).toInt() % STEPS) == step } }
     }
 
     fun noteCount(p: Int): Int = if (p in 0 until PADS) synchronized(notesLock) { notes[p].size } else 0
 
-    /** Für Projekte: [Schritt, Halbton, Länge, Lautstärke] je Note. */
+    /** Kopie der Noten eines Pads (für Matrix-Ansicht). */
+    fun notesOf(p: Int): List<NoteEv> = synchronized(notesLock) { notes[p].map { NoteEv(it.pos, it.len, it.semi, it.vel) } }
+
+    /** Für Projekte: [Position in 1/16, Halbton, Länge in 1/16, Lautstärke] je Note. */
     fun getNotes(p: Int): List<FloatArray> = synchronized(notesLock) {
-        notes[p].map { floatArrayOf(it.step.toFloat(), it.semi.toFloat(), it.len.toFloat(), it.vel) }
+        notes[p].map { floatArrayOf((it.pos * STEPS).toFloat(), it.semi.toFloat(), (it.len * STEPS).toFloat(), it.vel) }
     }
 
     fun setNotes(p: Int, list: List<FloatArray>) {
         synchronized(notesLock) {
             notes[p].clear()
-            for (a in list) if (a.size >= 4) notes[p].add(NoteEv(a[0].toInt(), a[1].toInt(), a[2].toInt(), a[3], 0L, Long.MIN_VALUE))
+            for (a in list) if (a.size >= 4) notes[p].add(NoteEv(a[0] / STEPS.toDouble(), a[2] / STEPS.toDouble(), a[1].toInt(), a[3]))
         }
     }
 
-    private fun clearNotes(p: Int) {
+    fun clearNotes(p: Int) {
         synchronized(notesLock) { notes[p].clear() }
     }
 
-    /** Spielt die Noten eines Schritts sample-genau über die Stimmen. */
-    private fun triggerNotes(step: Int, n: Long, f: Long, w: Long, stepLen: Long) {
+    /** Matrix: Note setzen oder (falls dort schon eine liegt) löschen. */
+    fun toggleNote(p: Int, pos: Double, semi: Int, len: Double) {
+        synchronized(notesLock) {
+            val hit = notes[p].firstOrNull { it.semi == semi && pos >= it.pos - 1e-6 && pos < it.pos + it.len - 1e-6 }
+            if (hit != null) notes[p].remove(hit) else notes[p].add(NoteEv(pos, len, semi, 1f))
+        }
+    }
+
+    /** Entfernt die Note, die an dieser Stelle liegt. */
+    fun removeNoteAt(p: Int, pos: Double, semi: Int): Boolean = synchronized(notesLock) {
+        val hit = notes[p].firstOrNull { it.semi == semi && pos >= it.pos - 1e-6 && pos < it.pos + it.len - 1e-6 }
+        if (hit != null) notes[p].remove(hit)
+        hit != null
+    }
+
+    /** Nachträglich quantisieren: Positionen und Längen aufs Raster (q Teilungen pro Takt). */
+    fun quantizeNotes(p: Int, q: Int) {
+        if (q <= 0) return
+        synchronized(notesLock) {
+            val bars = rollBars[p].toDouble()
+            for (n in notes[p]) {
+                n.pos = qPos(n.pos, q)
+                if (n.pos >= bars) n.pos -= bars
+                n.len = qLen(n.len, q)
+            }
+            // doppelte Noten nach dem Quantisieren entfernen
+            val seen = HashSet<String>()
+            notes[p].removeAll { !seen.add("${it.semi}@${kotlin.math.round(it.pos * 1024)}") }
+        }
+    }
+
+    fun setRollBars(p: Int, bars: Int) {
+        rollBars[p] = bars
+        synchronized(notesLock) { notes[p].removeAll { it.pos >= bars } }
+    }
+
+    /** Fortschritt in der Matrix eines Pads 0..1 (oder -1). */
+    fun rollProgress(p: Int): Float {
+        if (!seqPlaying) return -1f
+        val loopLen = seqBar() * rollBars[p]
+        val rel = outClock.frameAt(System.nanoTime(), sampleRate) - seqStart()
+        if (rel < 0) return -1f
+        return Math.floorMod(rel, loopLen).toFloat() / loopLen
+    }
+
+    /** Spielt fällige Matrix-Noten sample-genau über die Stimmen. */
+    private fun runRoll(w: Long, block: Int) {
+        val bar = seqBar()
+        if (bar <= 0L) return
+        val origin = seqStart()
+        val end = w + block
         synchronized(notesLock) {
             for (p in 0 until PADS) {
                 val list = notes[p]
                 if (list.isEmpty()) continue
                 val l = loops.get(p) ?: continue
+                val loopLen = bar * rollBars[p]
                 for (ev in list) {
-                    if (ev.step != step || n < ev.validFrom) continue
-                    val id = startVoice(l.data, p, 2.0.pow(ev.semi / 12.0), !l.oneShot)
+                    val off = (ev.pos * bar).toLong()
+                    val k = -Math.floorDiv(-(w - origin - off), loopLen)
+                    val f = origin + k * loopLen + off
+                    if (f >= end || f < w) continue
+                    if (f < ev.validFrom) continue
+                    val id = startVoice(l.data, p, 2.0.pow((ev.semi + 0) / 12.0), !l.oneShot)
                     if (id < 0) continue
                     synchronized(voiceLock) {
                         for (v in voices) if (v.id == id) {
                             v.wait = (f - w).toInt().coerceAtLeast(0)
                             v.vel = ev.vel
-                            v.offFrame = f + ev.len * stepLen
+                            v.offFrame = f + max(64L, (ev.len * bar).toLong())
                         }
                     }
                 }

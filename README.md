@@ -40,7 +40,14 @@ Jedes Pad hat einen eigenen Effekt-Schalter: im •••-Menü „Effekt: AN/AU
 ## 🎹 Tastatur
 
 Der kleine Klavier-Knopf unter jedem Pad blendet eine Tastatur (2 Oktaven, Oktave −/+) ein: das Sample wird höher/tiefer gespielt, mehrere Finger = Akkord. Mit „📌 Ton fürs Pad“ wird der gespielte Ton zur festen Tonhöhe des Pads (gilt für ⚡-Antippen und den Sequenzer).
-Unten in der Tastatur: **● REC** (Pattern oder Song), **▶** und **■**. Im Pattern-Modus werden gespielte Töne und Akkorde mit Tonhöhe und Länge auf das 16-Schritt-Raster gerastet und laufen im Sequenzer mit (Punkt oben im Schritt = Note).
+Unten in der Tastatur: **● REC** (Pattern oder Song), **▶** und **■**.
+
+**▦ Matrix (Piano-Roll)** – oben in der Tastatur: zeigt alle aufgenommenen Töne (Tonhöhe senkrecht, Zeit waagrecht).
+- **TAKTE** 1/2/4/8 – Länge der Matrix für dieses Pad
+- **▦ Raster** frei / 1/4 / 1/8 / 1/16 / 1/32 – wird schon bei der Aufnahme angewendet („frei“ = genau wie gespielt)
+- **QUANT.** – vorhandene Noten nachträglich aufs Raster setzen
+- **LEEREN** – alle Noten des Pads löschen
+- Ins Raster tippen setzt eine Note, auf eine Note tippen löscht sie. Im Pattern-Modus werden gespielte Töne und Akkorde mit Tonhöhe und Länge auf das 16-Schritt-Raster gerastet und laufen im Sequenzer mit (Punkt oben im Schritt = Note).
 
 ## 〰 Wave-Editor
 

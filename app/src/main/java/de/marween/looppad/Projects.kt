@@ -76,6 +76,7 @@ object Projects {
                 na.put(e)
             }
             o.put("notes", na)
+            o.put("rollBars", Engine.rollBars[p])
             val d = sv.data
             if (d != null) {
                 val f = "pad_$p.wav"
@@ -131,6 +132,7 @@ object Projects {
         Engine.restore(pads, master, j.optDouble("bpm", 0.0).toFloat(), pattern)
         for (p in 0 until min(Engine.PADS, pa.length())) {
             Engine.padSource[p] = pa.getJSONObject(p).optInt("src", Engine.padSource[p])
+            Engine.rollBars[p] = pa.getJSONObject(p).optInt("rollBars", 1)
             val na = pa.getJSONObject(p).optJSONArray("notes") ?: continue
             val list = ArrayList<FloatArray>()
             for (q in 0 until na.length()) {

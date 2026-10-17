@@ -3533,6 +3533,7 @@ class PadView(context: Context) : View(context) {
         kbClose.set(kbRect.right - dp(8f) - hh, kbRect.top + dp(8f), kbRect.right - dp(8f), kbRect.top + dp(8f) + hh)
         kbOctUp.set(kbClose.left - dp(8f) - hh, kbClose.top, kbClose.left - dp(8f), kbClose.bottom)
         kbOctDown.set(kbOctUp.left - dp(6f) - hh, kbClose.top, kbOctUp.left - dp(6f), kbClose.bottom)
+        kbMatrixBtn.set(kbOctDown.left - dp(8f) - hh * 1.3f, kbClose.top, kbOctDown.left - dp(8f), kbClose.bottom)
         kbTakeBtn.set(kbRect.left + dp(8f), kbRect.bottom - dp(8f) - dp(38f), kbRect.left + dp(8f) + dp(150f), kbRect.bottom - dp(8f))
         val tb = dp(46f)
         kbStop.set(kbRect.right - dp(8f) - tb, kbTakeBtn.top, kbRect.right - dp(8f), kbTakeBtn.bottom)
@@ -3555,6 +3556,7 @@ class PadView(context: Context) : View(context) {
 
     /** Halbton (relativ zum Original) unter einem Punkt, oder null. */
     private fun keyAt(x: Float, y: Float): Int? {
+        if (mxOpen) return null
         val r = kbKeysRect
         if (!r.contains(x, y)) return null
         val whites = 14
@@ -3612,7 +3614,9 @@ class PadView(context: Context) : View(context) {
                 val x = e.getX(idx)
                 val y = e.getY(idx)
                 if (!kbRect.contains(x, y)) return false
+                if (mxOpen && matrixTouch(x, y)) return true
                 when {
+                    kbMatrixBtn.contains(x, y) -> mxOpen = !mxOpen
                     kbClose.contains(x, y) -> closeKeyboard()
                     kbOctDown.contains(x, y) -> kbOctave = (kbOctave - 1).coerceAtLeast(-2)
                     kbOctUp.contains(x, y) -> kbOctave = (kbOctave + 1).coerceAtMost(2)
@@ -3710,6 +3714,7 @@ class PadView(context: Context) : View(context) {
         val ps = Engine.padSemi[kbPad]
         canvas.drawText("Tonhöhe Pad: ${if (ps > 0) "+" else ""}$ps · Oktave ${if (kbOctave > 0) "+" else ""}$kbOctave", r.left + dp(14f), kbClose.centerY() + dp(13f), textPaint)
         textPaint.textAlign = Paint.Align.CENTER
+        smallBtn(canvas, kbMatrixBtn, "▦", mxOpen, cols)
         smallBtn(canvas, kbOctDown, "−", false, cols)
         smallBtn(canvas, kbOctUp, "+", false, cols)
         smallBtn(canvas, kbClose, "✕", false, cols)
@@ -3723,12 +3728,25 @@ class PadView(context: Context) : View(context) {
         textPaint.color = alpha(cols[1], 0.6f)
         val info = when {
             Engine.songRecording -> String.format(Locale.GERMANY, "Song %d:%02d", Engine.songSeconds().toInt() / 60, Engine.songSeconds().toInt() % 60)
-            Engine.seqRecording -> "Pattern: Töne werden aufgenommen"
+            Engine.seqRecording -> "Matrix-REC · ${rasterLabel()} · ${Engine.rollBars[kbPad]} Takt"
             else -> "Mehrere Finger = Akkord"
         }
         canvas.drawText(info, kbRect.left + dp(14f), kbTakeBtn.top - dp(4f), textPaint)
         textPaint.textAlign = Paint.Align.CENTER
 
+        if (mxOpen) {
+            drawMatrix(canvas, cols)
+        } else drawKeys(canvas, cols)
+        // aktueller Ton
+        if (kbHeld.isNotEmpty()) {
+            val names = kbHeld.sorted().joinToString(" ") { sm -> noteNames[Math.floorMod(sm, 12)] + (4 + Math.floorDiv(sm, 12)) }
+            textPaint.textSize = dp(12f)
+            textPaint.color = cols[2]
+            canvas.drawText(names, r.centerX(), kbClose.bottom + dp(2f), textPaint)
+        }
+    }
+
+    private fun drawKeys(canvas: Canvas, cols: IntArray) {
         // Tasten
         val k = kbKeysRect
         val whites = 14
@@ -3762,13 +3780,168 @@ class PadView(context: Context) : View(context) {
             fillPaint.color = if (kbHeld.contains(semi)) cols[2] else Color.rgb(28, 28, 32)
             canvas.drawRoundRect(tmpRect, dp(4f), dp(4f), fillPaint)
         }
-        // aktueller Ton
-        if (kbHeld.isNotEmpty()) {
-            val names = kbHeld.sorted().joinToString(" ") { sm -> noteNames[Math.floorMod(sm, 12)] + (4 + Math.floorDiv(sm, 12)) }
-            textPaint.textSize = dp(12f)
-            textPaint.color = cols[2]
-            canvas.drawText(names, r.centerX(), kbClose.bottom + dp(2f), textPaint)
+    }
+
+    // ---------------------------------------------------------------- Matrix (Piano-Roll)
+
+    private var mxOpen = false
+    private val kbMatrixBtn = RectF()
+    private val mxGrid = RectF()
+    private val mxBars = RectF()
+    private val mxRaster = RectF()
+    private val mxQuant = RectF()
+    private val mxClear = RectF()
+    private val rasterSteps = intArrayOf(0, 4, 8, 16, 32)
+
+    private fun rasterLabel(): String = if (Engine.rollQuant <= 0) "frei" else "1/${Engine.rollQuant}"
+
+    private fun layoutMatrix() {
+        val k = kbKeysRect
+        val bh = dp(30f)
+        val gap = dp(6f)
+        val bw = (k.width() - 3 * gap) / 4f
+        mxBars.set(k.left, k.top, k.left + bw, k.top + bh)
+        mxRaster.set(mxBars.right + gap, k.top, mxBars.right + gap + bw, k.top + bh)
+        mxQuant.set(mxRaster.right + gap, k.top, mxRaster.right + gap + bw, k.top + bh)
+        mxClear.set(mxQuant.right + gap, k.top, k.right, k.top + bh)
+        mxGrid.set(k.left + dp(22f), k.top + bh + dp(6f), k.right, k.bottom)
+    }
+
+    private val mxRows = 24
+
+    /** Halbton der obersten Zeile. */
+    private fun mxTopSemi(): Int = -12 + kbOctave * 12 + mxRows - 1
+
+    private fun matrixTouch(x: Float, y: Float): Boolean {
+        layoutMatrix()
+        val p = kbPad
+        when {
+            mxBars.contains(x, y) -> {
+                val nb = when (Engine.rollBars[p]) { 1 -> 2; 2 -> 4; 4 -> 8; else -> 1 }
+                Engine.setRollBars(p, nb)
+                return true
+            }
+            mxRaster.contains(x, y) -> {
+                val i = rasterSteps.indexOf(Engine.rollQuant).coerceAtLeast(0)
+                Engine.rollQuant = rasterSteps[(i + 1) % rasterSteps.size]
+                return true
+            }
+            mxQuant.contains(x, y) -> {
+                val q = if (Engine.rollQuant > 0) Engine.rollQuant else 16
+                Engine.quantizeNotes(p, q)
+                performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+                burst(mxQuant.centerX(), mxQuant.centerY(), overlayColors()[2], 18, 200f)
+                return true
+            }
+            mxClear.contains(x, y) -> {
+                Engine.clearNotes(p)
+                burst(mxClear.centerX(), mxClear.centerY(), Color.rgb(230, 40, 55), 18, 200f)
+                return true
+            }
+            mxGrid.contains(x, y) -> {
+                val g = mxGrid
+                val bars = Engine.rollBars[p]
+                val q = if (Engine.rollQuant > 0) Engine.rollQuant else 16
+                val posRaw = ((x - g.left) / g.width()).coerceIn(0f, 0.9999f) * bars
+                val pos = kotlin.math.floor(posRaw * q.toDouble()) / q
+                val row = ((y - g.top) / (g.height() / mxRows)).toInt().coerceIn(0, mxRows - 1)
+                val semi = mxTopSemi() - row
+                if (Engine.removeNoteAt(p, posRaw.toDouble(), semi)) return true
+                Engine.toggleNote(p, pos, semi, 1.0 / q)
+                val v = Engine.noteOn(p, semi)
+                postDelayed({ Engine.noteOff(v) }, 180L)
+                performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+                return true
+            }
         }
+        return false
+    }
+
+    private fun drawMatrix(canvas: Canvas, cols: IntArray) {
+        layoutMatrix()
+        val p = kbPad
+        val bars = Engine.rollBars[p]
+        smallBtn(canvas, mxBars, "$bars TAKT" + if (bars > 1) "E" else "", false, cols)
+        smallBtn(canvas, mxRaster, "▦ ${rasterLabel()}", Engine.rollQuant > 0, cols)
+        smallBtn(canvas, mxQuant, "QUANT.", false, cols)
+        smallBtn(canvas, mxClear, "LEEREN", false, cols)
+        val g = mxGrid
+        fillPaint.shader = null
+        fillPaint.color = Color.rgb(18, 19, 24)
+        canvas.drawRect(g, fillPaint)
+        val rowH = g.height() / mxRows
+        val top = mxTopSemi()
+        // Zeilen (schwarze Tasten dunkler) + Notennamen
+        for (row in 0 until mxRows) {
+            val semi = top - row
+            val n = Math.floorMod(semi, 12)
+            val black = n == 1 || n == 3 || n == 6 || n == 8 || n == 10
+            val y0 = g.top + row * rowH
+            if (black) {
+                fillPaint.color = Color.rgb(12, 12, 16)
+                canvas.drawRect(g.left, y0, g.right, y0 + rowH, fillPaint)
+            }
+            if (n == 0) {
+                strokePaint.strokeWidth = dp(1f)
+                strokePaint.color = Color.argb(70, 255, 255, 255)
+                canvas.drawLine(g.left, y0 + rowH, g.right, y0 + rowH, strokePaint)
+                textPaint.textAlign = Paint.Align.RIGHT
+                textPaint.textSize = min(dp(9f), rowH * 1.4f)
+                textPaint.color = alpha(cols[1], 0.7f)
+                canvas.drawText("C${4 + Math.floorDiv(semi, 12)}", g.left - dp(3f), y0 + rowH * 0.85f, textPaint)
+                textPaint.textAlign = Paint.Align.CENTER
+            }
+        }
+        // Spalten: Takte, Schläge, Raster
+        val total = bars * 16
+        val colW = g.width() / total
+        val q = Engine.rollQuant
+        for (c in 0..total) {
+            val x = g.left + c * colW
+            val (wdt, a) = when {
+                c % 16 == 0 -> dp(1.6f) to 150
+                c % 4 == 0 -> dp(1f) to 80
+                q > 0 && (c * q) % 16 == 0 -> dp(0.8f) to 45
+                colW > dp(5f) -> dp(0.5f) to 22
+                else -> 0f to 0
+            }
+            if (a == 0) continue
+            strokePaint.strokeWidth = wdt
+            strokePaint.color = Color.argb(a, 255, 255, 255)
+            canvas.drawLine(x, g.top, x, g.bottom, strokePaint)
+        }
+        // Noten
+        val acc = cols[2]
+        for (ev in Engine.notesOf(p)) {
+            val row = top - ev.semi
+            val x0 = g.left + (ev.pos / bars).toFloat() * g.width()
+            val x1 = min(g.right, g.left + ((ev.pos + ev.len) / bars).toFloat() * g.width())
+            if (row < 0 || row >= mxRows) {
+                // außerhalb des sichtbaren Bereichs: kleiner Pfeil
+                textPaint.textSize = dp(9f)
+                textPaint.color = acc
+                canvas.drawText(if (row < 0) "▲" else "▼", x0 + dp(4f), if (row < 0) g.top + dp(9f) else g.bottom - dp(2f), textPaint)
+                continue
+            }
+            val y0 = g.top + row * rowH
+            tmpRect.set(x0 + dp(0.5f), y0 + dp(0.5f), max(x0 + dp(3f), x1 - dp(0.5f)), y0 + rowH - dp(0.5f))
+            fillPaint.color = alpha(acc, 0.35f + 0.65f * ev.vel)
+            canvas.drawRoundRect(tmpRect, dp(2f), dp(2f), fillPaint)
+            strokePaint.strokeWidth = dp(1f)
+            strokePaint.color = Color.WHITE
+            canvas.drawRoundRect(tmpRect, dp(2f), dp(2f), strokePaint)
+        }
+        // Abspielposition
+        val pr = Engine.rollProgress(p)
+        if (pr >= 0f) {
+            val x = g.left + g.width() * pr
+            strokePaint.strokeWidth = dp(2f)
+            strokePaint.color = if (Engine.seqRecording) Color.rgb(230, 40, 55) else Color.WHITE
+            canvas.drawLine(x, g.top, x, g.bottom, strokePaint)
+        }
+        strokePaint.strokeWidth = dp(1f)
+        strokePaint.color = alpha(cols[1], 0.4f)
+        canvas.drawRect(g, strokePaint)
     }
 
     private fun softShadowAny(canvas: Canvas, r: RectF, rr: Float) {
