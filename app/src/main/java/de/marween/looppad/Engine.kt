@@ -650,6 +650,10 @@ object Engine {
     /** Vorhören eines Ausschnitts (Wave-Editor). */
     fun preview(data: FloatArray): Int = startVoice(data, -1, 1.0, false)
 
+    /** Endlos-Vorhören (Wave-Editor): [data] enthält am Ende eine Kopie des ersten Samples,
+     *  damit der Übergang E→S exakt ohne ausgelassenes Sample läuft. */
+    fun previewLoop(data: FloatArray): Int = startVoice(data, -1, 1.0, true)
+
     /** Abspielposition (Frames) einer Stimme, oder -1 wenn sie nicht mehr klingt. */
     fun voicePos(id: Int): Double = synchronized(voiceLock) {
         val v = voices.firstOrNull { it.active && it.id == id && !it.releasing }
