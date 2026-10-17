@@ -4,3 +4,9 @@ Marv PAD – Quellen der mitgelieferten Sounds
 2) samples/vcsl/: Versilian Community Sample Library (VCSL) von Versilian Studios LLC,
    Lizenz CC0 1.0 Universal (gemeinfrei). https://github.com/sgossner/VCSL
    Für Marv PAD auf mono 44,1 kHz umgewandelt, gekürzt und normalisiert.
+3) samples/vsco/: VS Chamber Orchestra: Community Edition (VSCO-2-CE) von Versilian Studios LLC
+   (aufgenommen von Sam Gossner & Simon Dalzell), Lizenz CC0 1.0 Universal (gemeinfrei).
+   https://github.com/sgossner/VSCO-2-CE
+   Ebenfalls weitere Instrumente aus der VCSL (siehe 2). Für Marv PAD auf mono 44,1 kHz
+   umgewandelt, Stille am Anfang entfernt, gekürzt (mit Ausblende) und normalisiert.
+   Tonhöhen in den Namen wurden nachgemessen (C4 = 261,6 Hz).

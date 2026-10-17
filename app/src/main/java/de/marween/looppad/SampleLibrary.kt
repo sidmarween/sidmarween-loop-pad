@@ -4,11 +4,12 @@ package de.marween.looppad
  * Mitgelieferte Sounds:
  * - selbst synthetisiert (frei)
  * - Versilian Community Sample Library (VCSL), CC0 1.0 – gemeinfrei, https://github.com/sgossner/VCSL
+ * - VS Chamber Orchestra: Community Edition (VSCO-2-CE), CC0 1.0 – gemeinfrei, https://github.com/sgossner/VSCO-2-CE
  */
 object SampleLibrary {
     class Sample(val category: String, val title: String, val file: String, val oneShot: Boolean)
 
-    val categories = listOf("🥁 Drums", "🪘 Percussion", "🎹 Tasten", "🎼 Melodisch", "🔊 Synth & Bass", "✨ FX", "∞ Loops")
+    val categories = listOf("🥁 Drums", "🪘 Percussion", "🎹 Tasten", "🎼 Melodisch", "🎻 Orchester", "🔊 Synth & Bass", "✨ FX", "∞ Loops")
 
     val samples = listOf(
         Sample("🥁 Drums", "Kick 808 (Synth)", "kick.wav", true),
@@ -102,7 +103,70 @@ object SampleLibrary {
         Sample("∞ Loops", "Hip-Hop 90 BPM", "loop_hiphop_90.wav", false),
         Sample("∞ Loops", "Techno 128 BPM", "loop_techno_128.wav", false),
         Sample("∞ Loops", "Trap 140 BPM", "loop_trap_140.wav", false),
-        Sample("∞ Loops", "Drum & Bass 174 BPM", "loop_dnb_174.wav", false)
+        Sample("∞ Loops", "Drum & Bass 174 BPM", "loop_dnb_174.wav", false),
+        // Erweiterung: VCSL (CC0) und VS Chamber Orchestra Community Edition (CC0)
+        Sample("🎻 Orchester", "Violinen (Ensemble) C5", "vsco/violinen_c5.wav", true),
+        Sample("🎻 Orchester", "Violinen Pizzicato C5", "vsco/violinen_pizz_c5.wav", true),
+        Sample("🎻 Orchester", "Violinen Spiccato C5", "vsco/violinen_spic_c5.wav", true),
+        Sample("🎻 Orchester", "Violinen Tremolo C5", "vsco/violinen_trem_c5.wav", true),
+        Sample("🎻 Orchester", "Solo-Violine C5", "vsco/violine_solo_c5.wav", true),
+        Sample("🎻 Orchester", "Bratschen (Ensemble) C5", "vsco/bratschen_c5.wav", true),
+        Sample("🎻 Orchester", "Celli (Ensemble) C4", "vsco/celli_c4.wav", true),
+        Sample("🎻 Orchester", "Celli Pizzicato", "vsco/celli_pizz.wav", true),
+        Sample("🎻 Orchester", "Kontrabass Pizzicato C2", "vsco/kontrabass_pizz_c2.wav", true),
+        Sample("🎻 Orchester", "Kontrabass gestrichen C2", "vsco/kontrabass_c2.wav", true),
+        Sample("🎻 Orchester", "Harfe C5", "vsco/harfe_c5.wav", true),
+        Sample("🎻 Orchester", "Trompete C6", "vsco/trompete_c6.wav", true),
+        Sample("🎻 Orchester", "Trompete Stakkato C6", "vsco/trompete_stac_c6.wav", true),
+        Sample("🎻 Orchester", "Trompete gedämpft D5", "vsco/trompete_daempfer_d5.wav", true),
+        Sample("🎻 Orchester", "Waldhorn C4", "vsco/waldhorn_c4.wav", true),
+        Sample("🎻 Orchester", "Posaune C4", "vsco/posaune_c4.wav", true),
+        Sample("🎻 Orchester", "Tuba D3", "vsco/tuba_d3.wav", true),
+        Sample("🎻 Orchester", "Tuba Stakkato D3", "vsco/tuba_stac_d3.wav", true),
+        Sample("🎻 Orchester", "Flöte C6", "vsco/floete_c6.wav", true),
+        Sample("🎻 Orchester", "Flöte Stakkato C6", "vsco/floete_stac_c6.wav", true),
+        Sample("🎻 Orchester", "Piccolo C7", "vsco/piccolo_c7.wav", true),
+        Sample("🎻 Orchester", "Oboe D5", "vsco/oboe_d5.wav", true),
+        Sample("🎻 Orchester", "Klarinette", "vsco/klarinette.wav", true),
+        Sample("🎻 Orchester", "Fagott C4", "vsco/fagott_c4.wav", true),
+        Sample("🎻 Orchester", "Pauke Wirbel", "vsco/pauke_wirbel.wav", true),
+        Sample("🎻 Orchester", "Gong", "vsco/gong.wav", true),
+        Sample("🎻 Orchester", "Becken-Crescendo", "vsco/becken_crescendo.wav", true),
+        Sample("🎹 Tasten", "Kirchenorgel (laut)", "vsco/kirchenorgel.wav", true),
+        Sample("🎼 Melodisch", "Mbira C5", "vcsl/mbira_c5.wav", true),
+        Sample("🎼 Melodisch", "Nyunga Nyunga", "vcsl/nyunga_nyunga.wav", true),
+        Sample("🎼 Melodisch", "Volksharfe C5", "vcsl/volksharfe_c5.wav", true),
+        Sample("🎼 Melodisch", "Strumstick D4", "vcsl/strumstick_d4.wav", true),
+        Sample("🎼 Melodisch", "Psalter", "vcsl/psalter.wav", true),
+        Sample("🎼 Melodisch", "Saxello A#4", "vcsl/saxello_ais4.wav", true),
+        Sample("🎼 Melodisch", "Handchimes C6", "vcsl/handchimes_c6.wav", true),
+        Sample("🎼 Melodisch", "Cembalo (flämisch) C5", "vcsl/cembalo_flaemisch_c5.wav", true),
+        Sample("🪘 Percussion", "Cabasa", "vcsl/cabasa.wav", true),
+        Sample("🪘 Percussion", "Fingerzimbeln", "vcsl/fingerzimbeln.wav", true),
+        Sample("🪘 Percussion", "Flexaton", "vcsl/flexaton.wav", true),
+        Sample("🪘 Percussion", "Mark Tree (Chimes)", "vcsl/mark_tree.wav", true),
+        Sample("🪘 Percussion", "Ratsche", "vcsl/ratsche.wav", true),
+        Sample("🪘 Percussion", "Schellen (Sleigh Bells)", "vcsl/schellen.wav", true),
+        Sample("🪘 Percussion", "Peitsche (Slapstick)", "vcsl/peitsche.wav", true),
+        Sample("🪘 Percussion", "Schlitztrommel hoch", "vcsl/schlitztrommel_hoch.wav", true),
+        Sample("🪘 Percussion", "Schlitztrommel tief", "vcsl/schlitztrommel_tief.wav", true),
+        Sample("🪘 Percussion", "Vibraslap", "vcsl/vibraslap.wav", true),
+        Sample("🪘 Percussion", "Ocean Drum", "vcsl/ocean_drum.wav", true),
+        Sample("🪘 Percussion", "Bongo hoch (VSCO)", "vsco/bongo_hoch.wav", true),
+        Sample("🪘 Percussion", "Bongo tief (VSCO)", "vsco/bongo_tief.wav", true),
+        Sample("🥁 Drums", "Snare (Modern 2)", "vcsl/snare_modern2.wav", true),
+        Sample("🥁 Drums", "Snare (Modern 3)", "vcsl/snare_modern3.wav", true),
+        Sample("🥁 Drums", "Snare Sidestick (akustisch)", "vcsl/snare_sidestick.wav", true),
+        Sample("🥁 Drums", "Tom 2 (akustisch)", "vcsl/tom2_akustisch.wav", true),
+        Sample("🎻 Orchester", "Große Trommel", "vcsl/grosse_trommel.wav", true),
+        Sample("🥁 Drums", "Hi-Hat offen (akustisch)", "vcsl/hihat_offen_akustisch.wav", true),
+        Sample("🥁 Drums", "Hi-Hat Pedal (akustisch)", "vcsl/hihat_pedal_akustisch.wav", true),
+        Sample("🥁 Drums", "Becken-Paar (Clash)", "vcsl/clash_becken.wav", true),
+        Sample("✨ FX", "Sirene", "vcsl/sirene.wav", true),
+        Sample("✨ FX", "Spielzeugpfeife (Zug)", "vcsl/zugpfeife.wav", true),
+        Sample("✨ FX", "Trillerpfeife", "vcsl/trillerpfeife.wav", true),
+        Sample("✨ FX", "Gong-Kratzer", "vsco/gong_kratzer.wav", true),
+        Sample("✨ FX", "Alien-Effekt", "vsco/alien.wav", true)
     )
 
     fun inCategory(c: String): List<Sample> = samples.filter { it.category == c }

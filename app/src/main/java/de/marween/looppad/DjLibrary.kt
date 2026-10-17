@@ -91,4 +91,30 @@ object DjLibrary {
         }
         index(ctx).writeText(n.toString())
     }
+
+    /** Rohdaten aller Einträge (für den Export als Paket). */
+    fun rawEntries(ctx: Context): List<Pair<JSONObject, File>> {
+        val a = readIndex(ctx)
+        val out = ArrayList<Pair<JSONObject, File>>()
+        for (i in 0 until a.length()) {
+            val o = a.optJSONObject(i) ?: continue
+            val f = File(dir(ctx), o.optString("file"))
+            if (f.exists()) out.add(o to f)
+        }
+        return out
+    }
+
+    /** Übernimmt einen Eintrag aus einem Paket (neue ID, Audio aus [input]). */
+    @Synchronized
+    fun importRaw(ctx: Context, src: JSONObject, input: java.io.InputStream) {
+        val id = "dj_" + System.currentTimeMillis() + "_" + (System.nanoTime() % 100000)
+        val f = File(dir(ctx), "$id.wav")
+        f.outputStream().buffered().use { input.copyTo(it) }
+        val o = JSONObject(src.toString())
+        o.put("id", id)
+        o.put("file", f.name)
+        val a = readIndex(ctx)
+        a.put(o)
+        index(ctx).writeText(a.toString())
+    }
 }

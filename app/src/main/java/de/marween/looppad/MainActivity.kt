@@ -567,6 +567,8 @@ class MainActivity : Activity() {
             labels.add("$c (${builtIn.size + own.size})" + if (own.isNotEmpty()) " · ★ ${own.size}" else "")
             actions.add { showLibraryCategory(p, c) }
         }
+        labels.add("📥📤 Importieren / Exportieren …")
+        actions.add { showLibraryIo() }
         AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
             .setTitle("Bibliothek → Pad ${p + 1}")
             .setItems(labels.toTypedArray()) { _, which -> actions[which]() }
@@ -590,8 +592,9 @@ class MainActivity : Activity() {
     private fun userSampleActions(p: Int, smp: Projects.UserSample) {
         AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
             .setTitle("★ ${smp.title}")
-            .setItems(arrayOf("▶ Auf Pad ${p + 1} laden", "🗑 Aus der Bibliothek löschen")) { _, w ->
+            .setItems(arrayOf("▶ Auf Pad ${p + 1} laden", "💾 Als WAV exportieren", "🗑 Aus der Bibliothek löschen")) { _, w ->
                 if (w == 0) loadUserSample(smp, p)
+                else if (w == 1) exportLibWav(smp.title) { out -> smp.file.inputStream().use { it.copyTo(out) } }
                 else confirm("Löschen?", "„${smp.title}“ wird aus deiner Bibliothek entfernt.") {
                     Projects.deleteUserSample(this, smp)
                     toast("Gelöscht")
@@ -617,6 +620,175 @@ class MainActivity : Activity() {
             } catch (e: Exception) {
                 runOnUiThread { toast("Laden fehlgeschlagen: ${e.message ?: e}") }
             }
+        }.start()
+    }
+
+    // ---------------------------------------------------------------- Bibliothek: Import / Export
+
+    /** Wartender Export: schreibt in den gewählten Ziel-Stream und liefert die Meldung. */
+    private var pendingLibExport: ((java.io.OutputStream) -> String)? = null
+
+    private fun showLibraryIo() {
+        val user = Projects.userSamples(this)
+        val djN = DjLibrary.list(this).size
+        val labels = arrayListOf(
+            "📥 Importieren: Audio-Dateien (WAV, MP3 …) oder Bibliotheks-Paket (.zip)",
+            "📤 Ganze eigene Bibliothek als Paket (★ ${user.size} Samples + 💿 $djN DJ-Tracks)",
+            "📤 Eine Kategorie als Paket",
+            "📤 Einzelnes Sample als WAV (auch mitgelieferte)"
+        )
+        AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
+            .setTitle("📚 Bibliothek – Import / Export")
+            .setItems(labels.toTypedArray()) { _, w ->
+                when (w) {
+                    0 -> pickLibraryImport()
+                    1 -> {
+                        if (user.isEmpty() && djN == 0) { toast("Deine Bibliothek ist noch leer"); return@setItems }
+                        startLibExport("MarvPAD_Bibliothek_" + stamp() + ".zip", "application/zip") { out ->
+                            val r = LibraryPack.export(this, out, user, true)
+                            "Exportiert: ${r.samples} Samples, ${r.dj} DJ-Tracks"
+                        }
+                    }
+                    2 -> {
+                        val cats = user.map { it.category }.distinct()
+                        if (cats.isEmpty()) { toast("Noch keine eigenen Samples (★) – speichere welche aus dem Wave-Editor oder importiere sie"); return@setItems }
+                        AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
+                            .setTitle("Kategorie exportieren")
+                            .setItems(cats.map { c -> "$c (${user.count { it.category == c }})" }.toTypedArray()) { _, i ->
+                                val c = cats[i]
+                                startLibExport("MarvPAD_" + c.replace(Regex("[^A-Za-z0-9äöüÄÖÜß]+"), "_").trim('_') + "_" + stamp() + ".zip", "application/zip") { out ->
+                                    val r = LibraryPack.export(this, out, user.filter { it.category == c }, false)
+                                    "Exportiert: ${r.samples} Samples aus $c"
+                                }
+                            }
+                            .setNegativeButton("Zurück") { _, _ -> showLibraryIo() }
+                            .show()
+                    }
+                    3 -> pickSampleToExport()
+                }
+            }
+            .setNegativeButton("Schließen", null)
+            .show()
+    }
+
+    private fun stamp(): String = SimpleDateFormat("yyyy-MM-dd_HH-mm", Locale.GERMANY).format(Date())
+
+    private fun startLibExport(name: String, mime: String, w: (java.io.OutputStream) -> String) {
+        pendingLibExport = w
+        val i = Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = mime
+            putExtra(Intent.EXTRA_TITLE, name)
+        }
+        try {
+            startActivityForResult(i, REQ_LIB_OUT)
+        } catch (e: Exception) {
+            toast("Kein Dateimanager gefunden")
+        }
+    }
+
+    private fun exportLibWav(title: String, copy: (java.io.OutputStream) -> Unit) {
+        val n = title.replace(Regex("[^A-Za-z0-9äöüÄÖÜß ._-]+"), "_").trim().ifEmpty { "Sample" }
+        startLibExport("$n.wav", "audio/wav") { out ->
+            copy(out)
+            "„$title“ exportiert"
+        }
+    }
+
+    private fun pickSampleToExport() {
+        val user = Projects.userSamples(this)
+        val cats = LinkedHashSet<String>(SampleLibrary.categories)
+        cats.addAll(user.map { it.category })
+        val list = cats.toList()
+        AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
+            .setTitle("Sample exportieren · Kategorie")
+            .setItems(list.toTypedArray()) { _, ci ->
+                val c = list[ci]
+                val own = user.filter { it.category == c }
+                val builtIn = SampleLibrary.inCategory(c)
+                val labels = own.map { "★ " + it.title } + builtIn.map { it.title }
+                AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
+                    .setTitle(c)
+                    .setItems(labels.toTypedArray()) { _, i ->
+                        if (i < own.size) {
+                            val s = own[i]
+                            exportLibWav(s.title) { out -> s.file.inputStream().use { it.copyTo(out) } }
+                        } else {
+                            val s = builtIn[i - own.size]
+                            exportLibWav(s.title) { out -> assets.open("samples/" + s.file).use { it.copyTo(out) } }
+                        }
+                    }
+                    .setNegativeButton("Zurück") { _, _ -> pickSampleToExport() }
+                    .show()
+            }
+            .setNegativeButton("Zurück") { _, _ -> showLibraryIo() }
+            .show()
+    }
+
+    private fun pickLibraryImport() {
+        val i = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = "*/*"
+            putExtra(Intent.EXTRA_MIME_TYPES, arrayOf("audio/*", "application/zip", "application/x-zip-compressed", "application/octet-stream"))
+            putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
+        }
+        try {
+            startActivityForResult(i, REQ_LIB_IN)
+        } catch (e: Exception) {
+            toast("Kein Dateimanager gefunden")
+        }
+    }
+
+    /** Pakete werden direkt übernommen, Audio-Dateien landen in einer gewählten Kategorie. */
+    private fun importLibraryUris(uris: List<Uri>) {
+        Thread {
+            val zips = ArrayList<Uri>()
+            val audio = ArrayList<Uri>()
+            for (u in uris) {
+                val head = try { contentResolver.openInputStream(u)?.use { s -> ByteArray(4).also { s.read(it) } } } catch (e: Exception) { null }
+                if (head != null && LibraryPack.isZip(head)) zips.add(u) else audio.add(u)
+            }
+            var ns = 0
+            var nd = 0
+            var err: String? = null
+            for (z in zips) {
+                try {
+                    contentResolver.openInputStream(z)?.use { inp ->
+                        val r = LibraryPack.import(this, inp, "⭐ Importiert")
+                        ns += r.samples
+                        nd += r.dj
+                    }
+                } catch (e: Exception) {
+                    err = e.message ?: e.toString()
+                }
+            }
+            runOnUiThread {
+                if (zips.isNotEmpty()) toast(if (err != null && ns + nd == 0) "Paket-Import fehlgeschlagen: $err" else "Paket importiert: $ns Samples" + if (nd > 0) ", $nd DJ-Tracks" else "")
+                if (audio.isNotEmpty()) askCategory("${audio.size} Datei(en) importieren") { cat -> importAudioToLibrary(audio, cat) }
+            }
+        }.start()
+    }
+
+    private fun importAudioToLibrary(uris: List<Uri>, cat: String) {
+        val rate = Engine.sampleRate
+        toast("Importiere ${uris.size} Datei(en) …")
+        Thread {
+            var ok = 0
+            var fail = 0
+            for (u in uris) {
+                try {
+                    val data = AudioFiles.decode(this, u, rate, Engine.MAX_SECONDS)
+                    if (data.size < 64) { fail++; continue }
+                    val title = (displayName(u) ?: "Sample").substringBeforeLast('.').ifEmpty { "Sample" }
+                    // kurz = ⚡ One-Shot, lang = ∞ Loop (folgt beim Laden dem Tempo)
+                    val oneShot = data.size < rate * 3
+                    Projects.saveUserSample(this, cat, title, data, rate, oneShot)
+                    ok++
+                } catch (e: Exception) {
+                    fail++
+                }
+            }
+            runOnUiThread { toast("★ $ok Sample(s) in $cat importiert" + if (fail > 0) " · $fail nicht lesbar" else "") }
         }.start()
     }
 
@@ -1393,6 +1565,7 @@ class MainActivity : Activity() {
                 (if (Engine.monitorOn) "☑" else "☐") + " 🎙 Live-Mikrofon mit Effekten …",
                 "🎹 MIDI (" + (if (Midi.deviceNames.isEmpty()) "kein Gerät" else Midi.deviceNames.joinToString(", ")) + ")",
                 "🔴 Meine Set-Aufnahmen (${SetRecorder.list(this).size})",
+                "📚 Bibliothek importieren / exportieren",
                 if (djMode) "▦ Zurück zum Pad-Modus" else "🎧 DJ-Modus (zwei Decks, Crossfader)"
             )) { _, which ->
                 when (which) {
@@ -1401,7 +1574,8 @@ class MainActivity : Activity() {
                     11 -> showMonitor()
                     12 -> showMidi()
                     13 -> showSets()
-                    14 -> switchMode(!djMode)
+                    14 -> showLibraryIo()
+                    15 -> switchMode(!djMode)
                     8 -> {
                         Engine.tapOverdub = !Engine.tapOverdub
                         getSharedPreferences("marvpad", MODE_PRIVATE).edit().putBoolean("tapOverdub", Engine.tapOverdub).apply()
@@ -2387,11 +2561,33 @@ class MainActivity : Activity() {
     @Deprecated("Activity-Result-API wird hier bewusst nicht genutzt (keine AndroidX-Abhängigkeit)")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == REQ_LIB_IN) {
+            if (resultCode != RESULT_OK || data == null) return
+            val uris = ArrayList<Uri>()
+            val clip = data.clipData
+            if (clip != null) for (k in 0 until clip.itemCount) clip.getItemAt(k).uri?.let { uris.add(it) }
+            else data.data?.let { uris.add(it) }
+            if (uris.isNotEmpty()) importLibraryUris(uris)
+            return
+        }
         val uri = data?.data
         if (resultCode != RESULT_OK || uri == null) return
         val pad = menuPad
         when (requestCode) {
             REQ_STEMS -> writeStems(uri)
+            REQ_LIB_OUT -> {
+                val w = pendingLibExport ?: return
+                pendingLibExport = null
+                toast("Exportiere …")
+                Thread {
+                    try {
+                        val msg = contentResolver.openOutputStream(uri)?.use { out -> w(out) } ?: "Export fehlgeschlagen"
+                        runOnUiThread { toast(msg) }
+                    } catch (e: Exception) {
+                        runOnUiThread { toast("Export fehlgeschlagen: ${e.message ?: e}") }
+                    }
+                }.start()
+            }
             REQ_DECK -> loadDeckUri(djDeck, uri)
             REQ_MIDI_OUT -> writeMidi(uri)
             REQ_MIDI_IN -> readMidi(uri)
@@ -2669,5 +2865,7 @@ class MainActivity : Activity() {
         private const val REQ_INST_OUT = 17
         private const val REQ_INST_IN = 18
         private const val REQ_SET = 19
+        private const val REQ_LIB_IN = 20
+        private const val REQ_LIB_OUT = 21
     }
 }

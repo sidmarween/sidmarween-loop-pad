@@ -220,6 +220,19 @@ object Projects {
         indexFile(ctx).writeText(a.toString())
     }
 
+    /** Übernimmt eine fertige WAV-Datei (z. B. aus einem Bibliotheks-Paket) in die eigene Bibliothek. */
+    @Synchronized
+    fun importUserSampleFile(ctx: Context, category: String, title: String, oneShot: Boolean, stem: String?, input: java.io.InputStream) {
+        val name = "u_" + System.currentTimeMillis() + "_" + (System.nanoTime() % 100000) + ".wav"
+        File(libDir(ctx), name).outputStream().buffered().use { input.copyTo(it) }
+        val a = readIndex(ctx)
+        val o = JSONObject()
+        o.put("file", name); o.put("cat", category); o.put("title", title); o.put("oneShot", oneShot)
+        if (stem != null) o.put("stem", stem)
+        a.put(o)
+        indexFile(ctx).writeText(a.toString())
+    }
+
     @Synchronized
     fun deleteUserSample(ctx: Context, s: UserSample) {
         val a = readIndex(ctx)

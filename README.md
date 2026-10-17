@@ -114,7 +114,11 @@ Im **•••**-Menü jedes Pads: **∞ LOOP** (läuft im Takt endlos, Regenbog
 
 „Aus Bibliothek laden" im •••-Menü, nach Kategorien: 🎙 Meine Aufnahmen · 🥁 Drums · 🪘 Percussion · 🎹 Tasten · 🎼 Melodisch · 🔊 Synth & Bass · ✨ FX · ∞ Loops (90–174 BPM) – über 90 Sounds.
 Eigene Samples aus dem Wave-Editor erscheinen mit ★ in ihrer Kategorie (laden, als WAV exportieren, löschen).
-Quellen: selbst synthetisiert (frei) und die **Versilian Community Sample Library (VCSL)**, CC0 1.0 (gemeinfrei) – https://github.com/sgossner/VCSL. Tonale Samples liegen meist auf C4 und lassen sich mit der 🎹-Tastatur spielen.
+Quellen: selbst synthetisiert (frei) und die **Versilian Community Sample Library (VCSL)**, CC0 1.0 (gemeinfrei) – https://github.com/sgossner/VCSL. Dazu die Kategorie **🎻 Orchester** und weitere Instrumente aus **VS Chamber Orchestra: Community Edition (VSCO-2-CE)**, ebenfalls CC0 1.0 – https://github.com/sgossner/VSCO-2-CE.
+
+**📚 Importieren / Exportieren** (Hauptmenü oder unten in der Bibliothek):
+- 📥 Audio-Dateien (WAV, MP3, …, auch mehrere auf einmal) landen in einer wählbaren Kategorie – kurz = ⚡ One-Shot, ab 3 s = ∞ Loop. Bibliotheks-Pakete (.zip) werden komplett übernommen.
+- 📤 Ganze eigene Bibliothek als Paket (★-Samples mit Kategorie und Titel plus DJ-Bibliothek mit Tempo, Raster und Cue-Punkten), eine Kategorie als Paket oder ein einzelnes Sample als WAV – auch die mitgelieferten. Tonale Samples liegen meist auf C4 und lassen sich mit der 🎹-Tastatur spielen.
 
 ## Import / Export
 
