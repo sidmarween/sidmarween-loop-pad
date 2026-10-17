@@ -986,6 +986,28 @@ object Engine {
     /** Regler: MIX / P1 / P2 des gerade bearbeiteten Kettenplatzes, VOL (global). */
     val knobs = floatArrayOf(1f, Fx.P1_DEFAULT[0], Fx.P2_DEFAULT[0], 0.8f)
 
+    // ---------------------------------------------------------------- Audio-Geräte (USB & Co.)
+
+    /** Gewähltes Ausgabe-/Eingabegerät als „Typ|Name“, null = automatisch. */
+    @Volatile var outKey: String? = null
+    @Volatile var inKey: String? = null
+
+    fun deviceKey(d: android.media.AudioDeviceInfo): String = "${d.type}|${d.productName}"
+
+    fun findDevice(am: AudioManager, key: String?, flag: Int): android.media.AudioDeviceInfo? {
+        if (key == null) return null
+        return am.getDevices(flag).firstOrNull { deviceKey(it) == key }
+    }
+
+    fun isUsb(d: android.media.AudioDeviceInfo): Boolean =
+        d.type == android.media.AudioDeviceInfo.TYPE_USB_DEVICE ||
+            d.type == android.media.AudioDeviceInfo.TYPE_USB_HEADSET ||
+            d.type == android.media.AudioDeviceInfo.TYPE_USB_ACCESSORY
+
+    /** Aktuell tatsächlich genutzte Geräte (für die Anzeige). */
+    fun routedOutput(): android.media.AudioDeviceInfo? = try { track?.routedDevice } catch (e: Exception) { null }
+    fun routedInput(): android.media.AudioDeviceInfo? = try { record?.routedDevice } catch (e: Exception) { null }
+
     // ---------------------------------------------------------------- Effekt-Kette (3 Plätze)
     const val SLOTS = 3
     val slotType = intArrayOf(0, Fx.DELAY, Fx.REVERB)
@@ -1071,6 +1093,11 @@ object Engine {
         }
         track = t
         record = r
+        // Bevorzugte Geräte (z. B. USB-Audio-Interface) setzen
+        try {
+            findDevice(am, outKey, AudioManager.GET_DEVICES_OUTPUTS)?.let { t.setPreferredDevice(it) }
+            findDevice(am, inKey, AudioManager.GET_DEVICES_INPUTS)?.let { r.setPreferredDevice(it) }
+        } catch (ignored: Exception) {}
         if (fxs == null || fxRate != sampleRate) {
             fxs = Array(SLOTS) { Fx(sampleRate) }
             fxRate = sampleRate

@@ -10,6 +10,8 @@ Android-App für Musiker: 16 Neon-Pads, XY-Effektfläche und Drehregler im Kaoss
 
 ## Menü ☰ (oben rechts)
 
+- **🔌 Audio-Geräte** – Ein- und Ausgang getrennt wählen (USB-Audio-Interface, USB-Mikrofon, USB-Headset, Kopfhörer, Lautsprecher …) oder Automatisch. Class-compliant USB-Audio-Geräte (USB-C oder OTG) bindet Android selbst ein; Marv PAD erkennt Ein-/Ausstecken und startet das Audio automatisch neu, Loops bleiben erhalten. Die Auswahl wird gemerkt.
+
 - **ℹ Info-Modus** (Haken setzen) – jedes angetippte Element (Knöpfe, Regler, Pads, XY-Fläche, Sequenzer, Tastatur, Matrix, Editor) wird hervorgehoben und erklärt, statt ausgelöst zu werden. ☰ und die Schließen-Knöpfe funktionieren weiter.
 
 - **Projekt speichern / laden** – sichert alles zum Weitermachen: Pads (Audio), Modi, Tempo, Sequenzer-Pattern, Effekt und Regler.

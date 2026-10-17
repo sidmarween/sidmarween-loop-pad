@@ -5,6 +5,8 @@ import android.app.Activity
 import android.app.AlertDialog
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.media.AudioDeviceCallback
+import android.media.AudioDeviceInfo
 import android.media.AudioManager
 import android.net.Uri
 import android.os.Build
@@ -85,6 +87,9 @@ class MainActivity : Activity() {
         pads.onSongStopped = { finishSong() }
         pads.theme = getSharedPreferences("marvpad", MODE_PRIVATE).getInt("design", PadView.NOIR)
         pads.infoMode = getSharedPreferences("marvpad", MODE_PRIVATE).getBoolean("info", false)
+        Engine.outKey = prefs.getString("outDev", null)
+        Engine.inKey = prefs.getString("inDev", null)
+        registerUsbWatcher()
         setContentView(pads)
         hideSystemBars()
     }
@@ -359,6 +364,7 @@ class MainActivity : Activity() {
                 "🎙 Meine Aufnahmen",
                 if (Engine.bounce) "🔁 Bounce: AN (Quellen nach Wave-Aufnahme stumm)" else "🔁 Bounce: AUS",
                 (if (pads.infoMode) "☑" else "☐") + " ℹ Info-Modus (Funktionen erklären)",
+                "🔌 Audio-Geräte (USB-Interface, Kopfhörer …)",
                 "🎨 Design wählen"
             )) { _, which ->
                 when (which) {
@@ -374,6 +380,7 @@ class MainActivity : Activity() {
                         getSharedPreferences("marvpad", MODE_PRIVATE).edit().putBoolean("bounce", Engine.bounce).apply()
                         toast(if (Engine.bounce) "Bounce an: nach einer Wave-Aufnahme spielt nur noch das neue Pad" else "Bounce aus: Quell-Pads spielen weiter")
                     }
+                    6 -> showAudioDevices()
                     5 -> {
                         pads.infoMode = !pads.infoMode
                         getSharedPreferences("marvpad", MODE_PRIVATE).edit().putBoolean("info", pads.infoMode).apply()
@@ -383,6 +390,120 @@ class MainActivity : Activity() {
                 }
             }
             .setNegativeButton("Schließen", null)
+            .show()
+    }
+
+    // ---------------------------------------------------------------- Audio-Geräte / USB
+
+    private var watcherReady = false
+    private val restartAudio = Runnable {
+        if (Engine.running) {
+            Engine.stop()
+            ensureStarted()
+        }
+    }
+
+    private fun scheduleAudioRestart() {
+        window.decorView.removeCallbacks(restartAudio)
+        window.decorView.postDelayed(restartAudio, 500L)
+    }
+
+    private fun registerUsbWatcher() {
+        val am = getSystemService(AUDIO_SERVICE) as AudioManager
+        am.registerAudioDeviceCallback(object : AudioDeviceCallback() {
+            override fun onAudioDevicesAdded(added: Array<out AudioDeviceInfo>) {
+                if (!watcherReady) {
+                    // erster Aufruf listet nur die schon vorhandenen Geräte
+                    watcherReady = true
+                    return
+                }
+                val usb = added.filter { Engine.isUsb(it) }
+                if (usb.isEmpty()) return
+                toast("🔌 USB-Audio verbunden: ${usb.first().productName}")
+                scheduleAudioRestart()
+            }
+
+            override fun onAudioDevicesRemoved(removed: Array<out AudioDeviceInfo>) {
+                val usb = removed.filter { Engine.isUsb(it) }
+                if (usb.isEmpty()) return
+                toast("🔌 USB-Audio getrennt: ${usb.first().productName}")
+                scheduleAudioRestart()
+            }
+        }, null)
+    }
+
+    private fun deviceName(d: AudioDeviceInfo): String {
+        val t = when (d.type) {
+            AudioDeviceInfo.TYPE_USB_DEVICE -> "🔌 USB-Audio"
+            AudioDeviceInfo.TYPE_USB_HEADSET -> "🔌 USB-Headset"
+            AudioDeviceInfo.TYPE_USB_ACCESSORY -> "🔌 USB-Zubehör"
+            AudioDeviceInfo.TYPE_BUILTIN_SPEAKER -> "🔊 Lautsprecher"
+            AudioDeviceInfo.TYPE_BUILTIN_MIC -> "🎙 Internes Mikrofon"
+            AudioDeviceInfo.TYPE_WIRED_HEADSET -> "🎧 Headset (Kabel)"
+            AudioDeviceInfo.TYPE_WIRED_HEADPHONES -> "🎧 Kopfhörer (Kabel)"
+            AudioDeviceInfo.TYPE_BLUETOOTH_A2DP -> "📶 Bluetooth (hohe Latenz)"
+            AudioDeviceInfo.TYPE_BLUETOOTH_SCO -> "📶 Bluetooth-Headset"
+            AudioDeviceInfo.TYPE_HDMI -> "📺 HDMI"
+            AudioDeviceInfo.TYPE_LINE_ANALOG -> "Line (analog)"
+            AudioDeviceInfo.TYPE_LINE_DIGITAL -> "Line (digital)"
+            else -> "Gerät"
+        }
+        val ch = d.channelCounts.maxOrNull()
+        val rates = d.sampleRates.maxOrNull()
+        val extra = listOfNotNull(
+            if (ch != null && ch > 0) "${ch} Kan." else null,
+            if (rates != null && rates > 0) "${rates / 1000} kHz" else null
+        ).joinToString(", ")
+        return "$t – ${d.productName}" + if (extra.isNotEmpty()) " ($extra)" else ""
+    }
+
+    private fun usefulDevices(flag: Int): List<AudioDeviceInfo> {
+        val am = getSystemService(AUDIO_SERVICE) as AudioManager
+        val skip = setOf(AudioDeviceInfo.TYPE_BUILTIN_EARPIECE, AudioDeviceInfo.TYPE_TELEPHONY, AudioDeviceInfo.TYPE_FM_TUNER, AudioDeviceInfo.TYPE_REMOTE_SUBMIX)
+        return am.getDevices(flag).filter { it.type !in skip }.distinctBy { Engine.deviceKey(it) }
+    }
+
+    private fun showAudioDevices() {
+        val am = getSystemService(AUDIO_SERVICE) as AudioManager
+        val outSel = Engine.findDevice(am, Engine.outKey, AudioManager.GET_DEVICES_OUTPUTS)
+        val inSel = Engine.findDevice(am, Engine.inKey, AudioManager.GET_DEVICES_INPUTS)
+        val outNow = Engine.routedOutput()
+        val inNow = Engine.routedInput()
+        val usbCount = am.getDevices(AudioManager.GET_DEVICES_ALL).count { Engine.isUsb(it) }
+        val msg = "Ausgang: " + (if (outSel != null) deviceName(outSel) else "Automatisch") +
+            (if (outNow != null) "\n   aktiv: ${deviceName(outNow)}" else "") +
+            "\n\nEingang: " + (if (inSel != null) deviceName(inSel) else "Automatisch") +
+            (if (inNow != null) "\n   aktiv: ${deviceName(inNow)}" else "") +
+            "\n\n" + (if (usbCount > 0) "🔌 USB-Audio erkannt." else "Kein USB-Audio-Gerät erkannt. Class-compliant Interfaces per USB-C (oder OTG-Adapter) anschließen – Android bindet sie automatisch ein.")
+        AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
+            .setTitle("🔌 Audio-Geräte")
+            .setMessage(msg)
+            .setPositiveButton("Ausgang …") { _, _ -> pickDevice(false) }
+            .setNeutralButton("Eingang …") { _, _ -> pickDevice(true) }
+            .setNegativeButton("Schließen", null)
+            .show()
+    }
+
+    private fun pickDevice(input: Boolean) {
+        val list = usefulDevices(if (input) AudioManager.GET_DEVICES_INPUTS else AudioManager.GET_DEVICES_OUTPUTS)
+        val names = ArrayList<String>()
+        names.add("⚙ Automatisch (Android wählt, USB hat Vorrang)")
+        for (d in list) names.add(deviceName(d))
+        val cur = if (input) Engine.inKey else Engine.outKey
+        val checked = if (cur == null) 0 else (list.indexOfFirst { Engine.deviceKey(it) == cur } + 1).coerceAtLeast(0)
+        AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
+            .setTitle(if (input) "Eingang wählen" else "Ausgang wählen")
+            .setSingleChoiceItems(names.toTypedArray(), checked) { d, which ->
+                val key = if (which == 0) null else Engine.deviceKey(list[which - 1])
+                if (input) Engine.inKey = key else Engine.outKey = key
+                getSharedPreferences("marvpad", MODE_PRIVATE).edit()
+                    .putString(if (input) "inDev" else "outDev", key)
+                    .apply()
+                d.dismiss()
+                toast((if (input) "Eingang: " else "Ausgang: ") + names[which])
+                scheduleAudioRestart()
+            }
+            .setNegativeButton("Abbrechen", null)
             .show()
     }
 
