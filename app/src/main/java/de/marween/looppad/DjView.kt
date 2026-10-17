@@ -179,6 +179,8 @@ class DjView(context: Context) : View(context) {
     private val bpmChip = RectF()
     private val padsBtn = RectF()
     private val menuBtn = RectF()
+    private val masterBtn = RectF()
+    private val masterPanel = MasterPanel(this).also { mp -> mp.onHint = { onHint?.invoke(it) } }
     private val display = RectF()
     private val lanes = arrayOf(RectF(), RectF())
     private val overview = arrayOf(RectF(), RectF())
@@ -225,7 +227,8 @@ class DjView(context: Context) : View(context) {
         header.set(L, y, R, y + dp(40f))
         menuBtn.set(R - dp(40f), y + dp(4f), R, y + dp(36f))
         padsBtn.set(menuBtn.left - dp(78f), y + dp(4f), menuBtn.left - dp(6f), y + dp(36f))
-        bpmChip.set(padsBtn.left - dp(96f), y + dp(4f), padsBtn.left - dp(6f), y + dp(36f))
+        masterBtn.set(padsBtn.left - dp(72f), y + dp(4f), padsBtn.left - dp(6f), y + dp(36f))
+        bpmChip.set(masterBtn.left - dp(92f), y + dp(4f), masterBtn.left - dp(6f), y + dp(36f))
         y = header.bottom + dp(6f)
         val avail = panel.bottom - m - y
         // Höhenaufteilung (passt sich an kleine Displays an)
@@ -397,6 +400,10 @@ class DjView(context: Context) : View(context) {
 
     override fun onDraw(c: Canvas) {
         if (panel.width() <= 0f) layoutAll()
+        if (masterPanel.isOpen) {
+            masterPanel.draw(c, RectF(dp(6f), insetTop + dp(6f), width - dp(6f), height - insetBottom - dp(6f)), skin.accent)
+            return
+        }
         if (editDeck >= 0) {
             drawEditor(c)
             postInvalidateOnAnimation()
@@ -521,6 +528,7 @@ class DjView(context: Context) : View(context) {
         val b = Engine.currentBpm()
         chip(c, bpmChip, if (b > 0f) String.format(Locale.GERMANY, "%.1f BPM", b) else "– BPM", Engine.seqPlaying)
         chip(c, padsBtn, "▦ PADS", false)
+        chip(c, masterBtn, "MASTER", MasterBus.anyOn())
         chip(c, menuBtn, "☰", false)
     }
 
@@ -1603,6 +1611,10 @@ class DjView(context: Context) : View(context) {
     @SuppressLint("ClickableViewAccessibility")
     override fun onTouchEvent(e: MotionEvent): Boolean {
         if (e.actionMasked == MotionEvent.ACTION_DOWN) try { requestUnbufferedDispatch(e) } catch (ignored: Throwable) {}
+        if (masterPanel.isOpen) {
+            masterPanel.touch(e)
+            return true
+        }
         if (editDeck >= 0) {
             editorTouch(e)
             return true
@@ -1655,6 +1667,7 @@ class DjView(context: Context) : View(context) {
         when {
             hit(bpmChip, x, y) -> { onTempo?.invoke(); return }
             hit(padsBtn, x, y) -> { onPadsMode?.invoke(); return }
+            hit(masterBtn, x, y) -> { masterPanel.open(); haptic(); return }
             hit(menuBtn, x, y) -> { onMenu?.invoke(); return }
         }
         for (k in 0..1) {

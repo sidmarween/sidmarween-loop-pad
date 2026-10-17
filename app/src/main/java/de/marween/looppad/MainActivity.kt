@@ -127,6 +127,7 @@ class MainActivity : Activity() {
         pads.infoMode = getSharedPreferences("marvpad", MODE_PRIVATE).getBoolean("info", false)
         Engine.outKey = prefs.getString("outDev", null)
         Engine.inKey = prefs.getString("inDev", null)
+        MasterPanel.load(this)
         // Latenz & Live-Reaktion
         Engine.latencyMode = prefs.getInt("latency", 0)
         Engine.instantStart = prefs.getBoolean("instantStart", true)

@@ -1752,6 +1752,8 @@ object Engine {
         val cue = FloatArray(block)
         val mono = FloatArray(block)
         val stereo = FloatArray(block * 2)
+        val mL = FloatArray(block)
+        val mR = FloatArray(block)
         var lastUnder = try { t.underrunCount } catch (e: Throwable) { 0 }
         var blocks = 0
         micCursor = -1L
@@ -1955,33 +1957,29 @@ object Engine {
             processResampleTakes(w, block)
             val vol = knobs[3] * 1.25f
             var mpeak = 0f
-            if (djOn) {
-                // Stereo: Pads (mono) + Decks; mit Split-Cue links Master (mono), rechts Vorhören
-                val split = Dj.splitCue
-                val cg = Dj.cueGain
-                for (i in 0 until block) {
-                    val m = out[i]
-                    var l = softClip((m + djL[i]) * vol)
-                    var r = softClip((m + djR[i]) * vol)
-                    if (split) {
-                        val mm = (l + r) * 0.5f
-                        l = mm
-                        r = softClip(cue[i] * cg)
-                    }
-                    stereo[2 * i] = l
-                    stereo[2 * i + 1] = r
-                    val y = (l + r) * 0.5f
-                    out[i] = y
-                    val a = max(abs(l), abs(r))
-                    if (a > mpeak) mpeak = a
+            // Master-Kette (Stereo): Pads mono + DJ-Decks, dann EQ/Kompressor/Multiband/Sättigung/Breite/Limiter
+            for (i in 0 until block) {
+                val m = out[i]
+                mL[i] = (if (djOn) m + djL[i] else m) * vol
+                mR[i] = (if (djOn) m + djR[i] else m) * vol
+            }
+            MasterBus.process(mL, mR, block, sampleRate)
+            val split = djOn && Dj.splitCue
+            val cg = Dj.cueGain
+            for (i in 0 until block) {
+                var l = softClip(mL[i])
+                var r = softClip(mR[i])
+                if (split) {
+                    // Split-Cue: links Master (mono), rechts Vorhören
+                    l = (l + r) * 0.5f
+                    r = softClip(cue[i] * cg)
                 }
-            } else {
-                for (i in 0 until block) {
-                    val y = softClip(out[i] * vol)
-                    out[i] = y
-                    val a = abs(y)
-                    if (a > mpeak) mpeak = a
-                }
+                stereo[2 * i] = l
+                stereo[2 * i + 1] = r
+                val y = if (split) l else (l + r) * 0.5f
+                out[i] = y
+                val a = max(abs(l), abs(r))
+                if (a > mpeak) mpeak = a
             }
             outputLevel = max(mpeak, outputLevel * 0.9f)
             if (songRecording) {
@@ -2004,24 +2002,17 @@ object Engine {
             val clickTo = if (splitNow) mono else out
             if (metronome && transport && (countTo == Long.MIN_VALUE || w >= countTo)) addClicks(clickTo, w, block)
             if (countTo != Long.MIN_VALUE) countClicks(clickTo, w, block)
-            if (djOn) {
-                if (Dj.splitCue) {
-                    // Klick nur auf dem Vorhör-Kanal
-                    for (i in 0 until block) stereo[2 * i + 1] = softClip(stereo[2 * i + 1] + mono[i])
-                } else {
-                    for (i in 0 until block) {
-                        val c = out[i] - (stereo[2 * i] + stereo[2 * i + 1]) * 0.5f
-                        if (c != 0f) {
-                            stereo[2 * i] += c
-                            stereo[2 * i + 1] += c
-                        }
-                    }
-                }
+            if (splitNow) {
+                // Klick nur auf dem Vorhör-Kanal
+                for (i in 0 until block) stereo[2 * i + 1] = softClip(stereo[2 * i + 1] + mono[i])
             } else {
+                // Metronom/Einzähler (nach dem Master) auf beide Seiten
                 for (i in 0 until block) {
-                    val y = out[i]
-                    stereo[2 * i] = y
-                    stereo[2 * i + 1] = y
+                    val c = out[i] - (stereo[2 * i] + stereo[2 * i + 1]) * 0.5f
+                    if (c != 0f) {
+                        stereo[2 * i] += c
+                        stereo[2 * i + 1] += c
+                    }
                 }
             }
             var off = 0

@@ -415,6 +415,9 @@ class PadView(context: Context) : View(context) {
         }
     }
     private val designBtn = RectF()
+    /** Master-Bereich (Mastering-Kette) oben im HUD. */
+    private val masterBtn = RectF()
+    private val masterPanel = MasterPanel(this).also { mp -> mp.onHint = { hint(it) } }
     private val seqRect = RectF()
     private val stepRects = Array(Engine.STEPS) { RectF() }
     private val recBtn = RectF()
@@ -548,7 +551,8 @@ class PadView(context: Context) : View(context) {
         logoDst.set(margin, by + (topH - lh) / 2f, margin + lw, by + (topH + lh) / 2f)
         val db = dp(36f)
         designBtn.set(w - margin - db, by + (topH - db) / 2f, w - margin, by + (topH + db) / 2f)
-        displayRect.set(logoDst.right + dp(12f), by + dp(4f), designBtn.left - dp(10f), by + topH - dp(4f))
+        masterBtn.set(designBtn.left - dp(6f) - dp(42f), designBtn.top, designBtn.left - dp(6f), designBtn.bottom)
+        displayRect.set(logoDst.right + dp(12f), by + dp(4f), masterBtn.left - dp(8f), by + topH - dp(4f))
 
         // Drehregler
         val knobTop = by + topH + dp(8f)
@@ -804,6 +808,8 @@ class PadView(context: Context) : View(context) {
         if (kbPad >= 0) drawKeyboard(canvas)
         if (edPad >= 0) drawEditor(canvas, dt)
         if (instEd.isOpen) instEd.draw(canvas, RectF(dp(6f), insetTop + dp(6f), width - dp(6f), height - insetBottom - dp(6f)), overlayColors())
+        if (!masterPanel.isOpen) drawMasterButton(canvas)
+        if (masterPanel.isOpen) masterPanel.draw(canvas, RectF(dp(6f), insetTop + dp(6f), width - dp(6f), height - insetBottom - dp(6f)), overlayColors()[2])
         drawInfo(canvas)
         message?.let { drawMessage(canvas, it) }
 
@@ -955,6 +961,30 @@ class PadView(context: Context) : View(context) {
             canvas.drawCircle(x, ly, dp(2.5f) + dp(2.5f) * beat, dotPaint)
         }
         canvas.restore()
+    }
+
+    /** MASTER-Knopf oben: leuchtet, wenn die Kette aktiv ist; Balken zeigt die Limiter-Reduktion. */
+    private fun drawMasterButton(canvas: Canvas) {
+        val r = masterBtn
+        if (r.width() <= 0f || kbPad >= 0 || edPad >= 0 || instEd.isOpen) return
+        val cols = overlayColors()
+        val active = MasterBus.anyOn()
+        val rr = dp(8f)
+        fillPaint.shader = null
+        fillPaint.color = if (active) blend(cols[0], cols[2], 0.3f) else cols[0]
+        canvas.drawRoundRect(r, rr, rr, fillPaint)
+        strokePaint.strokeWidth = dp(1.5f)
+        strokePaint.color = if (active) cols[2] else alpha(cols[1], 0.45f)
+        canvas.drawRoundRect(r, rr, rr, strokePaint)
+        textPaint.textSize = dp(8.5f)
+        textPaint.color = if (active) Color.WHITE else cols[1]
+        canvas.drawText("MAS", r.centerX(), r.centerY() - dp(2f), textPaint)
+        canvas.drawText("TER", r.centerX(), r.centerY() + dp(8f), textPaint)
+        if (active) {
+            val gr = (MasterBus.limGr + MasterBus.compGr).coerceIn(0f, 12f) / 12f
+            fillPaint.color = Color.rgb(255, 170, 40)
+            canvas.drawRect(r.left + dp(4f), r.bottom - dp(5f), r.left + dp(4f) + (r.width() - dp(8f)) * gr, r.bottom - dp(3f), fillPaint)
+        }
     }
 
     private fun drawDesignButton(canvas: Canvas) {
@@ -2451,6 +2481,10 @@ class PadView(context: Context) : View(context) {
             val iy = e.getY(e.actionIndex)
             if (infoTouch(ix, iy)) return true
         }
+        if (masterPanel.isOpen) {
+            masterPanel.touch(e)
+            return true
+        }
         if (instEd.isOpen) {
             instEd.touch(e)
             return true
@@ -2506,6 +2540,11 @@ class PadView(context: Context) : View(context) {
                 if (designBtn.contains(x, y)) {
                     performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
                     onDesignMenu?.invoke()
+                    return true
+                }
+                if (masterBtn.contains(x, y)) {
+                    performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+                    masterPanel.open()
                     return true
                 }
                 if (displayRect.contains(x, y)) {
