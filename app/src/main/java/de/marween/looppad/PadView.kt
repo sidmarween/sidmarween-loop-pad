@@ -28,6 +28,7 @@ import kotlin.math.cos
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.pow
+import kotlin.math.roundToInt
 import kotlin.math.sin
 import kotlin.random.Random
 
@@ -788,10 +789,10 @@ class PadView(context: Context) : View(context) {
         }
         for (i in 0 until VISIBLE_PADS) {
             drawPad(canvas, i, dt)
+            if (!sceneView) drawStatus(canvas, i)
             drawMore(canvas, i)
             drawKeyButton(canvas, i)
-            drawInputBadge(canvas, i)
-            drawFxBadge(canvas, i)
+            if (!sceneView) drawFxBadge(canvas, i)
             drawPadOverlay(canvas, i)
         }
         drawSequencer(canvas)
@@ -1373,6 +1374,181 @@ class PadView(context: Context) : View(context) {
         textPaint.textAlign = Paint.Align.CENTER
     }
 
+    /** Status-Farben wie bei Clip-Launchern: Rot = Aufnahme, Grün = Play, Gelb = Overdub, Blinken = wartet auf die Eins. */
+    var statusColors = true
+    private val segPath = Path()
+    private val iconRect = RectF()
+
+    private fun drawStatus(canvas: Canvas, i: Int) {
+        val r = padRects[i]
+        if (r.width() <= 0f) return
+        val st = Engine.state(i)
+        val q = Engine.queuedState(i)
+        val armed = Engine.isArmed(i)
+        val latched = Engine.isLatched(i)
+        val blink = if (sin(time * 12f) > 0f) 1f else 0.25f
+        val pulse = 0.5f + 0.5f * sin(time * 7f)
+        val green = Color.rgb(40, 230, 110)
+        val red = Color.rgb(255, 45, 65)
+        val yellow = Color.rgb(255, 190, 30)
+        if (st == Engine.PadState.EMPTY && !armed) {
+            drawEmptyPad(canvas, i)
+            return
+        }
+        if (!statusColors) return
+        var c = 0
+        var tint = 0f
+        var ringA = 0f
+        var arc = -1f
+        when {
+            armed -> { c = red; ringA = blink; tint = 0.14f * blink }
+            st == Engine.PadState.RECORDING -> {
+                c = red; ringA = 0.7f + 0.3f * pulse; tint = 0.16f + 0.14f * pulse
+                arc = Engine.masterProgress().let { if (it >= 0f) it else Engine.recordingSeconds(i) % 1f }
+            }
+            st == Engine.PadState.OVERDUB || latched -> { c = yellow; ringA = 0.95f; tint = 0.18f + 0.12f * pulse; arc = Engine.progress(i) }
+            q == 1 -> { c = green; ringA = blink; tint = 0.14f * blink }
+            q == 0 -> { c = if (blink > 0.5f) red else green; ringA = 1f; tint = 0.06f }
+            st == Engine.PadState.PLAYING -> { c = green; ringA = if (Engine.seqPlaying) 0.8f else 0.35f; tint = 0.07f; arc = if (Engine.seqPlaying) Engine.progress(i) else -1f }
+            st == Engine.PadState.ONESHOT -> { val sp = Engine.shotProgress(i); if (sp >= 0f) { c = Color.rgb(255, 150, 30); ringA = 0.9f; arc = sp } }
+            st == Engine.PadState.MUTED -> { c = Color.rgb(150, 155, 165); ringA = 0.45f }
+        }
+        if (c == 0) return
+        val rr = radius
+        fillPaint.shader = null
+        if (tint > 0f) {
+            fillPaint.color = alpha(c, tint)
+            canvas.drawRoundRect(r, rr, rr, fillPaint)
+        }
+        strokePaint.shader = null
+        strokePaint.strokeWidth = dp(2.5f)
+        strokePaint.color = alpha(c, ringA)
+        tmpRect.set(r.left + dp(1.5f), r.top + dp(1.5f), r.right - dp(1.5f), r.bottom - dp(1.5f))
+        canvas.drawRoundRect(tmpRect, max(0f, rr - dp(1.5f)), max(0f, rr - dp(1.5f)), strokePaint)
+        // rotierender Lichtring im Tempo
+        val len = padLengths[i]
+        if (arc >= 0f && len > 0f) {
+            val seg = len * 0.16f
+            val end = arc * len
+            val start = end - seg
+            strokePaint.strokeWidth = dp(5f)
+            strokePaint.strokeCap = Paint.Cap.ROUND
+            strokePaint.color = alpha(blend(c, Color.WHITE, 0.35f), 0.95f)
+            segPath.reset()
+            if (start >= 0f) {
+                padMeasures[i].getSegment(start, end, segPath, true)
+            } else {
+                padMeasures[i].getSegment(len + start, len, segPath, true)
+                padMeasures[i].getSegment(0f, end, segPath, true)
+            }
+            canvas.drawPath(segPath, strokePaint)
+            strokePaint.strokeCap = Paint.Cap.BUTT
+        }
+        if (st == Engine.PadState.MUTED && q < 0) {
+            // geladen, aber gestoppt: „▶“ = antippen startet auf der Eins
+            textPaint.textSize = r.width() * 0.2f
+            textPaint.color = ink(0.55f)
+            canvas.drawText("▶", r.centerX(), r.centerY() + r.width() * 0.07f, textPaint)
+        }
+    }
+
+    /** Leeres Pad: großes + mit der Quelle (🎙 Mikro / 〰 Wave) und 📂 für Datei/Bibliothek. */
+    private fun drawEmptyPad(canvas: Canvas, i: Int) {
+        val r = padRects[i]
+        val wave = Engine.padSource[i] == 1
+        val c = ink(0.5f)
+        strokePaint.shader = null
+        strokePaint.color = c
+        strokePaint.strokeWidth = dp(2.4f)
+        strokePaint.strokeCap = Paint.Cap.ROUND
+        val cx = r.centerX()
+        val cy = r.centerY() - r.height() * 0.06f
+        val a = r.width() * 0.11f
+        canvas.drawLine(cx - a, cy, cx + a, cy, strokePaint)
+        canvas.drawLine(cx, cy - a, cx, cy + a, strokePaint)
+        strokePaint.strokeCap = Paint.Cap.BUTT
+        textPaint.textSize = r.width() * 0.12f
+        textPaint.color = ink(0.6f)
+        canvas.drawText(if (wave) "〰 WAVE" else "🎙 MIC", cx, cy + a + r.width() * 0.16f, textPaint)
+        importRect(i, iconRect)
+        val ir = iconRect
+        fillPaint.shader = null
+        fillPaint.color = ink(0.12f)
+        canvas.drawRoundRect(ir, dp(7f), dp(7f), fillPaint)
+        strokePaint.strokeWidth = dp(1f)
+        strokePaint.color = ink(0.35f)
+        canvas.drawRoundRect(ir, dp(7f), dp(7f), strokePaint)
+        textPaint.textSize = ir.height() * 0.55f
+        textPaint.color = ink(0.9f)
+        canvas.drawText("📂", ir.centerX(), ir.centerY() + ir.height() * 0.2f, textPaint)
+    }
+
+    /** Pad, dessen Lautstärke gerade per Wischen geändert wird. */
+    private var volPad = -1
+    private var volShow = 0f
+
+    // ---- Gesten auf den Pads: ← wischen = löschen, ↕ = Lautstärke, zwei Finger = Mute (lang: Solo)
+    private val downXY = HashMap<Int, FloatArray>()
+    /** 1 = Lautstärke, 2 = gelöscht, 3 = zweiter Finger übernimmt. */
+    private val gest = HashMap<Int, Int>()
+    private val volStart = HashMap<Int, Float>()
+    private var twoPointer = -1
+    private var twoPad = -1
+    private var twoLong = false
+    var onImportMenu: ((Int) -> Unit)? = null
+    var onLaunchQuantChanged: (() -> Unit)? = null
+    private val quantPill = RectF()
+
+    private fun gestVolActive(): Boolean = gest.values.any { it == 1 }
+
+    private val twoLongPress = Runnable {
+        if (twoPointer < 0) return@Runnable
+        twoLong = true
+        Engine.toggleSolo(twoPad)
+        performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+        burst(padRects[twoPad].centerX(), padRects[twoPad].centerY(), Color.rgb(255, 200, 40), 20, 220f)
+        hint(if (Engine.solo[twoPad]) "Pad ${twoPad + 1} SOLO" else "Pad ${twoPad + 1} Solo aus")
+    }
+
+    /** Fingerbewegung auf einem Pad auswerten. */
+    private fun padGesture(id: Int, x: Float, y: Float) {
+        val p = pointerPad[id] ?: return
+        val g = gest[id]
+        val d = downXY[id] ?: return
+        if (g == null) {
+            val dx = x - d[0]
+            val dy = y - d[1]
+            if (dx < -dp(40f) && abs(dx) > 2f * abs(dy)) {
+                gest[id] = 2
+                Engine.repeatPadUp(p)
+                val r = padRects[p]
+                if (Engine.hasLoop(p)) {
+                    Engine.abortTake(p)
+                    Engine.clear(p)
+                    burst(r.centerX(), r.centerY(), Color.rgb(255, 40, 70), 50, 380f)
+                    shocks.add(Shock(RectF(r), 0f, Color.rgb(255, 40, 70)))
+                    performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+                    hint("Pad ${p + 1} gelöscht – ↶ UNDO holt es zurück")
+                } else if (Engine.state(p) == Engine.PadState.RECORDING) {
+                    Engine.abortTake(p)
+                    burst(r.centerX(), r.centerY(), Color.rgb(255, 40, 70), 24, 260f)
+                    hint("Aufnahme verworfen")
+                }
+            } else if (abs(dy) > dp(18f) && abs(dy) > 1.5f * abs(dx) && Engine.hasLoop(p) && Engine.state(p) != Engine.PadState.RECORDING) {
+                gest[id] = 1
+                Engine.abortTake(p)
+                Engine.repeatPadUp(p)
+                volStart[id] = Engine.padGain(p)
+                volPad = p
+            }
+        }
+        if (gest[id] == 1) {
+            Engine.setPadGain(p, (volStart[id] ?: 1f) + (d[1] - y) / dp(160f))
+            volPad = p
+            volShow = 1f
+        }
+    }
+
     /** Szenen-Ansicht und Mute/Solo-Kennzeichen über den Pads. */
     private fun drawPadOverlay(canvas: Canvas, i: Int) {
         val r = padRects[i]
@@ -1383,6 +1559,24 @@ class PadView(context: Context) : View(context) {
             return
         }
         val has = Engine.hasLoop(i)
+        if (volPad == i && volShow > 0f && has) {
+            val g = Engine.padGain(i)
+            val cols2 = overlayColors()
+            val bw = dp(8f)
+            tmpRect.set(r.left + dp(6f), r.top + dp(8f), r.left + dp(6f) + bw, r.bottom - dp(8f))
+            fillPaint.shader = null
+            fillPaint.color = alpha(Color.BLACK, 0.5f * volShow)
+            canvas.drawRoundRect(tmpRect, bw / 2f, bw / 2f, fillPaint)
+            val hgt = tmpRect.height() * (g / 1.5f)
+            fillPaint.color = alpha(cols2[2], volShow)
+            canvas.drawRoundRect(tmpRect.left, tmpRect.bottom - hgt, tmpRect.right, tmpRect.bottom, bw / 2f, bw / 2f, fillPaint)
+            textPaint.textSize = r.width() * 0.16f
+            textPaint.color = alpha(Color.WHITE, volShow)
+            fillPaint.color = alpha(Color.BLACK, 0.55f * volShow)
+            canvas.drawRoundRect(r.centerX() - r.width() * 0.26f, r.centerY() - r.width() * 0.13f, r.centerX() + r.width() * 0.26f, r.centerY() + r.width() * 0.1f, dp(6f), dp(6f), fillPaint)
+            canvas.drawText("${(g * 100).roundToInt()}%", r.centerX(), r.centerY() + r.width() * 0.04f, textPaint)
+            if (volPad == i && !gestVolActive()) volShow = max(0f, volShow - 0.02f)
+        }
         // SOLO auf anderen Pads: dieses Pad ist nicht zu hören
         if (Engine.soloAny && !Engine.solo[i] && has) {
             fillPaint.shader = null
@@ -1667,9 +1861,11 @@ class PadView(context: Context) : View(context) {
         val w = width.toFloat()
         val top = height - insetBottom - dp(33f)
         val ph = dp(22f)
-        val pw = min(dp(160f), (w - dp(48f)) / 2f)
-        srcPill.set(w / 2f - dp(6f) - pw, top, w / 2f - dp(6f), top + ph)
-        modePill.set(w / 2f + dp(6f), top, w / 2f + dp(6f) + pw, top + ph)
+        val pw = min(dp(124f), (w - dp(40f)) / 3f)
+        val gp = dp(6f)
+        modePill.set(w / 2f - pw / 2f, top, w / 2f + pw / 2f, top + ph)
+        srcPill.set(modePill.left - gp - pw, top, modePill.left - gp, top + ph)
+        quantPill.set(modePill.right + gp, top, modePill.right + gp + pw, top + ph)
         val modeText = when {
             sceneView && func == F_ERASE -> "ERASE: Szene antippen = löschen / leeren"
             sceneView && func == F_DUPL -> if (sceneDupSrc < 0) "DUPL: Quell-Szene antippen" else "DUPL: Ziel-Szene antippen"
@@ -1695,6 +1891,7 @@ class PadView(context: Context) : View(context) {
                 else -> "✋ HALTEN"
             }
             footerPill(canvas, modePill, ml, live, cols)
+            footerPill(canvas, quantPill, "⏱ " + Engine.LAUNCH_NAMES[Engine.launchIdx], Engine.launchIdx > 0, cols)
         }
         textPaint.textSize = dp(9f)
         textPaint.color = alpha(BRAND_ORANGE, 0.8f)
@@ -1706,17 +1903,29 @@ class PadView(context: Context) : View(context) {
         }
     }
 
-    /** Zeigt am Pad, ob es durch den Effekt läuft (FX) oder trocken bleibt (durchgestrichen). */
+    /** Trefferfläche des FX-Schalters unten rechts im Pad. */
+    private fun fxBadgeRect(i: Int, out: RectF) {
+        val r = padRects[i]
+        val h = min(dp(16f), r.width() * 0.18f)
+        val w = h * 1.7f
+        out.set(r.right - w - dp(5f), r.bottom - h - dp(5f), r.right - dp(5f), r.bottom - dp(5f))
+    }
+
+    /** 📂-Knopf oben rechts auf leeren Pads (Import / Bibliothek). */
+    private fun importRect(i: Int, out: RectF) {
+        val r = padRects[i]
+        val sz = min(dp(28f), r.width() * 0.3f)
+        out.set(r.right - sz - dp(4f), r.top + dp(4f), r.right - dp(4f), r.top + dp(4f) + sz)
+    }
+
+    /** Zeigt am Pad, ob es durch den Effekt läuft (FX) oder trocken bleibt (durchgestrichen) – antippen schaltet um. */
     private fun drawFxBadge(canvas: Canvas, i: Int) {
         val r = padRects[i]
         if (r.width() <= 0f) return
         val on = Engine.padFx[i]
-        val all = (0 until VISIBLE_PADS).all { Engine.padFx[it] }
-        if (on && all) return
         val cols = overlayColors()
         val h = min(dp(16f), r.width() * 0.18f)
-        val w = h * 1.7f
-        tmpRect.set(r.right - w - dp(5f), r.bottom - h - dp(5f), r.right - dp(5f), r.bottom - dp(5f))
+        fxBadgeRect(i, tmpRect)
         val rr = h / 2f
         fillPaint.shader = null
         fillPaint.color = if (on) cols[2] else alpha(cols[0], 0.8f)
@@ -1783,9 +1992,9 @@ class PadView(context: Context) : View(context) {
         strokePaint.strokeWidth = dp(1.2f)
         strokePaint.color = if (on) Color.WHITE else alpha(cols[1], 0.5f)
         canvas.drawRoundRect(r, rr, rr, strokePaint)
-        textPaint.textSize = dp(10.5f)
+        textPaint.textSize = min(dp(10.5f), (r.width() - dp(10f)) / (label.length * 0.62f))
         textPaint.color = if (on) Color.WHITE else cols[1]
-        canvas.drawText(label, r.centerX(), r.centerY() + dp(3.8f), textPaint)
+        canvas.drawText(label, r.centerX(), r.centerY() + textPaint.textSize * 0.36f, textPaint)
     }
 
     // ---------------------------------------------------------------- Regler, Effekt-Knopf, XY-Fläche
@@ -2243,6 +2452,13 @@ class PadView(context: Context) : View(context) {
                     onRecSettingsChanged?.invoke()
                     return true
                 }
+                if (func == F_NONE && !sceneView && quantPill.contains(x, y)) {
+                    Engine.launchIdx = (Engine.launchIdx + 1) % Engine.LAUNCH_Q.size
+                    performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+                    burst(x, y, overlayColors()[2], 12, 160f)
+                    onLaunchQuantChanged?.invoke()
+                    return true
+                }
                 if (func == F_NONE && !sceneView && modePill.contains(x, y)) {
                     Engine.liveBars = when (Engine.liveBars) { 0 -> -1; -1 -> 1; 1 -> 2; 2 -> 4; 4 -> 8; 8 -> 16; else -> 0 }
                     performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
@@ -2394,6 +2610,28 @@ class PadView(context: Context) : View(context) {
                         return true
                     }
                 }
+                if (!sceneView && func == F_NONE) {
+                    for (i in 0 until VISIBLE_PADS) {
+                        if (padRects[i].width() <= 0f) continue
+                        if (Engine.state(i) == Engine.PadState.EMPTY && !Engine.isArmed(i)) {
+                            importRect(i, iconRect)
+                            if (iconRect.contains(x, y)) {
+                                performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+                                onImportMenu?.invoke(i)
+                                return true
+                            }
+                        }
+                        fxBadgeRect(i, iconRect)
+                        iconRect.inset(-dp(3f), -dp(3f))
+                        if (iconRect.contains(x, y)) {
+                            Engine.padFx[i] = !Engine.padFx[i]
+                            performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+                            burst(x, y, overlayColors()[2], 10, 140f)
+                            hint(if (Engine.padFx[i]) "Pad ${i + 1}: mit Effekt" else "Pad ${i + 1}: ohne Effekt")
+                            return true
+                        }
+                    }
+                }
                 val p = hitPad(x, y)
                 if (p < 0) return true
                 if (sceneView) {
@@ -2404,8 +2642,22 @@ class PadView(context: Context) : View(context) {
                     funcPad(p)
                     return true
                 }
-                if (pointerPad.containsValue(p)) return true
+                if (pointerPad.containsValue(p)) {
+                    // zweiter Finger auf demselben Pad: Mute (kurz) bzw. Solo (lang)
+                    val first = pointerPad.entries.firstOrNull { it.value == p }?.key
+                    if (first != null && gest[first] == null && twoPointer < 0) {
+                        gest[first] = 3
+                        Engine.abortTake(p)
+                        Engine.repeatPadUp(p)
+                        twoPointer = id
+                        twoPad = p
+                        twoLong = false
+                        postDelayed(twoLongPress, 500L)
+                    }
+                    return true
+                }
                 pointerPad[id] = p
+                downXY[id] = floatArrayOf(x, y)
                 val shot = Engine.padDown(p)
                 if (shot) {
                     shotPointers.add(id)
@@ -2426,6 +2678,7 @@ class PadView(context: Context) : View(context) {
                     val id = e.getPointerId(pi)
                     if (id == xyPointer) setXy(e.getX(pi), e.getY(pi))
                     if (id == instPointer) instMove(e.getX(pi), e.getY(pi))
+                    if (pointerPad.containsKey(id)) padGesture(id, e.getX(pi), e.getY(pi))
                     if (id == stepPointer && Engine.seqSelected >= 0) {
                         val dy = stepDownY - e.getY(pi)
                         if (stepDragged || abs(dy) > dp(8f)) {
@@ -2504,6 +2757,25 @@ class PadView(context: Context) : View(context) {
                     knobStartVal.remove(upId)
                     return true
                 }
+                if (upId == twoPointer) {
+                    removeCallbacks(twoLongPress)
+                    twoPointer = -1
+                    if (!twoLong && Engine.hasLoop(twoPad)) {
+                        Engine.toggleMute(twoPad)
+                        val r = padRects[twoPad]
+                        burst(r.centerX(), r.centerY(), Color.rgb(90, 160, 255), 18, 200f)
+                        hint(if (Engine.isMuted(twoPad)) "Pad ${twoPad + 1} stumm" else "Pad ${twoPad + 1} an")
+                    }
+                    return true
+                }
+                downXY.remove(upId)
+                volStart.remove(upId)
+                val g = gest.remove(upId)
+                if (g != null) {
+                    pointerPad.remove(upId)
+                    shotPointers.remove(upId)
+                    return true
+                }
                 val p = pointerPad.remove(upId) ?: return true
                 if (shotPointers.remove(upId)) {
                     Engine.repeatPadUp(p)
@@ -2520,6 +2792,12 @@ class PadView(context: Context) : View(context) {
                 if (funcPointer >= 0) funcUp()
                 scenePointer = -1
                 recPointer = -1
+                removeCallbacks(twoLongPress)
+                twoPointer = -1
+                downXY.clear()
+                volStart.clear()
+                for ((pid, gv) in gest) if (gv != 0) { pointerPad.remove(pid); shotPointers.remove(pid) }
+                gest.clear()
                 fxPointer = -1
                 removeCallbacks(fxLongPress)
                 xyPointer = -1
@@ -2541,11 +2819,14 @@ class PadView(context: Context) : View(context) {
         val tap = Engine.padUp(p)
         if (tap) {
             if (hadLoop) {
-                // Antippen schaltet den Loop an/aus – er läuft immer im Raster weiter und steigt synchron ein
-                Engine.toggleMute(p)
+                // Antippen startet/stoppt den Loop – quantisiert auf das Start-Raster (Ableton-Prinzip)
+                Engine.launchToggle(p)
                 flash[p] = 1f
                 burst(x, y, padAccent(p), 18, 200f)
             }
+        } else if (Engine.isLatched(p)) {
+            burst(x, y, Color.rgb(255, 190, 30), 22, 240f)
+            hint("● Overdub auf Pad ${p + 1} – nochmal tippen beendet ihn")
         } else {
             val c = neon(hue(p))
             shocks.add(Shock(RectF(padRects[p]), 0f, c))
@@ -4967,12 +5248,17 @@ class PadView(context: Context) : View(context) {
                     Engine.liveBars > 0 -> "LIVE: antippen – die Aufnahme startet auf dem nächsten Takt und läuft ${Engine.liveBars} Takt(e)."
                     else -> "HALTEN: Aufnahme läuft, solange der Finger liegt."
                 }
+                fxBadgeRect(i, iconRect)
+                if (iconRect.contains(x, y)) return Triple(RectF(iconRect), "FX-Schalter", "Schaltet für Pad ${i + 1} den Effekt an oder aus (durchgestrichen = trocken).")
+                importRect(i, iconRect)
+                if (!Engine.hasLoop(i) && iconRect.contains(x, y)) return Triple(RectF(iconRect), "📂 Laden", "WAV/MP3-Datei, Bibliothek oder eigene Aufnahme laden. Tempo und Länge werden erkannt und der Clip auf das Master-Tempo gewarpt (Tonhöhe bleibt). Danach wartet er – antippen startet ihn auf der Eins.")
+                val gestures = " Gesten: ← wischen = löschen, ↕ wischen = Lautstärke, zwei Finger = stumm (lang: Solo)."
                 val txt = if (!Engine.hasLoop(i)) {
-                    "Leeres Pad. $mode Daraus wird automatisch ein synchroner Loop (1–32 Takte). Eingang: ${srcName(i)}."
+                    "Leeres Pad (+). $mode Daraus wird automatisch ein synchroner Loop (1–32 Takte). Eingang: ${srcName(i)}. 📂 lädt eine Datei."
                 } else if (Engine.isOneShot(i)) {
                     "⚡ One Shot: antippen spielt das Sample einmal. Im Sequenzer setzbar. Effekt: ${if (Engine.padFx[i]) "an" else "aus"}."
                 } else {
-                    "∞ Loop: antippen schaltet ihn an/aus (steigt synchron ein). Halten = Overdub (zusätzlich drüber aufnehmen). Effekt: ${if (Engine.padFx[i]) "an" else "aus"}."
+                    "∞ Loop: Farben – Grün spielt, Rot nimmt auf, Gelb = Overdub, Blinken = wartet auf das Start-Raster, Grau ▶ = bereit. Gestoppt antippen = startet zur nächsten Eins. Läuft er, ${if (Engine.tapOverdub) "schaltet Antippen den Overdub ein (nochmal = aus)" else "stoppt Antippen ihn"}. Halten = Overdub, solange der Finger liegt.$gestures"
                 }
                 return Triple(padRects[i], "Pad ${i + 1}", txt)
             }
@@ -4990,6 +5276,7 @@ class PadView(context: Context) : View(context) {
         }
         // ---- Fußzeile
         if (srcPill.contains(x, y)) return Triple(srcPill, "Eingang aller Pads", "Stellt den Eingang aller Pads um: 🎙 Mikrofon oder 〰 Wave (nimmt auf, was die App ausgibt – inkl. Effekte). Pro Pad im •••-Menü einstellbar.")
+        if (quantPill.contains(x, y)) return Triple(quantPill, "⏱ Start-Raster", "Wann ein Loop startet oder stoppt, wenn du sein Pad antippst (wie Global Quantize in Ableton Live): AUS = sofort, 1/4, 1/2, 1, 2 oder 4 Takte. Das Pad blinkt grün (startet) bzw. rot (stoppt), bis es so weit ist.")
         if (modePill.contains(x, y)) return Triple(modePill, "Aufnahme-Modus", "✋ HALTEN (Finger halten), 👆 TIPPEN (Start/Stopp per Tipp) oder ⚡ LIVE mit fester Länge. Loops rasten immer synchron auf 1–32 Takte ein.")
         return null
     }

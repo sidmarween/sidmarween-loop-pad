@@ -88,6 +88,15 @@ class MainActivity : Activity() {
         pads.onHint = { hint(it) }
         pads.onSceneMenu = { showSceneMenu(it) }
         Engine.countIn = prefs.getBoolean("countIn", true)
+        Engine.launchIdx = prefs.getInt("launchIdx", 3).coerceIn(0, Engine.LAUNCH_Q.size - 1)
+        Engine.tapOverdub = prefs.getBoolean("tapOverdub", true)
+        pads.statusColors = prefs.getBoolean("statusColors", true)
+        pads.onImportMenu = { p -> showImportMenu(p) }
+        pads.onLaunchQuantChanged = {
+            prefs.edit().putInt("launchIdx", Engine.launchIdx).apply()
+            hint(if (Engine.LAUNCH_Q[Engine.launchIdx] <= 0f) "Start-Raster AUS: Loops starten/stoppen sofort"
+                 else "Start-Raster ${Engine.LAUNCH_NAMES[Engine.launchIdx]}: angetippte Loops starten/stoppen auf dem nächsten Rasterpunkt")
+        }
         pads.onSongStopped = { finishSong() }
         pads.theme = getSharedPreferences("marvpad", MODE_PRIVATE).getInt("design", PadView.NOIR)
         pads.infoMode = getSharedPreferences("marvpad", MODE_PRIVATE).getBoolean("info", false)
@@ -288,8 +297,13 @@ class MainActivity : Activity() {
             try {
                 val data = AudioFiles.decodeAsset(this, smp.file, rate, Engine.MAX_SECONDS)
                 Engine.padOneShot[p] = smp.oneShot
-                Engine.importLoop(p, data)
-                runOnUiThread { toast("Pad ${p + 1}: ${smp.title}") }
+                if (smp.oneShot) {
+                    Engine.importLoop(p, data)
+                    runOnUiThread { toast("Pad ${p + 1}: ${smp.title}") }
+                } else {
+                    val desc = Engine.importClip(p, data, Warp.analyze(data, rate, smp.title + " " + smp.file))
+                    runOnUiThread { hint("Pad ${p + 1}: ${smp.title} · $desc · antippen startet ihn auf der Eins") }
+                }
             } catch (e: Exception) {
                 runOnUiThread { toast("Laden fehlgeschlagen: ${e.message ?: e}") }
             }
@@ -408,9 +422,20 @@ class MainActivity : Activity() {
                 if (Engine.bounce) "🔁 Bounce: AN (Quellen nach Wave-Aufnahme stumm)" else "🔁 Bounce: AUS",
                 (if (pads.infoMode) "☑" else "☐") + " ℹ Info-Modus (Funktionen erklären)",
                 "🔌 Audio-Geräte (USB-Interface, Kopfhörer …)",
-                "🎨 Design wählen"
+                "🎨 Design wählen",
+                if (Engine.tapOverdub) "👆 Tipp auf laufenden Loop: ● OVERDUB (→ auf Stopp)" else "👆 Tipp auf laufenden Loop: ■ STOPP (→ auf Overdub)",
+                (if (pads.statusColors) "☑" else "☐") + " 🚦 Status-Farben (Rot Aufnahme · Grün Play · Gelb Overdub)"
             )) { _, which ->
                 when (which) {
+                    8 -> {
+                        Engine.tapOverdub = !Engine.tapOverdub
+                        getSharedPreferences("marvpad", MODE_PRIVATE).edit().putBoolean("tapOverdub", Engine.tapOverdub).apply()
+                        toast(if (Engine.tapOverdub) "Tipp auf laufenden Loop = Overdub (gelb), nochmal tippen beendet. Stoppen: zwei Finger" else "Tipp auf laufenden Loop = stoppen (im Start-Raster)")
+                    }
+                    9 -> {
+                        pads.statusColors = !pads.statusColors
+                        getSharedPreferences("marvpad", MODE_PRIVATE).edit().putBoolean("statusColors", pads.statusColors).apply()
+                    }
                     0 -> askProjectName(null, 0)
                     1 -> showProjects()
                     2 -> confirm("Neues Projekt?", "Alle Pads, das Pattern und das Tempo werden geleert. Nicht gespeicherte Änderungen gehen verloren.") {
@@ -680,8 +705,13 @@ class MainActivity : Activity() {
         Thread {
             try {
                 val data = AudioFiles.decodeFile(f, rate, Engine.MAX_SECONDS)
-                Engine.importLoop(p, data)
-                runOnUiThread { toast("Pad ${p + 1}: Aufnahme geladen") }
+                if (Engine.padOneShot[p]) {
+                    Engine.importLoop(p, data)
+                    runOnUiThread { toast("Pad ${p + 1}: Aufnahme geladen") }
+                } else {
+                    val desc = Engine.importClip(p, data, Warp.analyze(data, rate, f.name))
+                    runOnUiThread { hint("Pad ${p + 1}: Aufnahme · $desc · antippen startet sie auf der Eins") }
+                }
             } catch (e: Exception) {
                 runOnUiThread { toast("Laden fehlgeschlagen: ${e.message ?: e}") }
             }
@@ -903,8 +933,14 @@ class MainActivity : Activity() {
                 Thread {
                     try {
                         val samples = AudioFiles.decode(this, uri, rate, Engine.MAX_SECONDS)
-                        Engine.importLoop(pad, samples)
-                        runOnUiThread { toast("Pad ${pad + 1}: Import fertig") }
+                        if (Engine.padOneShot[pad]) {
+                            Engine.importLoop(pad, samples)
+                            runOnUiThread { toast("Pad ${pad + 1}: Import fertig") }
+                        } else {
+                            val name = displayName(uri)
+                            val desc = Engine.importClip(pad, samples, Warp.analyze(samples, rate, name))
+                            runOnUiThread { hint("Pad ${pad + 1}: ${name ?: "Datei"} · $desc · antippen startet ihn auf der Eins") }
+                        }
                     } catch (e: Exception) {
                         runOnUiThread { toast("Import fehlgeschlagen: ${e.message ?: e}") }
                     }
@@ -972,6 +1008,38 @@ class MainActivity : Activity() {
     private fun toast(msg: String) = Toast.makeText(this, msg, Toast.LENGTH_SHORT).show()
 
     private var lastHint: Toast? = null
+
+    private fun displayName(uri: Uri): String? = try {
+        contentResolver.query(uri, arrayOf(android.provider.OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c ->
+            if (c.moveToFirst()) c.getString(0) else null
+        }
+    } catch (e: Exception) {
+        null
+    }
+
+    /** 📂 auf einem leeren Pad: Datei, Bibliothek oder eigene Aufnahme. */
+    private fun showImportMenu(p: Int) {
+        menuPad = p
+        val shot = Engine.padOneShot[p]
+        AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
+            .setTitle("Pad ${p + 1} laden")
+            .setItems(arrayOf(
+                "📂 Datei (WAV / MP3) – Tempo wird erkannt und gewarpt",
+                "📚 Bibliothek & eigene Aufnahmen",
+                if (shot) "Modus: ⚡ ONE SHOT  →  auf ∞ LOOP" else "Modus: ∞ LOOP  →  auf ⚡ ONE SHOT"
+            )) { _, w ->
+                when (w) {
+                    0 -> pickImport()
+                    1 -> showLibrary(p)
+                    else -> {
+                        Engine.setPadMode(p, !shot)
+                        showImportMenu(p)
+                    }
+                }
+            }
+            .setNegativeButton("Abbrechen", null)
+            .show()
+    }
 
     /** Kurzer Hinweis aus der Bedienung – ersetzt den vorigen sofort statt sich anzustauen. */
     private fun hint(msg: String) {

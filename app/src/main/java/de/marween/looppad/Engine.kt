@@ -35,6 +35,15 @@ class Loop(val data: FloatArray) {
     @Volatile var slices: IntArray? = null
     /** Länge in Takten (bei Slices), passt sich dem Master-Tempo an. */
     @Volatile var bars: Float = 1f
+    /** Warp: Original-Audio, sein Tempo und seine Länge in Takten – bei Tempowechsel wird neu gedehnt. */
+    @Volatile var src: FloatArray? = null
+    @Volatile var srcBpm: Float = 0f
+    @Volatile var warpBars: Float = 0f
+    /** Lautstärke des Pads (Wischen hoch/runter). */
+    @Volatile var gain: Float = 1f
+    /** Quantisierter Start/Stopp: Ausgabe-Frame und Ziel (true = spielen). */
+    @Volatile var pendAt: Long = Long.MIN_VALUE
+    @Volatile var pendOn: Boolean = false
 }
 
 /** Eine laufende Aufnahme (neu oder Overdub) auf einem Pad. */
@@ -57,6 +66,10 @@ class Take(val overdub: Boolean, val fromIn: Long, val downNanos: Long, val oneS
     /** Bei Resample: Ausgabe-Frames der Aufnahme. */
     @Volatile var fromOut: Long = 0L
     @Volatile var toOut: Long = Long.MAX_VALUE
+    /** Overdub per Tipp eingerastet (läuft bis zum nächsten Tipp). */
+    @Volatile var latched: Boolean = false
+    /** Overdub: Loop-Inhalt vor der Aufnahme (zum Abbrechen per Geste). */
+    var before: FloatArray? = null
 
     companion object {
         const val NO_GRID = Long.MIN_VALUE
@@ -262,14 +275,14 @@ object Engine {
 
     class PadSave(
         val data: FloatArray?, val oneShot: Boolean, val muted: Boolean,
-        val slices: Int = 0, val bars: Float = 1f, val semi: Int = 0
+        val slices: Int = 0, val bars: Float = 1f, val semi: Int = 0, val gain: Float = 1f
     )
 
     fun snapshotPads(): Array<PadSave> = Array(PADS) { p ->
         val l = loops.get(p)
         PadSave(
             l?.data?.copyOf(), l?.oneShot ?: padOneShot[p], l?.muted ?: false,
-            l?.slices?.let { it.size - 1 } ?: 0, l?.bars ?: 1f, l?.semi ?: padSemi[p]
+            l?.slices?.let { it.size - 1 } ?: 0, l?.bars ?: 1f, l?.semi ?: padSemi[p], l?.gain ?: 1f
         )
     }
 
@@ -313,10 +326,12 @@ object Engine {
             padSemi[p] = sv.semi
             l.semi = sv.semi
             l.rate = 2.0.pow(sv.semi / 12.0)
+            l.gain = sv.gain
             if (sv.slices > 1 && !sv.oneShot) {
                 l.slices = IntArray(sv.slices + 1) { (it.toLong() * d.size / sv.slices).toInt() }
                 l.bars = sv.bars
             }
+            setWarpSource(l)
             loops.set(p, l)
         }
         if (pattern != null) {
@@ -595,6 +610,7 @@ object Engine {
                 val d = v.data
                 val len = d.size
                 val dst = if (v.pad >= 0 && padFx[v.pad]) bus else out
+                val pg = if (v.pad in 0 until PADS) (loops.get(v.pad)?.gain ?: 1f) else 1f
                 var peak = 0f
                 for (i in 0 until block) {
                     if (v.wait > 0) {
@@ -613,7 +629,7 @@ object Engine {
                         }
                     }
                     val fr = (v.pos - i0).toFloat()
-                    val sm = (d[i0] + (d[i0 + 1] - d[i0]) * fr) * v.gain * v.vel
+                    val sm = (d[i0] + (d[i0 + 1] - d[i0]) * fr) * v.gain * v.vel * pg
                     dst[i] += sm
                     val a = abs(sm)
                     if (a > peak) peak = a
@@ -1001,8 +1017,18 @@ object Engine {
     fun setBpm(bpm: Float) {
         val b = bpm.coerceIn(40f, 240f)
         fixedBpm = b
-        if (masterLen <= 0L) masterStart = written
-        masterLen = (sampleRate * 240.0 / b).toLong()
+        val old = masterLen
+        val nl = (sampleRate * 240.0 / b).toLong()
+        if (old <= 0L) {
+            masterStart = written
+        } else if (nl != old) {
+            // Position im Takt beibehalten, damit der Groove beim Tempowechsel nicht springt
+            val heard = heardNow()
+            val frac = Math.floorMod(heard - masterStart, old).toDouble() / old
+            masterStart = heard - (frac * nl).toLong()
+        }
+        masterLen = nl
+        if (nl != old && old > 0L) scheduleRewarp()
     }
 
     fun setAutoTempo() {
@@ -1349,7 +1375,9 @@ object Engine {
                     // Stand vor dem Overdub merken (für UNDO), bevor etwas hineingeschrieben wird
                     val l0 = loops.get(p)
                     if (l0 != null) {
-                        pushEntry(UndoEntry("Overdub Pad ${p + 1}", listOf(snapPad(p, l0.data.copyOf())), null))
+                        val copy = l0.data.copyOf()
+                        take.before = copy
+                        pushEntry(UndoEntry("Overdub Pad ${p + 1}", listOf(snapPad(p, copy)), null))
                     }
                 }
                 take.armed = true
@@ -1382,7 +1410,11 @@ object Engine {
                     }
                     take.cursor = end
                 }
-                if (take.released && take.cursor >= take.toIn) takes.compareAndSet(p, take, null)
+                if (take.released && take.cursor >= take.toIn && takes.compareAndSet(p, take, null)) {
+                    // Overdub fertig: der Loop ist jetzt das Original für künftiges Warpen
+                    loop.src = loop.data
+                    loop.srcBpm = currentBpm()
+                }
             } else {
                 if (!take.released && captured - take.fromIn >= maxFrames) {
                     releaseTake(take, inClock.nanosAt(take.fromIn + maxFrames, sampleRate))
@@ -1428,6 +1460,7 @@ object Engine {
             if (!seqPlaying) startTransportAt(loop.start)
         }
         padSemi[p] = 0
+        setWarpSource(loop)
         loops.set(p, loop)
         // Mikrofon-Aufnahme automatisch sichern (läuft außerhalb des Audio-Threads weiter)
         onRecorded?.invoke(p, data.copyOf(), sampleRate)
@@ -1539,6 +1572,19 @@ object Engine {
                     continue
                 }
                 val dst = if (padFx[p]) bus else out
+                val pa = loop.pendAt
+                if (pa != Long.MIN_VALUE && pa < w + block) {
+                    // quantisierter Start/Stopp genau auf dem Rasterpunkt
+                    if (loop.pendOn) {
+                        loop.start = pa
+                        loop.fade = 0f
+                        loop.muted = false
+                    } else {
+                        loop.muted = true
+                    }
+                    loop.pendAt = Long.MIN_VALUE
+                }
+                val gn = loop.gain
                 val d = loop.data
                 val len = d.size
                 if (loop.oneShot) {
@@ -1556,7 +1602,7 @@ object Engine {
                                 val i0 = sp.toInt()
                                 if (i0 >= len - 1) break
                                 val fr = (sp - i0).toFloat()
-                                val v = (d[i0] + (d[i0 + 1] - d[i0]) * fr) * sg
+                                val v = (d[i0] + (d[i0 + 1] - d[i0]) * fr) * sg * gn
                                 val a = abs(v)
                                 if (a > peak) peak = a
                                 dst[i] += v
@@ -1596,7 +1642,7 @@ object Engine {
                         val a = abs(v)
                         if (a > peak) peak = a
                         fg = if (fg < fadeTarget) min(fadeTarget, fg + fadeStep) else max(fadeTarget, fg - fadeStep)
-                        dst[i] += v * fg
+                        dst[i] += v * fg * gn
                     }
                 } else if (rel + block > 0 && len > 0) {
                     var i: Int
@@ -1613,7 +1659,7 @@ object Engine {
                         val a = abs(v)
                         if (a > peak) peak = a
                         fg = if (fg < fadeTarget) min(fadeTarget, fg + fadeStep) else max(fadeTarget, fg - fadeStep)
-                        dst[i] += v * fg
+                        dst[i] += v * fg * gn
                         idx++
                         if (idx == len) idx = 0
                         i++
@@ -1731,6 +1777,11 @@ object Engine {
         if (!running) return false
         val existing = takes.get(p)
         if (existing != null) {
+            if (existing.overdub && existing.latched) {
+                // eingerasteter Overdub: zweiter Tipp beendet ihn
+                if (!existing.released) releaseTake(existing, System.nanoTime())
+                return false
+            }
             if (existing.live) {
                 // Live: zweites Antippen beendet eine offene Aufnahme bzw. bricht eine geplante ab
                 if (!existing.released) releaseTake(existing, System.nanoTime())
@@ -1894,6 +1945,7 @@ object Engine {
             val src = take.bounceSrc
             pushPadUndo("Wave-Aufnahme Pad ${p + 1}", p, *(if (bounce && !take.oneShot) (src ?: IntArray(0)) else IntArray(0)))
             if (!take.oneShot && !seqPlaying && masterLen > 0L) seqPlaying = true
+            setWarpSource(loop)
             loops.set(p, loop)
             // Bounce: Quellen stummschalten, damit nichts doppelt klingt (in der Raster-Phase, mit Blende)
             if (bounce && src != null && src.isNotEmpty() && !take.oneShot) {
@@ -1963,9 +2015,15 @@ object Engine {
     /** Gibt true zurück, wenn es nur ein kurzer Tipp war (keine Aufnahme). */
     fun padUp(p: Int): Boolean {
         val take = takes.get(p) ?: return false
-        if (take.live || take.released) return false
+        if (take.live || take.released || take.latched) return false
         val now = System.nanoTime()
         if (now - take.downNanos < MIN_HOLD_NANOS) {
+            val l = loops.get(p)
+            if (take.overdub && tapOverdub && l != null && !l.oneShot && !l.muted && seqPlaying && l.pendAt == Long.MIN_VALUE) {
+                // Tipp auf laufenden Loop = Overdub einrasten (gelb), nächster Tipp beendet
+                take.latched = true
+                return false
+            }
             takes.compareAndSet(p, take, null)
             return true
         }
@@ -2026,6 +2084,7 @@ object Engine {
             masterStart = start
             masterLen = len.toLong()
         }
+        setWarpSource(loop)
         loops.set(p, loop)
     }
 
@@ -2157,6 +2216,12 @@ object Engine {
     }
 
     fun transportStop() {
+        val now = System.nanoTime()
+        for (p in 0 until PADS) {
+            val t = takes.get(p) ?: continue
+            if (t.overdub && !t.released) releaseTake(t, now)
+            loops.get(p)?.pendAt = Long.MIN_VALUE
+        }
         seqPlaying = false
         seqRecording = false
         countFrom = Long.MIN_VALUE
@@ -2357,6 +2422,10 @@ object Engine {
         c.rate = l.rate
         c.slices = l.slices?.copyOf()
         c.bars = l.bars
+        c.src = l.src
+        c.srcBpm = l.srcBpm
+        c.warpBars = l.warpBars
+        c.gain = l.gain
         return c
     }
 
@@ -2675,6 +2744,166 @@ object Engine {
         }
         curScene = j.optInt("cur", 0).coerceIn(0, SCENES - 1)
         sceneChain = j.optBoolean("chain", false)
+    }
+
+    // ================================================================ Clip-Launch & Warp (Ableton-Live-Prinzip)
+
+    /** Start-Raster für Loops: aus, 1/4, 1/2, 1, 2, 4 Takte. */
+    val LAUNCH_Q = floatArrayOf(0f, 0.25f, 0.5f, 1f, 2f, 4f)
+    val LAUNCH_NAMES = arrayOf("AUS", "1/4", "1/2", "1 TAKT", "2 TAKTE", "4 TAKTE")
+    @Volatile var launchIdx = 3
+    /** Tipp auf einen laufenden Loop: true = Overdub einrasten, false = stoppen. */
+    @Volatile var tapOverdub = true
+
+    /** Merkt sich das aktuelle Audio als Original fürs Warpen (Tempo = Master-Tempo). */
+    private fun setWarpSource(l: Loop) {
+        val m = masterLen
+        if (l.oneShot || l.slices != null || m <= 0L) return
+        l.src = l.data
+        l.srcBpm = (sampleRate * 240.0 / m).toFloat()
+        l.warpBars = l.data.size.toFloat() / m
+    }
+
+    /** -1 nichts vorgemerkt, 1 startet zur nächsten Rastergrenze, 0 stoppt dann. */
+    fun queuedState(p: Int): Int {
+        val l = loops.get(p) ?: return -1
+        if (l.pendAt == Long.MIN_VALUE) return -1
+        return if (l.pendOn) 1 else 0
+    }
+
+    /** Pad antippen: Loop starten/stoppen – quantisiert auf das Start-Raster. 1 = vorgemerkt, 0 = sofort, -1 = nichts. */
+    fun launchToggle(p: Int): Int {
+        val l = loops.get(p) ?: return -1
+        if (l.oneShot) {
+            l.muted = !l.muted
+            return 0
+        }
+        if (l.pendAt != Long.MIN_VALUE) {
+            // nochmal tippen = Vormerkung zurücknehmen
+            l.pendAt = Long.MIN_VALUE
+            return 0
+        }
+        val turnOn = l.muted
+        if (!seqPlaying) {
+            if (turnOn) {
+                l.muted = false
+                transportPlay(false)
+            } else {
+                l.muted = true
+            }
+            return 0
+        }
+        val q = LAUNCH_Q[launchIdx]
+        val m = masterLen
+        if (q <= 0f || m <= 0L) {
+            l.muted = !turnOn
+            return 0
+        }
+        val unit = max(1L, (m * q).toLong())
+        val heard = heardNow()
+        val ms = masterStart
+        var at = ms - Math.floorDiv(-(heard - ms), unit) * unit
+        if (at < written + 64) at += unit
+        l.pendOn = turnOn
+        l.pendAt = at
+        return 1
+    }
+
+    fun setPadGain(p: Int, g: Float) {
+        loops.get(p)?.gain = g.coerceIn(0f, 1.5f)
+    }
+
+    fun padGain(p: Int): Float = loops.get(p)?.gain ?: 1f
+
+    /** Bricht eine laufende Aufnahme/Overdub ab (Wischgeste) und stellt den Loop wieder her. */
+    fun abortTake(p: Int) {
+        val t = takes.get(p) ?: return
+        if (!takes.compareAndSet(p, t, null)) return
+        val b = t.before
+        val l = loops.get(p)
+        if (t.overdub && b != null && l != null && b.size == l.data.size) System.arraycopy(b, 0, l.data, 0, b.size)
+    }
+
+    fun isLatched(p: Int): Boolean = takes.get(p)?.latched ?: false
+
+    /**
+     * Datei-Clip laden (Ableton-Stil): Tempo/Länge erkannt, auf das Master-Tempo gewarpt.
+     * Der Clip wartet (bereit), bis man das Pad antippt. Liefert eine Beschreibung.
+     */
+    fun importClip(p: Int, src: FloatArray, info: Warp.Info): String {
+        if (src.isEmpty()) return "Leere Datei"
+        if (padOneShot[p]) {
+            importLoop(p, src)
+            return "⚡ One Shot"
+        }
+        pushPadUndo("Laden Pad ${p + 1}", p)
+        var bpmNote = ""
+        if (masterLen <= 0L) {
+            // erster Loop: sein Tempo wird das Master-Tempo
+            masterLen = (sampleRate * 240.0 / info.bpm).toLong()
+            masterStart = written
+        } else {
+            val cur = currentBpm()
+            if (abs(cur - info.bpm) > 0.05f) bpmNote = String.format(java.util.Locale.GERMANY, " → gewarpt auf %.0f BPM", cur)
+        }
+        val m = masterLen
+        val target = max(64L, (info.bars * m).toLong()).toInt()
+        val data = Warp.stretch(src, target, sampleRate)
+        val fade = min(data.size / 4, sampleRate * FADE_MS / 1000)
+        for (i in 0 until fade) {
+            val g = i.toFloat() / fade
+            data[i] *= g
+            data[data.size - 1 - i] *= g
+        }
+        val loop = Loop(data)
+        loop.src = src
+        loop.srcBpm = info.bpm
+        loop.warpBars = info.bars
+        loop.start = masterStart
+        loop.muted = true
+        takes.set(p, null)
+        padSemi[p] = 0
+        loops.set(p, loop)
+        val barsTxt = if (info.bars >= 1f && info.bars == info.bars.toInt().toFloat()) "${info.bars.toInt()} Takt" + (if (info.bars > 1f) "e" else "") else "${info.bars} Takt"
+        return String.format(java.util.Locale.GERMANY, "%s · %.1f BPM (%s)%s", barsTxt, info.bpm, info.source, bpmNote)
+    }
+
+    @Volatile private var warpGen = 0
+
+    /** Nach einem Tempowechsel alle Loops neu dehnen (im Hintergrund, Tonhöhe bleibt). */
+    private fun scheduleRewarp() {
+        val gen = ++warpGen
+        Thread {
+            try { Thread.sleep(180) } catch (ignored: InterruptedException) {}
+            if (gen != warpGen) return@Thread
+            for (p in 0 until PADS) {
+                if (gen != warpGen) return@Thread
+                val l = loops.get(p) ?: continue
+                val src = l.src ?: continue
+                if (l.oneShot || l.slices != null || l.warpBars <= 0f) continue
+                if (takes.get(p) != null) continue
+                val m = masterLen
+                if (m <= 0L) return@Thread
+                val target = max(64L, (l.warpBars * m).toLong()).toInt()
+                if (target == l.data.size) continue
+                val data = Warp.stretch(src, target, sampleRate)
+                if (gen != warpGen) return@Thread
+                val nl = cloneLoop(l, data)
+                nl.muted = l.muted
+                nl.pendAt = l.pendAt
+                nl.pendOn = l.pendOn
+                // im Raster weiterlaufen: gleicher Takt innerhalb des Loops
+                val heard = heardNow()
+                val ms = masterStart
+                val oldLen = l.data.size.toLong()
+                val f = Math.floorMod(heard - l.start, oldLen).toDouble() / oldLen
+                val nb = l.warpBars
+                val barIdx = if (nb >= 1f) (f * nb).toInt().coerceIn(0, max(0, nb.toInt() - 1)) else 0
+                val curBar = ms + Math.floorDiv(heard - ms, m) * m
+                nl.start = curBar - barIdx * m
+                if (!loops.compareAndSet(p, l, nl)) continue
+            }
+        }.start()
     }
 }
 
