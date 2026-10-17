@@ -1,0 +1,502 @@
+[
+ {
+  "version": "1.0.59",
+  "date": "17.10.2026 22:50",
+  "items": [
+   "Preset-Bibliothek: 37 Drum-Beats",
+   "21 Acid-Linien",
+   "Zufalls-Generator nach Acid Banger (CC BY 4.0)"
+  ]
+ },
+ {
+  "version": "1.0.58",
+  "date": "17.10.2026 21:50",
+  "items": [
+   "Set-Aufnahme unter MASTER (Pad- und DJ-Modus): Master in Stereo direkt auf den Speicher",
+   "Export",
+   "Liste"
+  ]
+ },
+ {
+  "version": "1.0.57",
+  "date": "17.10.2026 21:38",
+  "items": [
+   "Neue Effekte: Tape-Echo (Zeit+Pitch per Wischen)",
+   "Space-Echo",
+   "Looper",
+   "Slicer",
+   "Reverse",
+   "Harmonizer",
+   "Autotune",
+   "Roboter"
+  ]
+ },
+ {
+  "version": "1.0.56",
+  "date": "17.10.2026 21:33",
+  "items": [
+   "Wave-Editor: laufender Abspielkopf mit Zeitleiste",
+   "Mit dem Finger verschiebbar",
+   "Abspielen ab Kopf"
+  ]
+ },
+ {
+  "version": "1.0.55",
+  "date": "17.10.2026 21:28",
+  "items": [
+   "Master-Bereich im HUD: EQ",
+   "Kompressor",
+   "Multiband",
+   "Sättigung",
+   "Stereo-Breite",
+   "Limiter",
+   "Presets",
+   "A/B",
+   "Anzeigen"
+  ]
+ },
+ {
+  "version": "1.0.54",
+  "date": "17.10.2026 21:13",
+  "items": [
+   "Wave-Editoren: Lupe entfernt",
+   "Zoom mit Daumen und Zeigefinger (Stelle bleibt unter den Fingern)",
+   "Marker springen nicht mehr beim Aufsetzen"
+  ]
+ },
+ {
+  "version": "1.0.53",
+  "date": "17.10.2026 21:02",
+  "items": [
+   "DRUM-Editor: markierten Schlag antippen löscht",
+   "README"
+  ]
+ },
+ {
+  "version": "1.0.52",
+  "date": "17.10.2026 21:00",
+  "items": [
+   "Piano-Taste markiert alle Noten dieser Tonhöhe (Gruppe ziehen) – Piano-Roll",
+   "ACID",
+   "DRUM"
+  ]
+ },
+ {
+  "version": "1.0.51",
+  "date": "17.10.2026 20:57",
+  "items": [
+   "ACID/DRUM-Editor (Klaviatur/Instrumente + Matrix, bis 4 Takte, Auswahl, Kopieren, Quantisieren, MIDI, Sound-Einstellungen)",
+   "Lautstärke je Note in allen Noten-Editoren"
+  ]
+ },
+ {
+  "version": "1.0.50",
+  "date": "17.10.2026 18:06",
+  "items": [
+   "DJ: FX-Knopf je Kanal am Line-Fader (an/aus, lang = Effekt wählen)"
+  ]
+ },
+ {
+  "version": "1.0.49",
+  "date": "17.10.2026 18:01",
+  "items": [
+   "DJ: Track im Wave-Editor öffnen – Startpunkt",
+   "Hot Cues",
+   "Raster",
+   "Tempo",
+   "Warp auf Master-Tempo ohne Tonhöhenänderung",
+   "Sync"
+  ]
+ },
+ {
+  "version": "1.0.48",
+  "date": "17.10.2026 17:55",
+  "items": [
+   "DJ: Musik spielt weiter",
+   "Während eine Datei gewählt wird"
+  ]
+ },
+ {
+  "version": "1.0.47",
+  "date": "17.10.2026 17:45",
+  "items": [
+   "Live-Mikrofon: mehr Puffer-Reserve gegen Ruckler",
+   "README"
+  ]
+ },
+ {
+  "version": "1.0.46",
+  "date": "17.10.2026 17:43",
+  "items": [
+   "MIDI-Dateien in der Piano-Roll",
+   "DJ-Bibliothek mit Cue-Punkten aus dem Wave-Editor",
+   "DJ-Sampler-Pads synchron ab Startpunkt"
+  ]
+ },
+ {
+  "version": "1.0.45",
+  "date": "17.10.2026 17:38",
+  "items": [
+   "DJ-Modus (18 Designs)",
+   "MIDI",
+   "Live-Mikrofon mit Effekten",
+   "Niedrige Latenz",
+   "Piano-Roll: Zoom/Auswahl/Kopieren/Gruppen",
+   "Wave-Editor-Lupe"
+  ]
+ },
+ {
+  "version": "1.0.44",
+  "date": "17.10.2026 17:06",
+  "items": [
+   "Wave-Editor: Ausschnitt oder Slices als Stems in die Bibliothek speichern (mit Kategorie-Abfrage)",
+   "Stems-Export – Android und Web"
+  ]
+ },
+ {
+  "version": "1.0.43",
+  "date": "17.10.2026 17:02",
+  "items": [
+   "Web-Version (AudioWorklet-Port: Engine, 37 Effekte, Instrumente, Piano-Roll, Song-Matrix, Szenen) + Pages-Workflow"
+  ]
+ },
+ {
+  "version": "1.0.42",
+  "date": "17.10.2026 16:40",
+  "items": [
+   "Piano-Roll wie Ableton (Klaviatur links, Matrix rechts)",
+   "Song-Matrix (Arrangement)",
+   "Eigene Effekt-Kette je Pad (bis zu 3)"
+  ]
+ },
+ {
+  "version": "1.0.41",
+  "date": "17.10.2026 16:05",
+  "items": [
+   "Startbild: Version und „Made with Claude ©marween“"
+  ]
+ },
+ {
+  "version": "1.0.40",
+  "date": "17.10.2026 14:02",
+  "items": [
+   "Gesten: eingerasteten Overdub nicht verwerfen",
+   "README Live-Konzept"
+  ]
+ },
+ {
+  "version": "1.0.39",
+  "date": "17.10.2026 14:00",
+  "items": [
+   "Live-Konzept: Status-Farben",
+   "Datei-Clips mit BPM-Erkennung und Time-Stretch",
+   "Start-Raster",
+   "Tipp-Overdub",
+   "Wischgesten",
+   "Pad-Lautstärke"
+  ]
+ },
+ {
+  "version": "1.0.38",
+  "date": "17.10.2026 12:51",
+  "items": [
+   "Startbild: Marv-PAD-Logo 4 Sekunden beim Start"
+  ]
+ },
+ {
+  "version": "1.0.37",
+  "date": "17.10.2026 11:37",
+  "items": [
+   "Undo: Overdub behält die Loop-Phase",
+   "README: Maschine-Workflow"
+  ]
+ },
+ {
+  "version": "1.0.36",
+  "date": "17.10.2026 11:35",
+  "items": [
+   "Maschine-Workflow: Transport mit Einzähler",
+   "Undo/Redo",
+   "MUTE/SOLO/ERASE/DUPL",
+   "Note Repeat",
+   "Szenen mit Kette"
+  ]
+ },
+ {
+  "version": "1.0.35",
+  "date": "17.10.2026 10:43",
+  "items": [
+   "Virtuelle Instrumente: ACID 303 (Bass-Sequenzer, Accent/Slide, Touchpad-Spiel) und DRUM 909 (11 Stimmen, Presets, Finger-Pads)",
+   "Mit FX-Routing"
+  ]
+ },
+ {
+  "version": "1.0.34",
+  "date": "17.10.2026 09:57",
+  "items": [
+   "USB-Audio: Ein-/Ausgang wählen",
+   "Hotplug-Erkennung mit automatischem Audio-Neustart"
+  ]
+ },
+ {
+  "version": "1.0.33",
+  "date": "17.10.2026 09:39",
+  "items": [
+   "Info-Modus: Elemente antippen erklärt ihre Funktion"
+  ]
+ },
+ {
+  "version": "1.0.32",
+  "date": "17.10.2026 09:38",
+  "items": [
+   "SWING-Regler: Shuffle für Sequenzer und Matrix (auch im Pattern-Export)"
+  ]
+ },
+ {
+  "version": "1.0.31",
+  "date": "17.10.2026 09:32",
+  "items": [
+   "Bounce: nach Wave-Aufnahme Quell-Pads automatisch stumm (abschaltbar)"
+  ]
+ },
+ {
+  "version": "1.0.30",
+  "date": "17.10.2026 09:31",
+  "items": [
+   "Aufnahme-Modi HALTEN und TIPPEN (Start/Stopp per Tipp)",
+   "Loops auf 1-32 Takte synchronisiert"
+  ]
+ },
+ {
+  "version": "1.0.29",
+  "date": "17.10.2026 09:30",
+  "items": [
+   "Tastatur: Matrix/Piano-Roll mit 1-8 Takten",
+   "Aufnahme-Raster (frei bis 1/32)",
+   "Quantisieren",
+   "Noten setzen/löschen"
+  ]
+ },
+ {
+  "version": "1.0.28",
+  "date": "17.10.2026 09:28",
+  "items": [
+   "Effekt-Kette: bis zu 3 Effekte kombinierbar",
+   "Plätze auf der XY-Fläche",
+   "Werte je Platz"
+  ]
+ },
+ {
+  "version": "1.0.27",
+  "date": "17.10.2026 09:01",
+  "items": [
+   "Halten-Aufnahme: Loops auf 1/2/4/8/16 ganze Takte",
+   "Längere Aufnahmen",
+   "Live bis 16 Takte"
+  ]
+ },
+ {
+  "version": "1.0.26",
+  "date": "17.10.2026 08:57",
+  "items": [
+   "Effekt pro Pad an/aus",
+   "Pad-Auswahl in der Effektliste",
+   "Song-Aufnahme mit oder ohne Effekte"
+  ]
+ },
+ {
+  "version": "1.0.25",
+  "date": "17.10.2026 08:28",
+  "items": [
+   "Eingang pro Pad: Mikrofon oder Wave (App-Audio)",
+   "Symbol am Pad",
+   "Schalter für alle"
+  ]
+ },
+ {
+  "version": "1.0.24",
+  "date": "17.10.2026 08:03",
+  "items": [
+   "Resample (App-Ausgang auf Pad aufnehmen) und Live-Modus (Antippen, Aufnahme ab nächstem Takt, feste Länge, sofort synchron)"
+  ]
+ },
+ {
+  "version": "1.0.23",
+  "date": "17.10.2026 07:59",
+  "items": [
+   "XY-Fläche: Fingerbewegungen aufnehmen und taktsynchron als Automation abspielen"
+  ]
+ },
+ {
+  "version": "1.0.22",
+  "date": "17.10.2026 07:57",
+  "items": [
+   "XY-Fläche: HOLD-Knopf hält den Effekt ohne Finger aktiv"
+  ]
+ },
+ {
+  "version": "1.0.21",
+  "date": "16.10.2026 23:18",
+  "items": [
+   "Tastatur: REC (Pattern/Song)",
+   "Play",
+   "Stop",
+   "Noten-Pattern mit Tonhöhe und Länge im Sequenzer"
+  ]
+ },
+ {
+  "version": "1.0.20",
+  "date": "16.10.2026 23:15",
+  "items": [
+   "Sequenzer: Lautstärke pro Schritt",
+   "Loop-Pads per Antippen an/aus mit synchronem Einstieg und Blende",
+   "Fix: Pattern leeren mit Float-Schritten"
+  ]
+ },
+ {
+  "version": "1.0.18",
+  "date": "16.10.2026 23:04",
+  "items": [
+   "21 neue Effekte: Modulation",
+   "EQ/Filter",
+   "Sättigung",
+   "Granular",
+   "Spektral",
+   "Glitch",
+   "Resonator",
+   "Multi-FX"
+  ]
+ },
+ {
+  "version": "1.0.17",
+  "date": "16.10.2026 22:57",
+  "items": [
+   "README: Anzahl korrigiert"
+  ]
+ },
+ {
+  "version": "1.0.16",
+  "date": "16.10.2026 22:57",
+  "items": [
+   "Bibliothek: über 100 Sounds in Kategorien (VCSL CC0 + neue Synth-Sounds/Loops)",
+   "NOIR als Standard-Design"
+  ]
+ },
+ {
+  "version": "1.0.15",
+  "date": "16.10.2026 22:50",
+  "items": [
+   "Effekt-Ziel (Song/Pad)",
+   "Pad-Tastatur mit Akkorden",
+   "Wave-Editor mit Slices die dem Tempo folgen",
+   "Fix: fehlender Import"
+  ]
+ },
+ {
+  "version": "1.0.13",
+  "date": "16.10.2026 22:26",
+  "items": [
+   "6 neue Designs: Glas",
+   "Pastell",
+   "Holz",
+   "Creme",
+   "Noir",
+   "Grau"
+  ]
+ },
+ {
+  "version": "1.0.12",
+  "date": "16.10.2026 22:22",
+  "items": [
+   "Projekte speichern/laden",
+   "Mikrofon-Aufnahmen automatisch sichern",
+   "Pattern/Song als Audio oder Projekt",
+   "Fix: Song-Zwischenspeicher wiederhergestellt"
+  ]
+ },
+ {
+  "version": "1.0.10",
+  "date": "16.10.2026 22:17",
+  "items": [
+   "Designs RETRO (mit Spektrum) und COMIC",
+   "Master-Tempo mit Tap-Tempo und Metronom"
+  ]
+ },
+ {
+  "version": "1.0.9",
+  "date": "16.10.2026 22:05",
+  "items": [
+   "REC-Auswahl: Pattern oder ganzen Song aufnehmen",
+   "Song als WAV speichern"
+  ]
+ },
+ {
+  "version": "1.0.8",
+  "date": "16.10.2026 21:58",
+  "items": [
+   "16-Schritt-Sequenzer mit REC/PLAY/STOP statt unterer Pad-Reihe"
+  ]
+ },
+ {
+  "version": "1.0.7",
+  "date": "16.10.2026 21:56",
+  "items": [
+   "Designs (NEON, GLOW, STUDIO, HUD) und Effekt-Display in der Kopfzeile"
+  ]
+ },
+ {
+  "version": "1.0.6",
+  "date": "16.10.2026 21:41",
+  "items": [
+   "Pad-Modi LOOP/ONE SHOT",
+   "Regenbogen-Design",
+   "Sample-Bibliothek"
+  ]
+ },
+ {
+  "version": "1.0.5",
+  "date": "16.10.2026 21:37",
+  "items": [
+   "Filter: LP/HP/BP/Notch mit 4 Steilheitsstufen",
+   "Bell",
+   "Peak",
+   "Comb",
+   "Effektliste per Langdruck"
+  ]
+ },
+ {
+  "version": "1.0.4",
+  "date": "16.10.2026 21:35",
+  "items": [
+   "•••-Knopf unter jedem Pad: WAV/MP3 importieren",
+   "Loop als WAV exportieren"
+  ]
+ },
+ {
+  "version": "1.0.3",
+  "date": "16.10.2026 21:33",
+  "items": [
+   "XY-Effektfläche",
+   "4 Drehregler",
+   "10 Effekte",
+   "Marv PAD Logo und Icon"
+  ]
+ },
+ {
+  "version": "1.0.2",
+  "date": "16.10.2026 21:24",
+  "items": [
+   "Sync: erster Loop wird Taktgeber",
+   "Alle weiteren rasten auf sein Raster ein"
+  ]
+ },
+ {
+  "version": "1.0.1",
+  "date": "16.10.2026 21:15",
+  "items": [
+   "Loop Pad: 16 Neon-Pads",
+   "Live-Looping mit Overdub",
+   "APK-Build"
+  ]
+ }
+]

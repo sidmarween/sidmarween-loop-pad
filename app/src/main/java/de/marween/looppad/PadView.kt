@@ -438,6 +438,7 @@ class PadView(context: Context) : View(context) {
     var onPatternStopped: (() -> Unit)? = null
     private val displayRect = RectF()
     var onDesignMenu: (() -> Unit)? = null
+    var onInfo: (() -> Unit)? = null
     var onTempo: (() -> Unit)? = null
     var onRecSettingsChanged: (() -> Unit)? = null
 
@@ -2551,6 +2552,11 @@ class PadView(context: Context) : View(context) {
                 }
                 for (b in 0 until 6) if (funcRects[b].contains(x, y)) {
                     if (funcPointer < 0) funcDown(b, id)
+                    return true
+                }
+                if (onInfo != null && logoDst.contains(x, y)) {
+                    performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+                    onInfo?.invoke()
                     return true
                 }
                 if (designBtn.contains(x, y)) {
@@ -6328,7 +6334,7 @@ class PadView(context: Context) : View(context) {
             }
         }
         // ---- Kopfzeile
-        if (logoDst.contains(x, y)) return Triple(logoDst, "Marv PAD", "Live-Looper mit 12 Pads, XY-Effektfläche, Effekt-Kette, Sequenzer und Tastatur. © marween")
+        if (logoDst.contains(x, y)) return Triple(logoDst, "Marv PAD", "Live-Looper mit 12 Pads, XY-Effektfläche, Effekt-Kette, Sequenzer und Tastatur. Antippen öffnet die Info-Seite mit Version und allen Änderungen. © marween")
         if (displayRect.contains(x, y)) {
             return if (x > displayRect.left + displayRect.width() * 0.62f)
                 Triple(displayRect, "Tempo", "Zeigt das Master-Tempo. Rechts im Display tippen: Tempo einstellen (Regler, ±, Tap-Tempo), Metronom an/aus oder Automatisch (erster Loop bestimmt das Tempo).")

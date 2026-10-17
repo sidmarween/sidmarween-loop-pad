@@ -13,6 +13,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Änderungsliste erzeugen
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 tools/changelog.py || echo "Änderungsliste unverändert"
 
       - uses: actions/setup-java@v4
         with:
@@ -42,7 +49,7 @@ jobs:
         run: |
           gh release create "v1.0.${{ github.run_number }}" "LoopPad-1.0.${{ github.run_number }}.apk" \
             --title "Loop Pad 1.0.${{ github.run_number }}" \
-            --notes "Automatischer Build. APK aufs Handy laden und installieren." \
+            --notes "$(python3 -c "import json;e=json.load(open('app/src/main/assets/changelog.json'))[0];print('\n'.join('- '+i for i in e['items']))" 2>/dev/null || echo 'Automatischer Build.')" \
             --latest
 
       - name: Fehlerlog sichern

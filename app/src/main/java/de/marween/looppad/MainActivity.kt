@@ -148,6 +148,8 @@ class MainActivity : Activity() {
         dj.onEditSaveLib = { k -> saveDeckToLib(k) }
         dj.onSetRec = { toggleSetRec() }
         pads.onSetRec = { toggleSetRec() }
+        pads.onInfo = { showAbout() }
+        dj.onInfo = { showAbout() }
         djMode = prefs.getBoolean("djMode", false)
         // MIDI
         Midi.load(prefs)
@@ -162,6 +164,165 @@ class MainActivity : Activity() {
         registerUsbWatcher()
         if (savedInstanceState == null) showSplash() else setContentView(mainView())
         hideSystemBars()
+    }
+
+    // ---------------------------------------------------------------- Info-Seite
+
+    private class ChangeEntry(val version: String, val date: String, val items: List<String>)
+
+    private fun loadChangelog(): List<ChangeEntry> = try {
+        val txt = assets.open("changelog.json").bufferedReader(Charsets.UTF_8).use { it.readText() }
+        val arr = org.json.JSONArray(txt)
+        (0 until arr.length()).map { i ->
+            val o = arr.getJSONObject(i)
+            val it = o.optJSONArray("items")
+            ChangeEntry(o.optString("version"), o.optString("date"),
+                if (it == null) emptyList() else (0 until it.length()).map { j -> it.getString(j) })
+        }
+    } catch (e: Exception) {
+        emptyList()
+    }
+
+    private fun showAbout() {
+        val d = resources.displayMetrics.density
+        fun px(v: Float) = (v * d).toInt()
+        val version = try { packageManager.getPackageInfo(packageName, 0).versionName ?: "" } catch (e: Exception) { "" }
+        val log = loadChangelog()
+        val updated = log.firstOrNull { it.version == version }?.date ?: log.firstOrNull()?.date ?: try {
+            SimpleDateFormat("dd.MM.yyyy HH:mm", Locale.GERMANY).format(Date(packageManager.getPackageInfo(packageName, 0).lastUpdateTime))
+        } catch (e: Exception) { "–" }
+        val accent = Color.rgb(0, 229, 255)
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER_HORIZONTAL
+            setPadding(px(24f), px(20f), px(24f), px(12f))
+        }
+        box.addView(android.widget.ImageView(this).apply {
+            setImageResource(R.drawable.logo)
+            adjustViewBounds = true
+            scaleType = android.widget.ImageView.ScaleType.FIT_CENTER
+            layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, px(56f))
+        })
+        fun line(t: CharSequence, size: Float, color: Int, top: Float, bold: Boolean = false) = TextView(this).apply {
+            text = t
+            textSize = size
+            setTextColor(color)
+            gravity = Gravity.CENTER
+            setPadding(0, px(top), 0, 0)
+            if (bold) typeface = Typeface.DEFAULT_BOLD
+        }.also { box.addView(it) }
+        line("Marv PAD", 22f, Color.WHITE, 10f, true)
+        line("Version $version", 15f, accent, 4f)
+        line("Letzte Aktualisierung: $updated", 13f, Color.argb(210, 255, 255, 255), 6f)
+        line("${log.size} Versionen seit Version 1.0.1", 12f, Color.argb(150, 255, 255, 255), 2f)
+        line("📄 Alle Änderungen seit Version 1", 15f, accent, 18f, true).apply {
+            paintFlags = paintFlags or android.graphics.Paint.UNDERLINE_TEXT_FLAG
+            setPadding(px(12f), px(14f), px(12f), px(10f))
+            isClickable = true
+            setOnClickListener { showChangelog(log) }
+        }
+        val credit = android.text.SpannableString("Made with Claude ©marween")
+        val st = credit.indexOf("©marween")
+        credit.setSpan(object : android.text.style.ClickableSpan() {
+            override fun onClick(widget: View) { showContact() }
+            override fun updateDrawState(ds: android.text.TextPaint) {
+                ds.color = accent
+                ds.isUnderlineText = true
+            }
+        }, st, credit.length, android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        line(credit, 14f, Color.WHITE, 18f).apply {
+            movementMethod = android.text.method.LinkMovementMethod.getInstance()
+            highlightColor = Color.TRANSPARENT
+            setPadding(px(8f), px(18f), px(8f), px(8f))
+        }
+        AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
+            .setView(android.widget.ScrollView(this).apply { addView(box) })
+            .setPositiveButton("Schließen", null)
+            .show()
+    }
+
+    private fun showContact() {
+        val mail = "sidmarween@gmx.de"
+        val d = resources.displayMetrics.density
+        val tv = TextView(this).apply {
+            text = "✉  $mail"
+            textSize = 18f
+            setTextColor(Color.rgb(0, 229, 255))
+            paintFlags = paintFlags or android.graphics.Paint.UNDERLINE_TEXT_FLAG
+            gravity = Gravity.CENTER
+            setPadding((20 * d).toInt(), (22 * d).toInt(), (20 * d).toInt(), (6 * d).toInt())
+        }
+        val hintTv = TextView(this).apply {
+            text = "Antippen öffnet dein Mail-Programm"
+            textSize = 12f
+            setTextColor(Color.argb(150, 255, 255, 255))
+            gravity = Gravity.CENTER
+            setPadding(0, 0, 0, (10 * d).toInt())
+        }
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            addView(tv)
+            addView(hintTv)
+        }
+        val dlg = AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
+            .setTitle("Kontakt – marween")
+            .setView(box)
+            .setNegativeButton("Schließen", null)
+            .create()
+        tv.setOnClickListener {
+            val i = Intent(Intent.ACTION_SENDTO, Uri.parse("mailto:$mail")).apply {
+                putExtra(Intent.EXTRA_SUBJECT, "Marv PAD")
+            }
+            try {
+                pickerOpen = true
+                startActivity(i)
+                dlg.dismiss()
+            } catch (e: Exception) {
+                pickerOpen = false
+                Toast.makeText(this, "Kein Mail-Programm gefunden", Toast.LENGTH_SHORT).show()
+            }
+        }
+        dlg.show()
+    }
+
+    private fun showChangelog(log: List<ChangeEntry>) {
+        val d = resources.displayMetrics.density
+        fun px(v: Float) = (v * d).toInt()
+        val accent = Color.rgb(0, 229, 255)
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(px(20f), px(8f), px(20f), px(16f))
+        }
+        if (log.isEmpty()) box.addView(TextView(this).apply {
+            text = "Keine Änderungsliste gefunden."
+            setTextColor(Color.WHITE)
+        })
+        for (e in log) {
+            box.addView(TextView(this).apply {
+                text = "Version ${e.version}"
+                textSize = 16f
+                typeface = Typeface.DEFAULT_BOLD
+                setTextColor(accent)
+                setPadding(0, px(14f), 0, 0)
+            })
+            box.addView(TextView(this).apply {
+                text = e.date
+                textSize = 11f
+                setTextColor(Color.argb(140, 255, 255, 255))
+                setPadding(0, 0, 0, px(4f))
+            })
+            for (it in e.items) box.addView(TextView(this).apply {
+                text = "•  $it"
+                textSize = 13.5f
+                setTextColor(Color.argb(230, 255, 255, 255))
+                setPadding(px(6f), px(2f), 0, px(2f))
+            })
+        }
+        AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
+            .setTitle("Änderungen seit Version 1")
+            .setView(android.widget.ScrollView(this).apply { addView(box) })
+            .setPositiveButton("Schließen", null)
+            .show()
     }
 
     /** Startbild: 4 Sekunden das Marv-PAD-Logo, dann blendet die Oberfläche ein. */

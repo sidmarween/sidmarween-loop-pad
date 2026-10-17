@@ -134,6 +134,8 @@ class DjView(context: Context) : View(context) {
     var onPadsMode: (() -> Unit)? = null
     var onHint: ((String) -> Unit)? = null
     var onSkinMenu: (() -> Unit)? = null
+    var onInfo: (() -> Unit)? = null
+    private val logoHit = RectF()
     /** Sampler-Pad lange gedrückt: Audio darauf laden (Pad). */
     var onSamplerLoad: ((Int) -> Unit)? = null
 
@@ -528,6 +530,7 @@ class DjView(context: Context) : View(context) {
                 c.drawRoundRect(r2, dp(8f), dp(8f), fill)
             }
             c.drawBitmap(lg, null, tmp, bmpPaint)
+            logoHit.set(tmp)
         }
         val b = Engine.currentBpm()
         chip(c, bpmChip, if (b > 0f) String.format(Locale.GERMANY, "%.1f BPM", b) else "– BPM", Engine.seqPlaying)
@@ -1682,6 +1685,7 @@ class DjView(context: Context) : View(context) {
             return
         }
         when {
+            hit(logoHit, x, y, dp(4f)) -> { haptic(); onInfo?.invoke(); return }
             hit(bpmChip, x, y) -> { onTempo?.invoke(); return }
             hit(padsBtn, x, y) -> { onPadsMode?.invoke(); return }
             hit(masterBtn, x, y, 0f) -> { masterPanel.open(); haptic(); return }
