@@ -647,6 +647,8 @@ class MainActivity : Activity() {
         }
         labels.add("📥📤 Importieren / Exportieren …")
         actions.add { showLibraryIo() }
+        labels.add("🌐 Weitere freie Samples im Netz …")
+        actions.add { showFreeSampleLinks() }
         AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
             .setTitle("Bibliothek → Pad ${p + 1}")
             .setItems(labels.toTypedArray()) { _, which -> actions[which]() }
@@ -713,7 +715,8 @@ class MainActivity : Activity() {
             "📥 Importieren: Audio-Dateien (WAV, MP3 …) oder Bibliotheks-Paket (.zip)",
             "📤 Ganze eigene Bibliothek als Paket (★ ${user.size} Samples + 💿 $djN DJ-Tracks)",
             "📤 Eine Kategorie als Paket",
-            "📤 Einzelnes Sample als WAV (auch mitgelieferte)"
+            "📤 Einzelnes Sample als WAV (auch mitgelieferte)",
+            "🌐 Weitere freie Samples im Netz …"
         )
         AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
             .setTitle("📚 Bibliothek – Import / Export")
@@ -743,8 +746,75 @@ class MainActivity : Activity() {
                             .show()
                     }
                     3 -> pickSampleToExport()
+                    4 -> showFreeSampleLinks()
                 }
             }
+            .setNegativeButton("Schließen", null)
+            .show()
+    }
+
+    /** Name, Inhalt/Lizenz, Adresse – freie Quellen für weitere Samples. */
+    private val freeSampleLinks = listOf(
+        Triple("Freesound", "Riesige Community-Sammlung aller Art · Lizenz je Sound (CC0, CC BY …) · kostenloses Konto", "https://freesound.org"),
+        Triple("VCSL – Versilian Community Sample Library", "Akustische Instrumente & Percussion · CC0 (gemeinfrei) · Quelle vieler Marv-PAD-Sounds", "https://github.com/sgossner/VCSL"),
+        Triple("VS Chamber Orchestra (VSCO 2 CE)", "Orchester: Streicher, Bläser, Pauken · CC0 (gemeinfrei)", "https://github.com/sgossner/VSCO-2-CE"),
+        Triple("Philharmonia Orchestra", "Einzeltöne aller Orchesterinstrumente · kostenlos für eigene Musik", "https://philharmonia.co.uk/audio-sound-samples/"),
+        Triple("University of Iowa – Musical Instrument Samples", "Instrumente Ton für Ton, sehr sauber aufgenommen · frei nutzbar", "https://theremin.music.uiowa.edu/MIS.html"),
+        Triple("MusicRadar SampleRadar", "Tausende Loops & Hits nach Genres · lizenzfrei für eigene Tracks", "https://www.musicradar.com/news/tech/free-music-samples-download-loops-hits-and-multis-627820"),
+        Triple("99Sounds", "Kostenlose Sample-Packs (Drums, FX, Texturen) · lizenzfrei", "https://99sounds.org"),
+        Triple("Bedroom Producers Blog – Free Samples", "Übersicht vieler kostenloser Packs · Lizenz je Pack beachten", "https://bedroomproducersblog.com/free-samples/"),
+        Triple("Looperman", "Loops und Acapellas der Community · kostenloses Konto, Bedingungen je Loop", "https://www.looperman.com"),
+        Triple("Sonniss – GDC Game Audio Bundle", "Große Sound-Effekt-Pakete · lizenzfrei, auch kommerziell", "https://sonniss.com/gameaudiogdc"),
+        Triple("BBC Sound Effects", "Über 30.000 Geräusche aus dem BBC-Archiv · nur privat/Bildung", "https://sound-effects.bbcrewind.co.uk")
+    )
+
+    private fun showFreeSampleLinks() {
+        val d = resources.displayMetrics.density
+        fun px(v: Float) = (v * d).toInt()
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(px(20f), px(4f), px(20f), px(12f))
+        }
+        box.addView(TextView(this).apply {
+            text = "Datei herunterladen, entpacken und dann in der Bibliothek über 📥 Importieren hinzufügen (auch mehrere WAV/MP3 auf einmal). Bitte die Lizenz der jeweiligen Quelle beachten."
+            textSize = 12.5f
+            setTextColor(Color.argb(190, 255, 255, 255))
+            setPadding(0, 0, 0, px(10f))
+        })
+        for ((name, info, url) in freeSampleLinks) {
+            box.addView(LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(0, px(9f), 0, px(9f))
+                isClickable = true
+                setOnClickListener {
+                    try {
+                        startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+                    } catch (e: Exception) {
+                        toast("Kein Browser gefunden")
+                    }
+                }
+                addView(TextView(this@MainActivity).apply {
+                    text = "🌐 $name"
+                    textSize = 15f
+                    typeface = Typeface.DEFAULT_BOLD
+                    setTextColor(Color.rgb(0, 229, 255))
+                })
+                addView(TextView(this@MainActivity).apply {
+                    text = info
+                    textSize = 12f
+                    setTextColor(Color.argb(200, 255, 255, 255))
+                })
+                addView(TextView(this@MainActivity).apply {
+                    text = url.removePrefix("https://")
+                    textSize = 11f
+                    setTextColor(Color.argb(130, 255, 255, 255))
+                })
+            })
+        }
+        AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
+            .setTitle("🌐 Freie Samples im Netz")
+            .setView(android.widget.ScrollView(this).apply { addView(box) })
+            .setPositiveButton("📥 Importieren …") { _, _ -> pickLibraryImport() }
             .setNegativeButton("Schließen", null)
             .show()
     }
