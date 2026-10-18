@@ -6694,7 +6694,7 @@ class PadView(context: Context) : View(context) {
         }
         if (xyMode == 3 && xyRect.contains(x, y)) {
             layoutSynth()
-            val hdrTxt = arrayOf("AN/AUS: ob der Synth im Sequenzer mitspielt.", "Klang: Sägezahn, Rechteck, Supersaw, Pluck oder FM-Glocke.", "Akkord: Einzelton oder Dur/Moll/Sus4/Dur7/Moll7/Oktave – jede Note wird zum Akkord.", "FX: Synth durch die Effekt-Kette schicken.", "Oktave tiefer.", "Oktave höher.", "Zufällige Melodie (Moll-Pentatonik).", "Alle Schritte löschen.")
+            val hdrTxt = arrayOf("AN/AUS: ob der Synth im Sequenzer mitspielt.", "Klang: Sägezahn, Rechteck, Supersaw, Pluck oder FM-Glocke.", "Akkord: Einzelton oder Dur/Moll/Sus4/Dur7/Moll7/Oktave – jede Note wird zum Akkord.", "FX: Synth durch die Effekt-Kette schicken.", "Oktave tiefer.", "Oktave höher.", "Zufällige Melodie (Moll-Pentatonik).", "Großer Editor: Piano-Roll mit Matrix bis 4 Takte, Kopieren, Quantisieren, Lautstärke je Note, Presets, MIDI laden/exportieren, alle Klang-Einstellungen.")
             for (i in 0 until 8) if (instHdr[i].contains(x, y)) return Triple(instHdr[i], "SYNTH", hdrTxt[i])
             if (laneRect.contains(x, y)) return Triple(laneRect, "Schritte", "Schritt antippen = an/aus, hoch/runter ziehen = Tonhöhe.")
             if (accRow.contains(x, y)) return Triple(accRow, "Halten (H)", "Verlängert die Note des vorigen Schritts – so entstehen lange Töne und Flächen.")
@@ -7089,7 +7089,7 @@ class PadView(context: Context) : View(context) {
         val st = InstState
         val labels = arrayOf(
             if (st.synOn) "● AN" else "○ AUS", st.synWaveNames[st.synWave], if (st.synChord == 0) "♪ EINZEL" else "♫ " + st.synChordNames[st.synChord],
-            "FX", "OKT−", "OKT+", "🎲 RND", "LEEREN"
+            "FX", "OKT−", "OKT+", "🎲 RND", "✎ EDIT"
         )
         val ons = booleanArrayOf(st.synOn, false, st.synChord != 0, st.synFx, false, false, false, false)
         for (i in 0 until 8) chip(canvas, instHdr[i], labels[i], ons[i], cols)
@@ -7166,7 +7166,7 @@ class PadView(context: Context) : View(context) {
                 4 -> st.synOct = (st.synOct - 1).coerceAtLeast(-3)
                 5 -> st.synOct = (st.synOct + 1).coerceAtMost(2)
                 6 -> { Engine.pushPatternUndo("SYNTH Zufall"); st.synRandom() }
-                7 -> { Engine.pushPatternUndo("SYNTH leeren"); st.synClear() }
+                7 -> instEd.open(3)
             }
             if (i == 1) hint("SYNTH-Klang: ${st.synWaveNames[st.synWave]}")
             if (i == 2) hint("Akkord: ${st.synChordNames[st.synChord]}")
@@ -7183,7 +7183,6 @@ class PadView(context: Context) : View(context) {
             laneDragged = false
             laneDownY = y
             if (!laneWasOn) { st.synGate[k] = true; st.synTie[k] = false; st.synVel[k] = 1f }
-            for (r in 1 until InstState.MAX / InstState.STEPS) { val q = k + r * InstState.STEPS; st.synGate[q] = st.synGate[k]; st.synTie[q] = st.synTie[k]; st.synSemi[q] = st.synSemi[k] }
             return
         }
         if (accRow.contains(x, y)) {
@@ -7194,7 +7193,6 @@ class PadView(context: Context) : View(context) {
                 st.synGate[k] = true
                 st.synSemi[k] = st.synSemi[Math.floorMod(k - 1, InstState.STEPS)]
             }
-            for (r in 1 until InstState.MAX / InstState.STEPS) { val q = k + r * InstState.STEPS; st.synGate[q] = st.synGate[k]; st.synTie[q] = st.synTie[k]; st.synSemi[q] = st.synSemi[k] }
             return
         }
         if (playRect.contains(x, y)) {
@@ -7417,7 +7415,6 @@ class PadView(context: Context) : View(context) {
                 val sm = (v * 36f).toInt() - 12
                 if (sm != st.synSemi[laneStep] || laneVoice < 0) {
                     st.synSemi[laneStep] = sm
-                    for (r in 1 until InstState.MAX / InstState.STEPS) st.synSemi[laneStep + r * InstState.STEPS] = sm
                     if (laneVoice >= 0) Engine.synthLiveOff(SYN_LANE_TAG)
                     Engine.synthLiveOn(sm, SYN_LANE_TAG)
                     laneVoice = 1
@@ -7458,7 +7455,6 @@ class PadView(context: Context) : View(context) {
             if (!laneDragged && laneWasOn) {
                 st.synGate[laneStep] = false
                 st.synTie[laneStep] = false
-                for (r in 1 until InstState.MAX / InstState.STEPS) { val q = laneStep + r * InstState.STEPS; st.synGate[q] = false; st.synTie[q] = false }
             }
             if (laneVoice >= 0) Engine.synthLiveOff(SYN_LANE_TAG)
             laneVoice = -1

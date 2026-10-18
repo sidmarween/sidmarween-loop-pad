@@ -225,4 +225,63 @@ object InstPresets {
         st.drumLen = 16
         st.drumOn = true
     }
+
+    // ---------------------------------------------------------------- SYNTH (eigene Presets für Marv PAD)
+
+    /** Note: Schritt, Halbton (0 = C4), Länge in Schritten. */
+    class SynNote(val step: Int, val semi: Int, val len: Int, val vel: Float = 1f)
+    class Synth(
+        val genre: String, val name: String, val bpm: Int, val wave: Int, val chord: Int, val oct: Int,
+        val cut: Float, val res: Float, val env: Float, val atk: Float, val rel: Float, val det: Float,
+        val bars: Int, val notes: List<SynNote>
+    )
+
+    private fun n(vararg t: Int): List<SynNote> = (t.indices step 3).map { SynNote(t[it], t[it + 1], t[it + 2]) }
+
+    val SYNTHS = listOf(
+        Synth("Flächen", "Moll-Flächen (Am · Dm · Em · Am)", 120, 2, 2, 0, 0.55f, 0.2f, 0.25f, 0.45f, 0.6f, 0.45f, 4,
+            n(0, -3, 16, 16, 2, 16, 32, 4, 16, 48, -3, 16)),
+        Synth("Flächen", "Ambient Dur (C · F · Am · G)", 90, 2, 1, 0, 0.45f, 0.15f, 0.2f, 0.7f, 0.85f, 0.6f, 4,
+            n(0, 0, 16, 16, 5, 16, 32, -3, 16, 48, -5, 16)),
+        Synth("Stabs", "House-Stabs Moll7", 124, 0, 5, 0, 0.42f, 0.35f, 0.55f, 0.0f, 0.18f, 0.3f, 1,
+            n(2, 0, 1, 6, 0, 1, 10, 0, 1, 13, -2, 1)),
+        Synth("Stabs", "Dub-Chords (Moll)", 118, 0, 2, 0, 0.35f, 0.55f, 0.5f, 0.0f, 0.45f, 0.25f, 1,
+            n(2, 0, 1, 7, 0, 1, 10, 0, 2)),
+        Synth("Arpeggio", "Pluck-Arp Moll", 128, 3, 0, 0, 0.5f, 0.3f, 0.7f, 0.0f, 0.2f, 0.3f, 1,
+            n(0, 0, 1, 1, 3, 1, 2, 7, 1, 3, 12, 1, 4, 7, 1, 5, 3, 1, 6, 0, 1, 7, 3, 1, 8, -2, 1, 9, 3, 1, 10, 7, 1, 11, 10, 1, 12, 7, 1, 13, 3, 1, 14, -2, 1, 15, 3, 1)),
+        Synth("Arpeggio", "Trance-Gate Supersaw", 138, 2, 0, 0, 0.6f, 0.25f, 0.4f, 0.0f, 0.12f, 0.6f, 1,
+            n(0, 9, 1, 2, 9, 1, 3, 9, 1, 5, 9, 1, 6, 12, 1, 8, 9, 1, 10, 7, 1, 11, 9, 1, 13, 4, 1, 14, 5, 1)),
+        Synth("Lead", "Synthwave-Lead", 100, 0, 0, 0, 0.6f, 0.2f, 0.3f, 0.05f, 0.4f, 0.55f, 2,
+            n(0, 9, 3, 4, 7, 2, 6, 4, 2, 8, 2, 4, 12, 4, 4, 16, 9, 3, 20, 12, 2, 22, 11, 2, 24, 7, 8)),
+        Synth("Lead", "Oktav-Lead (Rechteck)", 126, 1, 6, 0, 0.55f, 0.3f, 0.35f, 0.0f, 0.2f, 0.2f, 1,
+            n(0, 0, 2, 3, 3, 1, 6, 5, 2, 10, 7, 1, 12, 10, 2, 14, 7, 2)),
+        Synth("Glocken", "FM-Glockenmelodie", 110, 4, 0, 1, 0.5f, 0.1f, 0.3f, 0.0f, 0.6f, 0.2f, 2,
+            n(0, 0, 2, 2, 7, 2, 4, 12, 2, 6, 10, 2, 8, 7, 4, 16, 5, 2, 18, 3, 2, 20, 0, 2, 22, -2, 2, 24, 0, 8)),
+        Synth("Bass", "Sub-Bass Achtel", 124, 1, 0, -2, 0.3f, 0.15f, 0.3f, 0.0f, 0.1f, 0.1f, 1,
+            n(0, 0, 2, 4, 0, 2, 7, 0, 1, 8, 3, 2, 12, 5, 2, 14, -2, 2)),
+        Synth("Bass", "Saw-Bass mit Filter", 122, 0, 0, -1, 0.25f, 0.6f, 0.75f, 0.0f, 0.12f, 0.2f, 1,
+            n(0, 0, 1, 3, 0, 1, 6, 12, 1, 8, 0, 1, 10, 3, 1, 11, 0, 1, 14, 7, 1))
+    )
+
+    fun applySynth(p: Synth) {
+        val st = InstState
+        st.synClear()
+        st.synWave = p.wave; st.synChord = p.chord; st.synOct = p.oct
+        st.synCut = p.cut; st.synRes = p.res; st.synEnv = p.env; st.synAtk = p.atk; st.synRel = p.rel; st.synDetune = p.det
+        st.synLen = (p.bars * 16).coerceIn(16, InstState.MAX)
+        st.synOn = true
+        for (nt in p.notes) for (j in 0 until nt.len) {
+            val k = nt.step + j
+            if (k !in 0 until st.synLen) break
+            st.synGate[k] = true
+            st.synTie[k] = j > 0
+            st.synSemi[k] = nt.semi
+            st.synVel[k] = nt.vel
+        }
+        // kurze Patterns auf 4 Takte spiegeln (falls später verlängert wird)
+        for (k in st.synLen until InstState.MAX) {
+            val s0 = k % st.synLen
+            st.synGate[k] = st.synGate[s0]; st.synTie[k] = st.synTie[s0] && s0 != 0; st.synSemi[k] = st.synSemi[s0]; st.synVel[k] = st.synVel[s0]
+        }
+    }
 }

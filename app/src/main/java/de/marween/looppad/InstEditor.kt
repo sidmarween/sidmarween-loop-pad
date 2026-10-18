@@ -20,9 +20,30 @@ import kotlin.math.min
  * Länge bis 4 Takte, Zoom, MIDI-Datei laden/exportieren und die typischen Klang-Einstellungen.
  */
 class InstEditor(private val host: View) {
-    /** 0 = zu, 1 = ACID, 2 = DRUM */
+    /** 0 = zu, 1 = ACID, 2 = DRUM, 3 = SYNTH */
     var kind = 0
         private set
+    /** Melodische Instrumente (ACID und SYNTH) teilen sich die Piano-Roll. */
+    private val mel: Boolean get() = kind == 1 || kind == 3
+    private val dummyAcc = BooleanArray(InstState.MAX)
+    private val dummySlide = BooleanArray(InstState.MAX)
+    private val aGate: BooleanArray get() = if (kind == 3) InstState.synGate else InstState.acidGate
+    private val aSemi: IntArray get() = if (kind == 3) InstState.synSemi else InstState.acidSemi
+    private val aTie: BooleanArray get() = if (kind == 3) InstState.synTie else InstState.acidTie
+    private val aVel: FloatArray get() = if (kind == 3) InstState.synVel else InstState.acidVel
+    private val aAcc: BooleanArray get() = if (kind == 3) dummyAcc.also { java.util.Arrays.fill(it, false) } else InstState.acidAcc
+    private val aSlide: BooleanArray get() = if (kind == 3) dummySlide.also { java.util.Arrays.fill(it, false) } else InstState.acidSlide
+
+    private fun liveOn(semi: Int, slide: Boolean) {
+        if (kind == 3) {
+            Engine.synthLiveOff(SYN_TAG)
+            Engine.synthLiveOn(semi, SYN_TAG)
+        } else Engine.acidLiveOn(semi, slide)
+    }
+
+    private fun liveOff() {
+        if (kind == 3) Engine.synthLiveOff(SYN_TAG) else Engine.acidLiveOff()
+    }
     val isOpen: Boolean get() = kind != 0
 
     var onHint: ((String) -> Unit)? = null
@@ -95,12 +116,12 @@ class InstEditor(private val host: View) {
     }
 
     fun close() {
-        if (kind == 1) Engine.acidLiveOff()
+        if (mel) liveOff()
         kind = 0
         drag = 0
     }
 
-    private val len: Int get() = if (kind == 1) InstState.acidLen else InstState.drumLen
+    private val len: Int get() = when (kind) { 1 -> InstState.acidLen; 3 -> InstState.synLen; else -> InstState.drumLen }
     private val visCols: Int get() = max(4, len / zoom)
 
     private fun layout(area: RectF) {
@@ -125,7 +146,7 @@ class InstEditor(private val host: View) {
         row(arrayOf(bAll, bCopy, bPaste, bDel, bExtra, bQuant), y)
         y += dp(38f)
         val bottom = box.bottom - m
-        val keyW = if (kind == 1) max(dp(44f), box.width() * 0.13f) else max(dp(70f), box.width() * 0.2f)
+        val keyW = if (mel) max(dp(44f), box.width() * 0.13f) else max(dp(70f), box.width() * 0.2f)
         val velH = dp(44f)
         keys.set(box.left + m, y, box.left + m + keyW, bottom - dp(12f) - velH - dp(4f) - (if (kind == 1) dp(40f) else 0f))
         grid.set(keys.right + dp(3f), y, box.right - m, keys.bottom)
@@ -143,7 +164,7 @@ class InstEditor(private val host: View) {
     }
 
     private val rowsA: Int get() = max(8, (grid.height() / dp(17f)).toInt())
-    private fun rowH(): Float = if (kind == 1) grid.height() / rowsA else grid.height() / InstState.DV
+    private fun rowH(): Float = if (mel) grid.height() / rowsA else grid.height() / InstState.DV
     private fun colW(): Float = grid.width() / visCols
     private fun colAt(x: Float): Int = (col0 + ((x - grid.left) / colW()).toInt()).coerceIn(0, len - 1)
     private fun colX(c: Int): Float = grid.left + (c - col0) * colW()
@@ -154,24 +175,24 @@ class InstEditor(private val host: View) {
 
     private fun aHead(k: Int): Boolean {
         val st = InstState
-        if (!st.acidGate[k]) return false
+        if (!aGate[k]) return false
         val prev = Math.floorMod(k - 1, len)
-        return !(st.acidTie[k] && st.acidGate[prev] && k > 0)
+        return !(aTie[k] && aGate[prev] && k > 0)
     }
 
     private fun aLen(h: Int): Int {
         val st = InstState
         var n = 1
-        while (h + n < len && st.acidGate[h + n] && st.acidTie[h + n]) n++
+        while (h + n < len && aGate[h + n] && aTie[h + n]) n++
         return n
     }
 
     /** Kopf der Note, die Schritt k abdeckt (oder -1). */
     private fun aCover(k: Int): Int {
         val st = InstState
-        if (k < 0 || k >= len || !st.acidGate[k]) return -1
+        if (k < 0 || k >= len || !aGate[k]) return -1
         var h = k
-        while (h > 0 && st.acidTie[h] && st.acidGate[h - 1]) h--
+        while (h > 0 && aTie[h] && aGate[h - 1]) h--
         return h
     }
 
@@ -179,7 +200,7 @@ class InstEditor(private val host: View) {
         val st = InstState
         val n = aLen(h)
         for (k in h until min(len, h + n)) {
-            st.acidGate[k] = false; st.acidTie[k] = false; st.acidAcc[k] = false; st.acidSlide[k] = false
+            aGate[k] = false; aTie[k] = false; aAcc[k] = false; aSlide[k] = false
         }
     }
 
@@ -191,23 +212,23 @@ class InstEditor(private val host: View) {
         val c = aCover(h)
         if (c in 0 until h) {
             // vorige Note endet vor h
-            for (k in h until min(len, c + aLen(c))) { st.acidGate[k] = false; st.acidTie[k] = false }
+            for (k in h until min(len, c + aLen(c))) { aGate[k] = false; aTie[k] = false }
         }
         for (k in h until e) {
             if (aHead(k) && k != h) aDelete(k)
         }
         if (aHead(h)) aDelete(h)
         // eine Note, die nach e weiterliefe, beginnt dort neu
-        if (e < len && st.acidGate[e] && st.acidTie[e]) st.acidTie[e] = false
+        if (e < len && aGate[e] && aTie[e]) aTie[e] = false
         for (k in h until e) {
-            st.acidGate[k] = true
-            st.acidTie[k] = k != h
-            st.acidSemi[k] = semi
-            st.acidAcc[k] = k == h && acc
-            st.acidSlide[k] = false
-            st.acidVel[k] = vel
+            aGate[k] = true
+            aTie[k] = k != h
+            aSemi[k] = semi
+            aAcc[k] = k == h && acc
+            aSlide[k] = false
+            aVel[k] = vel
         }
-        st.acidSlide[e - 1] = slide
+        aSlide[e - 1] = slide
     }
 
     // ---------------------------------------------------------------- Zeichnen
@@ -226,7 +247,7 @@ class InstEditor(private val host: View) {
         text.textAlign = Paint.Align.LEFT
         text.textSize = dp(14f)
         text.color = Color.WHITE
-        c.drawText(if (kind == 1) "🔊 ACID 303" else "🥁 DRUM 909", box.left + dp(12f), bClose.centerY() - dp(1f), text)
+        c.drawText(when (kind) { 1 -> "🔊 ACID 303"; 3 -> "🎹 SYNTH"; else -> "🥁 DRUM 909" }, box.left + dp(12f), bClose.centerY() - dp(1f), text)
         text.textSize = dp(9.5f)
         text.color = Color.argb(180, 255, 255, 255)
         c.drawText("${len / 16} Takt" + (if (len > 16) "e" else "") + " · ${len} Schritte", box.left + dp(12f), bClose.centerY() + dp(12f), text)
@@ -234,7 +255,7 @@ class InstEditor(private val host: View) {
         btn(c, bRec, if (Engine.seqRecording) "● REC" else "●", Engine.seqRecording, Color.rgb(225, 40, 50))
         btn(c, bPlay, if (Engine.seqPlaying) "■" else "▶", Engine.seqPlaying, acc)
         btn(c, bMidi, "⇅ MIDI", false, acc)
-        btn(c, bSound, if (kind == 1) "⚙ SOUND" else "⚙ KITS", sound, acc)
+        btn(c, bSound, if (mel) "⚙ SOUND" else "⚙ KITS", sound, acc)
         btn(c, bClose, "✕", false, acc)
         btn(c, bLen, "${len / 16} TAKT" + if (len > 16) "E" else "", false, acc)
         btn(c, bRaster, "Q " + when (qStep) { 1 -> "1/16"; 2 -> "1/8"; else -> "1/4" }, false, acc)
@@ -244,7 +265,7 @@ class InstEditor(private val host: View) {
         btn(c, bClear, "LEEREN", false, acc)
         btn(c, bAll, "ALLE", false, acc)
         btn(c, bCopy, "KOPIE", false, acc)
-        val clipN = if (kind == 1) aClip.size else dClip.size
+        val clipN = if (mel) aClip.size else dClip.size
         btn(c, bPaste, if (clipN > 0) "EINF. $clipN" else "EINF.", false, acc)
         btn(c, bDel, if (sel.isNotEmpty()) "LÖSCH ${sel.size}" else "LÖSCH", false, acc)
         btn(c, bExtra, "▦ PRESETS", false, acc)
@@ -253,7 +274,7 @@ class InstEditor(private val host: View) {
             drawSound(c, acc)
             return
         }
-        if (kind == 1) drawAcid(c, acc) else drawDrum(c, acc)
+        if (mel) drawAcid(c, acc) else drawDrum(c, acc)
         drawVel(c, acc)
         // Bildlauf
         fill.color = Color.argb(50, 255, 255, 255)
@@ -273,9 +294,9 @@ class InstEditor(private val host: View) {
         stroke.strokeWidth = dp(1f)
         stroke.color = Color.argb(if (on) 255 else 90, Color.red(col), Color.green(col), Color.blue(col))
         c.drawRoundRect(r, dp(8f), dp(8f), stroke)
-        text.textSize = min(dp(11.5f), (r.width() - dp(6f)) / max(2f, label.length * 0.6f))
         text.color = Color.WHITE
-        c.drawText(label, r.centerX(), r.centerY() + text.textSize * 0.36f, text)
+        val lb = fitLabel(text, label, r.width() - dp(8f), dp(11.5f), dp(7f))
+        c.drawText(lb, r.centerX(), r.centerY() + text.textSize * 0.36f, text)
     }
 
     private val names = arrayOf("C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "H")
@@ -355,7 +376,7 @@ class InstEditor(private val host: View) {
                 text.textAlign = Paint.Align.RIGHT
                 text.textSize = min(dp(9.5f), rh * 0.9f)
                 text.color = Color.rgb(80, 80, 80)
-                c.drawText("C${2 + st.acidOct + Math.floorDiv(semi, 12)}", keys.right - dp(3f), y0 + rh * 0.82f, text)
+                c.drawText("C${(if (kind == 3) 4 + st.synOct else 2 + st.acidOct) + Math.floorDiv(semi, 12)}", keys.right - dp(3f), y0 + rh * 0.82f, text)
                 text.textAlign = Paint.Align.CENTER
             }
         }
@@ -367,7 +388,7 @@ class InstEditor(private val host: View) {
         while (k < len) {
             if (!aHead(k)) { k++; continue }
             val n = aLen(k)
-            val semi = st.acidSemi[k]
+            val semi = aSemi[k]
             val r = topSemi - semi
             if (k + n > col0 && k < col0 + visCols) {
                 val x0 = colX(k)
@@ -380,12 +401,12 @@ class InstEditor(private val host: View) {
                 } else {
                     val y0 = grid.top + r * rh
                     tmp.set(x0 + dp(1f), y0 + dp(1f), x1 - dp(1f), y0 + rh - dp(1f))
-                    fill.color = if (s) blendC(acc, Color.WHITE, 0.55f) else if (st.acidAcc[k]) blendC(acc, Color.rgb(255, 200, 60), 0.5f) else acc
+                    fill.color = if (s) blendC(acc, Color.WHITE, 0.55f) else if (aAcc[k]) blendC(acc, Color.rgb(255, 200, 60), 0.5f) else acc
                     c.drawRoundRect(tmp, dp(3f), dp(3f), fill)
                     stroke.strokeWidth = dp(if (s) 2f else 1f)
                     stroke.color = Color.WHITE
                     c.drawRoundRect(tmp, dp(3f), dp(3f), stroke)
-                    if (st.acidSlide[k + n - 1]) {
+                    if (aSlide[k + n - 1]) {
                         // Slide: Pfeil zum nächsten Ton
                         stroke.strokeWidth = dp(2f)
                         stroke.color = Color.rgb(80, 180, 255)
@@ -395,7 +416,7 @@ class InstEditor(private val host: View) {
                         text.textSize = min(dp(8.5f), rh * 0.7f)
                         text.color = Color.BLACK
                         text.textAlign = Paint.Align.LEFT
-                        c.drawText(names[Math.floorMod(semi, 12)] + (if (st.acidAcc[k]) " A" else ""), tmp.left + dp(3f), tmp.centerY() + text.textSize * 0.36f, text)
+                        c.drawText(names[Math.floorMod(semi, 12)] + (if (aAcc[k]) " A" else ""), tmp.left + dp(3f), tmp.centerY() + text.textSize * 0.36f, text)
                         text.textAlign = Paint.Align.CENTER
                     }
                 }
@@ -418,7 +439,7 @@ class InstEditor(private val host: View) {
             c.drawText(if (isAcc) "ACCENT" else "SLIDE", lane.left - dp(4f), lane.centerY() + dp(3f), text)
             text.textAlign = Paint.Align.CENTER
             for (kk in col0 until min(len, col0 + visCols)) {
-                val on = if (isAcc) st.acidAcc[kk] && aHead(kk) else st.acidSlide[kk] && st.acidGate[kk]
+                val on = if (isAcc) aAcc[kk] && aHead(kk) else aSlide[kk] && aGate[kk]
                 tmp.set(colX(kk) + dp(1f), lane.top, colX(kk + 1) - dp(1f), lane.bottom)
                 fill.color = if (on) (if (isAcc) Color.rgb(255, 170, 40) else Color.rgb(80, 180, 255)) else if (kk % 4 == 0) Color.rgb(38, 40, 48) else Color.rgb(28, 29, 36)
                 c.drawRoundRect(tmp, dp(2f), dp(2f), fill)
@@ -447,9 +468,9 @@ class InstEditor(private val host: View) {
         for (k in col0 until min(len, col0 + visCols)) {
             val v: Float
             val selK: Boolean
-            if (kind == 1) {
+            if (mel) {
                 if (!aHead(k)) continue
-                v = st.acidVel[k]
+                v = aVel[k]
                 selK = k in sel
             } else {
                 val vv = st.drumSel
@@ -471,11 +492,11 @@ class InstEditor(private val host: View) {
         val st = InstState
         val k = colAt(x)
         val v = ((velLane.bottom - dp(2f) - y) / (velLane.height() - dp(4f))).coerceIn(0.05f, 1f)
-        if (kind == 1) {
+        if (mel) {
             val h = aCover(k)
             if (h < 0) return
             // markierte Noten gemeinsam, wenn die angefasste dazugehört
-            if (h in sel && sel.size > 1) for (s2 in sel) st.acidVel[s2] = v else st.acidVel[h] = v
+            if (h in sel && sel.size > 1) for (s2 in sel) aVel[s2] = v else aVel[h] = v
         } else {
             val vv = st.drumSel
             if (st.drumSteps[vv][k] == 0) return
@@ -550,12 +571,23 @@ class InstEditor(private val host: View) {
 
     private fun sliders(): List<Slider> {
         val st = InstState
-        return if (kind == 1) listOf(
+        if (kind == 3) return listOf(
+            Slider("CUTOFF", { st.synCut }, { st.synCut = it }, ::pct),
+            Slider("RESONANZ", { st.synRes }, { st.synRes = it }, ::pct),
+            Slider("FILTER-HÜLLKURVE", { st.synEnv }, { st.synEnv = it }, ::pct),
+            Slider("ATTACK", { st.synAtk }, { st.synAtk = it }, { v -> "${((0.002 + v * v * 2.5) * 1000).toInt()} ms" }),
+            Slider("RELEASE", { st.synRel }, { st.synRel = it }, { v -> "${((0.02 + v * v * 3.0) * 1000).toInt()} ms" }),
+            Slider("VERSTIMMUNG", { st.synDetune }, { st.synDetune = it }, ::pct),
+            Slider("OKTAVE", { (st.synOct + 3) / 5f }, { st.synOct = Math.round(it * 5) - 3 }, { v -> val o = Math.round(v * 5) - 3; (if (o > 0) "+" else "") + "$o" }),
+            Slider("SWING (alle)", { Engine.swing }, { Engine.swing = it }, { v -> "${50 + (v * 25).toInt()} %" }),
+            Slider("LAUTSTÄRKE", { st.synVol }, { st.synVol = it }, ::pct)
+        )
+        return if (mel) listOf(
             Slider("CUTOFF", { st.acidCut }, { st.acidCut = it }, ::pct),
             Slider("RESONANZ", { st.acidRes }, { st.acidRes = it }, ::pct),
             Slider("ENV MOD", { st.acidEnv }, { st.acidEnv = it }, ::pct),
             Slider("DECAY", { st.acidDec }, { st.acidDec = it }, ::pct),
-            Slider("ACCENT", { st.acidAccent }, { st.acidAccent = it }, ::pct),
+            Slider("ACCENT", { aAccent }, { aAccent = it }, ::pct),
             Slider("GLIDE-ZEIT", { st.acidGlide }, { st.acidGlide = it }, { v -> "${(10 + v * 240).toInt()} ms" }),
             Slider("DRIVE", { st.acidDrive }, { st.acidDrive = it }, ::pct),
             Slider("TUNE", { (st.acidTune + 12) / 24f }, { st.acidTune = Math.round(it * 24) - 12 }, { v -> val t = Math.round(v * 24) - 12; (if (t > 0) "+" else "") + "$t HT" }),
@@ -577,7 +609,14 @@ class InstEditor(private val host: View) {
 
     private fun toggles(): List<Toggle> {
         val st = InstState
-        return if (kind == 1) listOf(
+        if (kind == 3) return listOf(
+            Toggle({ if (st.synOn) "● AN" else "○ AUS" }, { st.synOn }, { st.synOn = !st.synOn }),
+            Toggle({ "KLANG: " + st.synWaveNames[st.synWave] }, { false }, { st.synWave = (st.synWave + 1) % st.synWaveNames.size }),
+            Toggle({ "AKKORD: " + st.synChordNames[st.synChord] }, { st.synChord != 0 }, { st.synChord = (st.synChord + 1) % st.synChordNames.size }),
+            Toggle({ "FX-BUS" }, { st.synFx }, { st.synFx = !st.synFx }),
+            Toggle({ "🎲 ZUFALL" }, { false }, { Engine.pushPatternUndo("SYNTH Zufall"); st.synRandom() })
+        )
+        return if (mel) listOf(
             Toggle({ if (st.acidOn) "● AN" else "○ AUS" }, { st.acidOn }, { st.acidOn = !st.acidOn }),
             Toggle({ if (st.acidSquare) "⊓ SQUARE" else "⩘ SAW" }, { st.acidSquare }, { st.acidSquare = !st.acidSquare }),
             Toggle({ "FX-BUS" }, { st.acidFx }, { st.acidFx = !st.acidFx }),
@@ -590,7 +629,7 @@ class InstEditor(private val host: View) {
         )
     }
 
-    private fun soundArea(): RectF = RectF(if (kind == 2) grid.left else keys.left, grid.top, grid.right, if (kind == 1) scroll.bottom else grid.bottom)
+    private fun soundArea(): RectF = RectF(if (kind == 2) grid.left else keys.left, grid.top, grid.right, if (mel) scroll.bottom else grid.bottom)
 
     private fun drawSound(c: Canvas, acc: Int) {
         if (kind == 2) drawDrumNamesOnly(c, acc)
@@ -647,6 +686,7 @@ class InstEditor(private val host: View) {
 
     // ---------------------------------------------------------------- Bedienung
 
+    private val SYN_TAG = 77
     private val D_NONE = 0
     private val D_MOVE = 1
     private val D_RESIZE = 2
@@ -691,7 +731,7 @@ class InstEditor(private val host: View) {
             MotionEvent.ACTION_CANCEL -> {
                 drag = D_NONE
                 ptr = -1
-                if (liveSemi != Int.MIN_VALUE) { Engine.acidLiveOff(); liveSemi = Int.MIN_VALUE }
+                if (liveSemi != Int.MIN_VALUE) { liveOff(); liveSemi = Int.MIN_VALUE }
             }
         }
     }
@@ -728,15 +768,15 @@ class InstEditor(private val host: View) {
         }
         if (keys.contains(x, y)) {
             ptr = id; drag = D_KEYS
-            if (kind == 1) {
+            if (mel) {
                 keysTop0 = topSemi
                 val s = semiAt(y)
                 liveSemi = s
-                Engine.acidLiveOn(s, false)
+                liveOn(s, false)
                 // alle Noten dieser Tonhöhe markieren – danach als Gruppe verschieben
                 if (!Engine.seqRecording) {
                     sel.clear()
-                    for (k in 0 until len) if (aHead(k) && st.acidSemi[k] == s) sel.add(k)
+                    for (k in 0 until len) if (aHead(k) && aSemi[k] == s) sel.add(k)
                     if (sel.isNotEmpty()) onHint?.invoke("${sel.size} Noten markiert – eine davon ziehen verschiebt alle")
                 }
             } else {
@@ -753,23 +793,23 @@ class InstEditor(private val host: View) {
             haptic()
             return
         }
-        if (kind == 1 && (accLane.contains(x, y) || sliLane.contains(x, y))) {
+        if (mel && (accLane.contains(x, y) || sliLane.contains(x, y))) {
             val k = colAt(x)
             Engine.pushPatternUndo("ACID Accent/Slide")
             if (accLane.contains(x, y)) {
                 val h = aCover(k)
-                if (h >= 0) st.acidAcc[h] = !st.acidAcc[h]
-            } else if (st.acidGate[k]) {
+                if (h >= 0) aAcc[h] = !aAcc[h]
+            } else if (aGate[k]) {
                 val h = aCover(k)
                 val end = h + aLen(h) - 1
-                st.acidSlide[end] = !st.acidSlide[end]
+                aSlide[end] = !aSlide[end]
             }
             haptic()
             return
         }
         if (!grid.contains(x, y)) return
         ptr = id
-        if (kind == 1) acidDown(x, y) else drumDown(x, y)
+        if (mel) acidDown(x, y) else drumDown(x, y)
     }
 
     private fun acidDown(x: Float, y: Float) {
@@ -780,7 +820,7 @@ class InstEditor(private val host: View) {
         newNote = false
         dApplied = 0
         dAppliedSemi = 0
-        if (h >= 0 && st.acidSemi[h] == semi) {
+        if (h >= 0 && aSemi[h] == semi) {
             dHead = h
             dLen0 = aLen(h)
             val endX = colX(h + dLen0)
@@ -795,8 +835,8 @@ class InstEditor(private val host: View) {
             } else if (h !in sel) {
                 sel.clear()
             }
-            Engine.acidLiveOn(semi, false)
-            host.postDelayed({ Engine.acidLiveOff() }, 150L)
+            liveOn(semi, false)
+            host.postDelayed({ liveOff() }, 150L)
             return
         }
         if (selMode) {
@@ -804,15 +844,15 @@ class InstEditor(private val host: View) {
             rubber.set(x, y, x, y)
             return
         }
-        Engine.pushPatternUndo("ACID Note")
+        Engine.pushPatternUndo(if (kind == 3) "SYNTH Note" else "ACID Note")
         aSet(k, semi, 1, false, false)
         sel.clear()
         dHead = k
         dLen0 = 1
         newNote = true
         drag = D_RESIZE
-        Engine.acidLiveOn(semi, false)
-        host.postDelayed({ Engine.acidLiveOff() }, 150L)
+        liveOn(semi, false)
+        host.postDelayed({ liveOff() }, 150L)
         haptic()
     }
 
@@ -871,7 +911,7 @@ class InstEditor(private val host: View) {
                 sliders()[sliderIdx].set(((x - r.left) / r.width()).coerceIn(0f, 1f))
             }
             D_SCROLL -> scrollTo(x)
-            D_KEYS -> if (kind == 1) {
+            D_KEYS -> if (mel) {
                 // senkrecht ziehen = Klaviatur verschieben, sonst Ton wechseln
                 if (abs(y - downY) > dp(30f) && abs(x - downX) > dp(30f)) {
                     topSemi = (keysTop0 + ((y - downY) / rowH()).toInt()).coerceIn(-12 + rowsA - 1, 36)
@@ -879,21 +919,21 @@ class InstEditor(private val host: View) {
                     val s = semiAt(y)
                     if (s != liveSemi) {
                         liveSemi = s
-                        Engine.acidLiveOn(s, true)
+                        liveOn(s, true)
                     }
                 }
             }
-            D_RESIZE -> if (kind == 1) {
+            D_RESIZE -> if (mel) {
                 val end = max(dHead + 1, colAt(x) + 1)
                 if (first && !newNote) Engine.pushPatternUndo("ACID Notenlänge")
-                aSet(dHead, st.acidSemi[dHead], end - dHead, st.acidAcc[dHead], st.acidSlide[dHead + aLen(dHead) - 1], st.acidVel[dHead])
+                aSet(dHead, aSemi[dHead], end - dHead, aAcc[dHead], aSlide[dHead + aLen(dHead) - 1], aVel[dHead])
             }
             D_MOVE -> {
                 if (first) Engine.pushPatternUndo("Noten verschieben")
                 val dc = ((x - downX) / colW()).let { Math.round(it) }
-                val dr = if (kind == 1) -Math.round((y - downY) / rowH()) else Math.round((y - downY) / rowH())
+                val dr = if (mel) -Math.round((y - downY) / rowH()) else Math.round((y - downY) / rowH())
                 if (dc != dApplied || dr != dAppliedSemi) {
-                    if (kind == 1) moveAcid(dc - dApplied, dr - dAppliedSemi) else moveDrum(dc - dApplied, dr - dAppliedSemi)
+                    if (mel) moveAcid(dc - dApplied, dr - dAppliedSemi) else moveDrum(dc - dApplied, dr - dAppliedSemi)
                     dApplied = dc
                     dAppliedSemi = dr
                 }
@@ -903,12 +943,12 @@ class InstEditor(private val host: View) {
                 sel.clear()
                 val c0 = colAt(rubber.left)
                 val c1 = colAt(rubber.right)
-                if (kind == 1) {
+                if (mel) {
                     val sTop = semiAt(rubber.top)
                     val sBot = semiAt(rubber.bottom)
                     for (k in 0 until len) if (aHead(k)) {
                         val n = aLen(k)
-                        if (k <= c1 && k + n - 1 >= c0 && st.acidSemi[k] in sBot..sTop) sel.add(k)
+                        if (k <= c1 && k + n - 1 >= c0 && aSemi[k] in sBot..sTop) sel.add(k)
                     }
                 } else {
                     val v0 = voiceAt(rubber.top)
@@ -933,12 +973,12 @@ class InstEditor(private val host: View) {
         val st = InstState
         val long = SystemClock.uptimeMillis() - downT > 450
         when (drag) {
-            D_KEYS -> if (kind == 1) { Engine.acidLiveOff(); liveSemi = Int.MIN_VALUE }
-            D_MOVE -> if (!moved && kind == 1) {
-                if (long) {
+            D_KEYS -> if (mel) { liveOff(); liveSemi = Int.MIN_VALUE }
+            D_MOVE -> if (!moved && mel) {
+                if (long && kind == 1) {
                     Engine.pushPatternUndo("ACID Accent")
-                    st.acidAcc[dHead] = !st.acidAcc[dHead]
-                    onHint?.invoke(if (st.acidAcc[dHead]) "Accent an" else "Accent aus")
+                    aAcc[dHead] = !aAcc[dHead]
+                    onHint?.invoke(if (aAcc[dHead]) "Accent an" else "Accent aus")
                 } else if (selMode) {
                     // nochmal antippen = abwählen (wenn schon markiert)
                     if (downWasSelected) sel.remove(dHead)
@@ -956,7 +996,7 @@ class InstEditor(private val host: View) {
                 st.drumSteps[cellVoice][cellStep] = 0
                 sel.remove(cellVoice * InstState.MAX + cellStep)
             }
-            D_RESIZE -> if (!moved && !newNote && kind == 1) {
+            D_RESIZE -> if (!moved && !newNote && mel) {
                 Engine.pushPatternUndo("ACID Note löschen")
                 aDelete(dHead)
             }
@@ -992,7 +1032,7 @@ class InstEditor(private val host: View) {
         val st = InstState
         val wasSel = dHead in sel
         val heads = if (sel.isNotEmpty() && wasSel) sel.toList() else listOf(dHead)
-        val notes = heads.filter { aHead(it) }.map { h -> AClip(h, st.acidSemi[h], aLen(h), st.acidAcc[h], st.acidSlide[h + aLen(h) - 1], st.acidVel[h]) }
+        val notes = heads.filter { aHead(it) }.map { h -> AClip(h, aSemi[h], aLen(h), aAcc[h], aSlide[h + aLen(h) - 1], aVel[h]) }
         for (n in notes) aDelete(n.rel)
         val newHeads = ArrayList<Int>()
         for (n in notes) {
@@ -1004,8 +1044,8 @@ class InstEditor(private val host: View) {
         if (wasSel) sel.addAll(newHeads)
         dHead = Math.floorMod(dHead + dc, len)
         if (dr != 0) {
-            Engine.acidLiveOn(st.acidSemi[dHead], false)
-            host.postDelayed({ Engine.acidLiveOff() }, 120L)
+            liveOn(aSemi[dHead], false)
+            host.postDelayed({ liveOff() }, 120L)
         }
     }
 
@@ -1042,13 +1082,13 @@ class InstEditor(private val host: View) {
                 Engine.pushPatternUndo("Pattern-Länge")
                 // neue Takte mit dem ersten Takt füllen, damit es weiterläuft
                 if (nl > len) {
-                    if (kind == 1) for (k in len until nl) {
+                    if (mel) for (k in len until nl) {
                         val s = k % 16
-                        st.acidGate[k] = st.acidGate[s]; st.acidSemi[k] = st.acidSemi[s]; st.acidAcc[k] = st.acidAcc[s]
-                        st.acidSlide[k] = st.acidSlide[s]; st.acidTie[k] = st.acidTie[s] && s != 0
+                        aGate[k] = aGate[s]; aSemi[k] = aSemi[s]; aAcc[k] = aAcc[s]
+                        aSlide[k] = aSlide[s]; aTie[k] = aTie[s] && s != 0
                     } else for (v in 0 until InstState.DV) for (k in len until nl) st.drumSteps[v][k] = st.drumSteps[v][k % 16]
                 }
-                if (kind == 1) st.acidLen = nl else st.drumLen = nl
+                when (kind) { 1 -> st.acidLen = nl; 3 -> st.synLen = nl; else -> st.drumLen = nl }
                 col0 = col0.coerceIn(0, max(0, nl - visCols))
                 sel.clear()
                 onHint?.invoke("${nl / 16} Takt" + (if (nl > 16) "e" else "") + if (nl > 16) " – neue Takte als Kopie des ersten" else "")
@@ -1057,19 +1097,20 @@ class InstEditor(private val host: View) {
             bMode.contains(x, y) -> {
                 selMode = !selMode
                 onHint?.invoke(if (selMode) "⬚ Auswahl: Noten antippen oder Rahmen ziehen, Markierte ziehen = verschieben, ins Leere tippen = Einfügemarke"
-                               else if (kind == 1) "✏ Stift: Feld antippen setzt Note (ziehen = länger), Note antippen löscht, lange drücken = Accent, Note ziehen = verschieben"
+                               else if (kind == 3) "✏ Stift: Feld antippen setzt Note (ziehen = länger), Note antippen löscht, Note ziehen = verschieben"
+                               else if (mel) "✏ Stift: Feld antippen setzt Note (ziehen = länger), Note antippen löscht, lange drücken = Accent, Note ziehen = verschieben"
                                else "✏ Stift: Felder antippen/ziehen setzt Schläge, antippen löscht, lange drücken = Accent")
             }
             bZoomIn.contains(x, y) -> { zoom = min(4, zoom * 2); col0 = col0.coerceIn(0, max(0, len - visCols)) }
             bZoomOut.contains(x, y) -> { zoom = max(1, zoom / 2); col0 = col0.coerceIn(0, max(0, len - visCols)) }
             bClear.contains(x, y) -> {
-                Engine.pushPatternUndo(if (kind == 1) "ACID leeren" else "DRUM leeren")
-                if (kind == 1) st.acidClear() else st.drumClear()
+                Engine.pushPatternUndo(when (kind) { 1 -> "ACID leeren"; 3 -> "SYNTH leeren"; else -> "DRUM leeren" })
+                when (kind) { 1 -> st.acidClear(); 3 -> st.synClear(); else -> st.drumClear() }
                 sel.clear()
             }
             bAll.contains(x, y) -> {
                 val all = HashSet<Int>()
-                if (kind == 1) { for (k in 0 until len) if (aHead(k)) all.add(k) }
+                if (mel) { for (k in 0 until len) if (aHead(k)) all.add(k) }
                 else for (v in 0 until InstState.DV) for (k in 0 until len) if (st.drumSteps[v][k] > 0) all.add(v * InstState.MAX + k)
                 if (all.isNotEmpty() && sel.containsAll(all)) sel.clear() else { sel.clear(); sel.addAll(all) }
             }
@@ -1078,7 +1119,7 @@ class InstEditor(private val host: View) {
             bDel.contains(x, y) -> {
                 if (sel.isEmpty()) { onHint?.invoke("Nichts markiert"); return true }
                 Engine.pushPatternUndo("Löschen")
-                if (kind == 1) for (h in sel) { if (aHead(h)) aDelete(h) } else for (key in sel) st.drumSteps[key / InstState.MAX][key % InstState.MAX] = 0
+                if (mel) for (h in sel) { if (aHead(h)) aDelete(h) } else for (key in sel) st.drumSteps[key / InstState.MAX][key % InstState.MAX] = 0
                 sel.clear()
             }
             bExtra.contains(x, y) -> {
@@ -1097,10 +1138,10 @@ class InstEditor(private val host: View) {
         val heads = if (sel.isNotEmpty()) sel.toList() else (0 until len).filter { aHead(it) }
         if (heads.isEmpty()) return
         Engine.pushPatternUndo("Transponieren")
-        val up = heads.all { st.acidSemi[it] < 24 }
+        val up = heads.all { aSemi[it] < 24 }
         for (h in heads) if (aHead(h)) {
             val n = aLen(h)
-            for (k in h until h + n) st.acidSemi[k] = (st.acidSemi[k] + if (up) 1 else -12).coerceIn(-24, 36)
+            for (k in h until h + n) aSemi[k] = (aSemi[k] + if (up) 1 else -12).coerceIn(-24, 36)
         }
         onHint?.invoke(if (up) "+1 Halbton" else "Zurück um eine Oktave")
     }
@@ -1108,11 +1149,11 @@ class InstEditor(private val host: View) {
     private fun copy() {
         val st = InstState
         if (sel.isEmpty()) { onHint?.invoke("Erst Noten markieren (⬚ AUSWAHL oder ALLE)"); return }
-        if (kind == 1) {
+        if (mel) {
             val heads = sel.filter { aHead(it) }.sorted()
             if (heads.isEmpty()) return
             val s0 = heads.first()
-            aClip = heads.map { h -> AClip(h - s0, st.acidSemi[h], aLen(h), st.acidAcc[h], st.acidSlide[h + aLen(h) - 1], st.acidVel[h]) }
+            aClip = heads.map { h -> AClip(h - s0, aSemi[h], aLen(h), aAcc[h], aSlide[h + aLen(h) - 1], aVel[h]) }
             val end = heads.maxOf { it + aLen(it) }
             clipSpan = ((end - s0 + 3) / 4) * 4
             insert = (s0 + clipSpan).let { if (it >= len) 0 else it }
@@ -1131,7 +1172,7 @@ class InstEditor(private val host: View) {
     private fun paste() {
         val st = InstState
         val at = if (insert >= 0) insert else 0
-        if (kind == 1) {
+        if (mel) {
             if (aClip.isEmpty()) { onHint?.invoke("Zwischenablage leer – erst KOPIE"); return }
             Engine.pushPatternUndo("Einfügen")
             sel.clear()
@@ -1164,9 +1205,9 @@ class InstEditor(private val host: View) {
             return
         }
         Engine.pushPatternUndo("Quantisieren")
-        if (kind == 1) {
+        if (mel) {
             val heads = (if (sel.isNotEmpty()) sel.toList() else (0 until len).filter { aHead(it) }).filter { aHead(it) }.sorted()
-            val notes = heads.map { h -> AClip(h, st.acidSemi[h], aLen(h), st.acidAcc[h], st.acidSlide[h + aLen(h) - 1], st.acidVel[h]) }
+            val notes = heads.map { h -> AClip(h, aSemi[h], aLen(h), aAcc[h], aSlide[h + aLen(h) - 1], aVel[h]) }
             for (n in notes) aDelete(n.rel)
             sel.clear()
             for (n in notes) {

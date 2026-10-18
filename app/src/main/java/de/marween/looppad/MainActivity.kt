@@ -1238,7 +1238,39 @@ class MainActivity : Activity() {
 
     // ================================================================ ACID/DRUM: Presets
 
+    private fun showSynthPresets() {
+        val genres = InstPresets.SYNTHS.map { it.genre }.distinct()
+        val items = listOf("🎲 Zufallsmelodie") + genres.map { g -> "$g (${InstPresets.SYNTHS.count { it.genre == g }})" } + listOf("📥 Eigene MIDI-Datei laden …")
+        AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
+            .setTitle("🎹 SYNTH · Presets")
+            .setItems(items.toTypedArray()) { _, w ->
+                when {
+                    w == 0 -> {
+                        Engine.pushPatternUndo("SYNTH Zufall")
+                        InstState.synRandom()
+                        hint("🎲 Neue Zufallsmelodie – nochmal für eine andere")
+                    }
+                    w == items.size - 1 -> showInstMidi(3)
+                    else -> {
+                        val g = genres[w - 1]
+                        val list = InstPresets.SYNTHS.filter { it.genre == g }
+                        AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK).setTitle(g)
+                            .setItems(list.map { "${it.name} · ${it.bpm} BPM" }.toTypedArray()) { _, i ->
+                                val p = list[i]
+                                Engine.pushPatternUndo("SYNTH Preset")
+                                InstPresets.applySynth(p)
+                                presetTempo(p.bpm)
+                                hint("SYNTH: ${p.name} – Klang ${InstState.synWaveNames[p.wave]}" + if (p.chord != 0) " · Akkord ${InstState.synChordNames[p.chord]}" else "")
+                            }.show()
+                    }
+                }
+            }
+            .setNegativeButton("Abbrechen", null)
+            .show()
+    }
+
     private fun showInstPresets(k: Int) {
+        if (k == 3) { showSynthPresets(); return }
         val isAcid = k == 1
         val genres = if (isAcid) InstPresets.ACIDS.map { it.genre }.distinct() else InstPresets.DRUMS.map { it.genre }.distinct()
         val items = listOf("🎲 Zufall (Acid-Banger-Generator)") + genres.map { g ->
@@ -1303,7 +1335,7 @@ class MainActivity : Activity() {
 
     private fun showInstMidi(k: Int) {
         instIoKind = k
-        val name = if (k == 1) "ACID 303" else "DRUM 909"
+        val name = when (k) { 1 -> "ACID 303"; 3 -> "SYNTH"; else -> "DRUM 909" }
         AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
             .setTitle("$name · Noten")
             .setItems(arrayOf(
@@ -1316,7 +1348,7 @@ class MainActivity : Activity() {
                     val i = Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
                         addCategory(Intent.CATEGORY_OPENABLE)
                         type = "audio/midi"
-                        putExtra(Intent.EXTRA_TITLE, "MarvPAD_${if (k == 1) "ACID" else "DRUM"}_$stamp.mid")
+                        putExtra(Intent.EXTRA_TITLE, "MarvPAD_${when (k) { 1 -> "ACID"; 3 -> "SYNTH"; else -> "DRUM" }}_$stamp.mid")
                     }
                     try { startActivityForResult(i, REQ_INST_OUT) } catch (e: Exception) { toast("Kein Dateimanager gefunden") }
                 } else {
@@ -1336,7 +1368,20 @@ class MainActivity : Activity() {
     private fun writeInstMidi(uri: Uri) {
         val st = InstState
         val notes = ArrayList<MidiFile.Note>()
-        if (instIoKind == 1) {
+        if (instIoKind == 3) {
+            // Synth: Akkorde werden als einzelne Noten geschrieben
+            val iv = st.synChordIv[st.synChord.coerceIn(0, st.synChordIv.size - 1)]
+            val len = st.synLen
+            var k = 0
+            while (k < len) {
+                if (!st.synGate[k] || (k > 0 && st.synTie[k] && st.synGate[k - 1])) { k++; continue }
+                var n = 1
+                while (k + n < len && st.synGate[k + n] && st.synTie[k + n]) n++
+                val vel = (110 * st.synVel[k]).toInt().coerceIn(1, 127)
+                for (o in iv) notes.add(MidiFile.Note(k / 4.0, n / 4.0 - 0.02, (60 + 12 * st.synOct + st.synSemi[k] + o).coerceIn(0, 127), vel))
+                k += n
+            }
+        } else if (instIoKind == 1) {
             val len = st.acidLen
             var k = 0
             while (k < len) {
@@ -1358,7 +1403,7 @@ class MainActivity : Activity() {
         }
         if (notes.isEmpty()) { toast("Keine Noten im Pattern"); return }
         try {
-            val bytes = MidiFile.exportRaw(notes, Engine.currentBpm(), if (instIoKind == 1) "Marv PAD · ACID 303" else "Marv PAD · DRUM 909", if (instIoKind == 1) 0 else 9)
+            val bytes = MidiFile.exportRaw(notes, Engine.currentBpm(), when (instIoKind) { 1 -> "Marv PAD · ACID 303"; 3 -> "Marv PAD · SYNTH"; else -> "Marv PAD · DRUM 909" }, if (instIoKind == 2) 9 else 0)
             contentResolver.openOutputStream(uri)?.use { it.write(bytes) }
             toast("MIDI-Datei gespeichert (${notes.size} Noten)")
         } catch (e: Exception) {
@@ -1383,7 +1428,30 @@ class MainActivity : Activity() {
             while (need < InstState.MAX && need < end * 4 - 1e-6) need += 16
             Engine.pushPatternUndo("MIDI-Import")
             var count = 0
-            if (instIoKind == 1) {
+            if (instIoKind == 3) {
+                // Synth: je Schritt die höchste Note (Melodie); Akkorde stellt der AKKORD-Schalter
+                if (!instIoAdd) st.synClear()
+                st.synLen = max(if (instIoAdd) st.synLen else 16, need)
+                val byStep = parsed.notes.groupBy { Math.round(it.beat * 4).toInt() }
+                for ((k, list) in byStep.toSortedMap()) {
+                    if (k !in 0 until st.synLen) continue
+                    val nt = list.maxByOrNull { it.pitch } ?: continue
+                    var semi = nt.pitch - 60 - 12 * st.synOct
+                    while (semi > 24) semi -= 12
+                    while (semi < -12) semi += 12
+                    val steps = max(1, Math.round(nt.len * 4).toInt())
+                    for (j in 0 until steps) {
+                        val s2 = k + j
+                        if (s2 >= st.synLen) break
+                        if (j > 0 && byStep.containsKey(s2)) break
+                        st.synGate[s2] = true
+                        st.synTie[s2] = j > 0
+                        st.synSemi[s2] = semi
+                        st.synVel[s2] = (nt.vel / 127f).coerceIn(0.05f, 1f)
+                    }
+                    count++
+                }
+            } else if (instIoKind == 1) {
                 if (!instIoAdd) st.acidClear()
                 st.acidLen = max(if (instIoAdd) st.acidLen else 16, need)
                 val ns = parsed.notes.sortedBy { it.beat }
@@ -1424,7 +1492,7 @@ class MainActivity : Activity() {
                 }
                 if (skipped > 0) toast("$skipped Noten ohne passendes Instrument übersprungen")
             }
-            toast("$count Noten geladen · ${(if (instIoKind == 1) st.acidLen else st.drumLen) / 16} Takt(e)")
+            toast("$count Noten geladen · ${(when (instIoKind) { 1 -> st.acidLen; 3 -> st.synLen; else -> st.drumLen }) / 16} Takt(e)")
         } catch (e: Exception) {
             toast("Import fehlgeschlagen: ${e.message ?: e}")
         }
