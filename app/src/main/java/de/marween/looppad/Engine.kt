@@ -1885,9 +1885,16 @@ object Engine {
             var cm = 0
             var cim = 0
             for (p in 0 until PADS) {
-                val tk = takes.get(p) ?: continue
-                if (tk.src == 2) cm = cm or tk.mask
-                if (tk.src == 3) cim = cim or tk.mask
+                val tk = takes.get(p)
+                if (tk != null) {
+                    if (tk.src == 2) cm = cm or tk.mask
+                    if (tk.src == 3) cim = cim or tk.mask
+                } else if (loops.get(p) == null) {
+                    // bereitstehende Pads mit Pad-/Instrument-Eingang: schon vorher mitschneiden,
+                    // damit eine Aufnahme auch vor dem Tastendruck (Raster, Übergang) Material hat
+                    if (padSource[p] == 2) cm = cm or (padSrcMask[p] and (1 shl p).inv())
+                    if (padSource[p] == 3) cim = cim or (padInstMask[p] and 7)
+                }
             }
             captureMask = cm
             captureInst = cim
@@ -2424,11 +2431,33 @@ object Engine {
         if (len < minFrames) return
         val data = FloatArray(len)
         for (i in 0 until len) data[i] = ringSrc[Math.floorMod(from + i, size.toLong()).toInt()]
-        val fade = min(len / 4, sampleRate * FADE_MS / 1000)
-        for (i in 0 until fade) {
-            val g = i.toFloat() / fade
-            data[i] *= g
-            data[len - 1 - i] *= g
+        if (take.oneShot) {
+            val fade = min(len / 4, sampleRate * FADE_MS / 1000)
+            for (i in 0 until fade) {
+                val g = i.toFloat() / fade
+                data[i] *= g
+                data[len - 1 - i] *= g
+            }
+        } else {
+            // Nahtloser Loop: das Ende gleichmäßig in das hineinblenden, was direkt vor dem Anfang
+            // lief (equal power) – so geht der Loop ohne Lücke, Knacks oder Lautstärke-Delle in sich über.
+            val xf = min(len / 8, sampleRate * 12 / 1000)
+            val preOk = from - xf > endWritten - size + 1
+            if (preOk) {
+                for (i in 0 until xf) {
+                    val t = (i + 1).toFloat() / (xf + 1)
+                    val pre = ringSrc[Math.floorMod(from - xf + i, size.toLong()).toInt()]
+                    val k = len - xf + i
+                    data[k] = data[k] * kotlin.math.cos(t * Math.PI.toFloat() / 2f) + pre * kotlin.math.sin(t * Math.PI.toFloat() / 2f)
+                }
+            } else {
+                val fade = min(len / 4, sampleRate * FADE_MS / 1000)
+                for (i in 0 until fade) {
+                    val g = i.toFloat() / fade
+                    data[i] *= g
+                    data[len - 1 - i] *= g
+                }
+            }
         }
         val loop = Loop(data)
         loop.start = from
