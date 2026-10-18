@@ -699,6 +699,20 @@ object Engine {
     /** Vorhören eines Ausschnitts (Wave-Editor). */
     fun preview(data: FloatArray): Int = startVoice(data, -1, 1.0, false)
 
+    /** Vorhören mit anderer Geschwindigkeit (Pitch ohne Keylock). */
+    fun previewRate(data: FloatArray, rate: Double, loop: Boolean): Int = startVoice(data, -1, rate, loop)
+
+    /**
+     * Pitch wie am DJ-Pult: [semi] Halbtöne schneller/langsamer.
+     * Ohne Keylock ändern sich Tempo und Tonhöhe, mit Keylock nur das Tempo (Tonhöhe bleibt).
+     */
+    fun pitchProcess(x: FloatArray, semi: Float, keylock: Boolean): FloatArray {
+        if (semi == 0f || x.size < 64) return x
+        val f = 2.0.pow(semi / 12.0)
+        val n = max(64, (x.size / f).toInt())
+        return if (keylock) Warp.stretch(x, n, sampleRate) else Warp.resampleLen(x, n)
+    }
+
     /** Endlos-Vorhören (Wave-Editor): [data] enthält am Ende eine Kopie des ersten Samples,
      *  damit der Übergang E→S exakt ohne ausgelassenes Sample läuft. */
     fun previewLoop(data: FloatArray): Int = startVoice(data, -1, 1.0, true)
@@ -1033,16 +1047,21 @@ object Engine {
     fun hasTempo(): Boolean = masterLen > 0L
 
     /** Schneidet einen Pad-Inhalt zu und zerlegt ihn optional in Slices, die dem Tempo folgen. */
-    fun applyEdit(p: Int, start: Int, end: Int, slices: Int, bars: Float) {
+    fun applyEdit(p: Int, start: Int, end: Int, slices: Int, bars: Float, pitch: Float = 0f, keylock: Boolean = false) {
         val l = loops.get(p) ?: return
         val slicing = !l.oneShot && slices > 1
         pushUndo(if (slicing) "Slices Pad ${p + 1}" else "Wave-Editor Pad ${p + 1}", intArrayOf(p), slicing)
         val s0 = start.coerceIn(0, max(0, l.data.size - 2))
         val e0 = end.coerceIn(s0 + 2, l.data.size)
-        val data = l.data.copyOfRange(s0, e0)
+        val data = pitchProcess(l.data.copyOfRange(s0, e0), pitch, keylock)
         if (l.oneShot || slices <= 1) {
             padOneShot[p] = l.oneShot
             val semi = l.semi
+            if (l.free && !l.oneShot) {
+                // Original-Tempo-Pad bleibt frei (neue Länge durch Pitch bleibt erhalten)
+                importFree(p, data)
+                return
+            }
             val m = masterLen
             if (!l.oneShot && m > 0L && bars > 0f) {
                 // Loop zuschneiden: Auswahl exakt auf [bars] Takte bringen (minimal dehnen statt

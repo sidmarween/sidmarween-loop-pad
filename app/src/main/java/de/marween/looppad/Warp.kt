@@ -205,6 +205,9 @@ object Warp {
         return out
     }
 
+    /** Umrechnen auf eine neue Länge (ändert Tonhöhe und Tempo, wie ein Plattenspieler). */
+    fun resampleLen(x: FloatArray, len: Int): FloatArray = resample(x, max(1, len))
+
     /** Einfaches Umrechnen (ändert die Tonhöhe) – nur für sehr kurze Schnipsel. */
     private fun resample(x: FloatArray, len: Int): FloatArray {
         val out = FloatArray(len)

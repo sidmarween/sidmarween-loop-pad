@@ -6137,6 +6137,14 @@ class PadView(context: Context) : View(context) {
     private val edWave = RectF()
     private val edKnobSlices = RectF()
     private val edKnobBars = RectF()
+    private val edKnobPitch = RectF()
+    private val edBtnKeylock = RectF()
+    /** Pitch in Halbtönen (−12 … +12) und Keylock (Tonhöhe halten, nur Tempo ändern). */
+    private var edPitch = 0
+    private var edKeylock = false
+    private var edPitchTapT = 0L
+    /** Umrechnung Vorhör-Position → Position in den Original-Daten (bei Keylock-Vorhören). */
+    private var edHeadScale = 1.0
     private val edBtnPlay = RectF()
     private val edBtnCut = RectF()
     private val edBtnSlice = RectF()
@@ -6200,6 +6208,7 @@ class PadView(context: Context) : View(context) {
         if (edPreview >= 0) Engine.noteOff(edPreview)
         edPreview = -1
         edLooping = false
+        edPrevGen++
     }
 
     /** S…E endlos abspielen – genau so, wie der Loop später auf dem Pad läuft. */
@@ -6212,8 +6221,7 @@ class PadView(context: Context) : View(context) {
         d[len] = edData[edStart]
         edPlayFrom = edStart
         edHead = edStart
-        edPreview = Engine.previewLoop(d)
-        edLooping = edPreview >= 0
+        edPitchedPreview(d, true)
     }
 
     /** Abspielen ab [from] bis zum Endpunkt E (bzw. Dateiende, wenn der Kopf hinter E liegt). */
@@ -6223,8 +6231,36 @@ class PadView(context: Context) : View(context) {
         if (to - from < 2) return
         edPlayFrom = from
         edHead = from
-        edPreview = Engine.preview(edData.copyOfRange(from, to))
+        edPitchedPreview(edData.copyOfRange(from, to), false)
     }
+
+    /** Vorhören mit PITCH: ohne Keylock schneller/langsamer, mit Keylock gedehnt (Tonhöhe bleibt). */
+    private fun edPitchedPreview(seg: FloatArray, loop: Boolean) {
+        val f = Math.pow(2.0, edPitch / 12.0)
+        if (edPitch == 0) {
+            edHeadScale = 1.0
+            edPreview = if (loop) Engine.previewLoop(seg) else Engine.preview(seg)
+            edLooping = loop && edPreview >= 0
+        } else if (!edKeylock) {
+            edHeadScale = 1.0
+            edPreview = Engine.previewRate(seg, f, loop)
+            edLooping = loop && edPreview >= 0
+        } else {
+            edToast("Keylock: wird gedehnt …")
+            val gen = ++edPrevGen
+            Thread {
+                val st = Engine.pitchProcess(if (loop) seg.copyOf(seg.size - 1) else seg, edPitch.toFloat(), true)
+                val d = if (loop) st.copyOf(st.size + 1).also { it[st.size] = st[0] } else st
+                post {
+                    if (gen != edPrevGen || edPad < 0) return@post
+                    edHeadScale = f
+                    edPreview = if (loop) Engine.previewLoop(d) else Engine.preview(d)
+                    edLooping = loop && edPreview >= 0
+                }
+            }.start()
+        }
+    }
+    private var edPrevGen = 0
 
     /** Kopfposition beim Abspielen nachführen (und vergrößert mitscrollen). */
     private fun edUpdateHead() {
@@ -6234,7 +6270,8 @@ class PadView(context: Context) : View(context) {
             edPreview = -1
             return
         }
-        edHead = (edPlayFrom + (if (edLooping) pos % max(1, edEnd - edStart) else pos)).toInt().coerceIn(0, edData.size)
+        val sp = pos * edHeadScale
+        edHead = (edPlayFrom + (if (edLooping) sp % max(1, edEnd - edStart) else sp)).toInt().coerceIn(0, edData.size)
         val span = edV1 - edV0
         if (span < edData.size && (edHead > edV1 || edHead < edV0) && edDrag == 0) {
             val v0 = (edHead - span / 10).coerceIn(0, max(0, edData.size - span))
@@ -6263,6 +6300,8 @@ class PadView(context: Context) : View(context) {
         edBars = if (Engine.padSlices(p) > 1) Engine.padBars(p) else Engine.suggestBars(d.size)
         edMsg = ""
         edSnapMode = if (Engine.beatLen() > 0.0 && !Engine.isOneShot(p)) 2 else 1
+        edPitch = 0
+        edHeadScale = 1.0
         layoutEditor()
         computePeaks()
     }
@@ -6279,10 +6318,15 @@ class PadView(context: Context) : View(context) {
         for (i in tools.indices) tools[i].set(edRect.left + dp(12f) + i * (tbw + tg), ty, edRect.left + dp(12f) + i * (tbw + tg) + tbw, ty + dp(32f))
         edRuler.set(edRect.left + dp(12f), ty + dp(32f) + dp(8f), edRect.right - dp(12f), ty + dp(32f) + dp(30f))
         edWave.set(edRect.left + dp(12f), edRuler.bottom + dp(2f), edRect.right - dp(12f), edRuler.bottom + dp(2f) + edRect.height() * 0.30f)
-        val ks = dp(96f)
+        val ks = min(dp(86f), (edRect.width() - dp(24f) - dp(70f) - 3 * dp(12f)) / 3f)
         val ky = edWave.bottom + dp(52f)
-        edKnobSlices.set(edRect.centerX() - ks - dp(20f), ky, edRect.centerX() - dp(20f), ky + ks)
-        edKnobBars.set(edRect.centerX() + dp(20f), ky, edRect.centerX() + dp(20f) + ks, ky + ks)
+        val chipW = dp(70f)
+        val totalW = 3 * ks + 3 * dp(12f) + chipW
+        var kx = edRect.centerX() - totalW / 2f
+        edKnobSlices.set(kx, ky, kx + ks, ky + ks); kx += ks + dp(12f)
+        edKnobBars.set(kx, ky, kx + ks, ky + ks); kx += ks + dp(12f)
+        edKnobPitch.set(kx, ky, kx + ks, ky + ks); kx += ks + dp(12f)
+        edBtnKeylock.set(kx, ky + ks / 2f - dp(22f), kx + chipW, ky + ks / 2f + dp(22f))
         val by = edKnobSlices.bottom + dp(36f)
         val bw = (edRect.width() - dp(24f) - dp(10f)) / 2f
         val bh = dp(46f)
@@ -6456,6 +6500,16 @@ class PadView(context: Context) : View(context) {
                     }
                     edKnobSlices.contains(x, y) -> { edDrag = 3; edDragY = y; edDragVal = edSlices.toFloat() }
                     edKnobBars.contains(x, y) -> { edDrag = 4; edDragY = y; edDragVal = barOptions.indexOfFirst { it == edBars }.coerceAtLeast(0).toFloat() }
+                    edKnobPitch.contains(x, y) -> {
+                        val now = SystemClock.uptimeMillis()
+                        if (now - edPitchTapT < 320L) { edPitch = 0; edToast("Pitch 0") }
+                        edPitchTapT = now
+                        edDrag = 9; edDragY = y; edDragVal = edPitch.toFloat()
+                    }
+                    edBtnKeylock.contains(x, y) -> {
+                        edKeylock = !edKeylock
+                        edToast(if (edKeylock) "🔒 Keylock: Pitch ändert nur das Tempo – die Tonhöhe bleibt" else "Keylock aus: Pitch ändert Tempo und Tonhöhe (wie ein Plattenspieler)")
+                    }
                     edBtnPlay.contains(x, y) -> {
                         if (edPreview >= 0) edStopPreview() else edPlayFrom(edStart)
                     }
@@ -6469,9 +6523,17 @@ class PadView(context: Context) : View(context) {
                         if (edPreview >= 0) edStopPreview() else edPlayFrom(edHead.coerceIn(0, max(0, edData.size - 2)))
                     }
                     edBtnCut.contains(x, y) -> {
-                        Engine.applyEdit(edPad, edStart, edEnd, 1, edBars)
+                        val synced = !Engine.isOneShot(edPad) && !Engine.isFree(edPad) && Engine.beatLen() > 0.0
+                        val pitchMsg = when {
+                            edPitch == 0 -> ""
+                            synced && edKeylock -> " · Pitch mit Keylock: im Raster bleibt das Tempo – keine Änderung"
+                            synced -> " · ${if (edPitch > 0) "+" else ""}$edPitch HT transponiert"
+                            else -> " · Pitch ${if (edPitch > 0) "+" else ""}$edPitch HT" + if (edKeylock) " (Keylock)" else ""
+                        }
+                        Engine.applyEdit(edPad, edStart, edEnd, 1, edBars, edPitch.toFloat(), edKeylock)
+                        edPitch = 0
                         val bl = when (edBars) { 0.25f -> "¼"; 0.5f -> "½"; else -> edBars.toInt().toString() }
-                        reloadEditor(if (Engine.isOneShot(edPad) || Engine.beatLen() <= 0.0) "Zugeschnitten" else "Zugeschnitten – exakt $bl Takt" + (if (edBars > 1f) "e" else "") + ", läuft im Raster")
+                        reloadEditor((if (!synced) "Zugeschnitten" else "Zugeschnitten – exakt $bl Takt" + (if (edBars > 1f) "e" else "") + ", läuft im Raster") + pitchMsg)
                     }
                     edBtnSlice.contains(x, y) -> {
                         if (Engine.isOneShot(edPad)) {
@@ -6479,7 +6541,8 @@ class PadView(context: Context) : View(context) {
                         } else if (edSlices < 2) {
                             edToast("Mit dem SLICES-Regler mind. 2 wählen")
                         } else {
-                            Engine.applyEdit(edPad, edStart, edEnd, edSlices, edBars)
+                            Engine.applyEdit(edPad, edStart, edEnd, edSlices, edBars, edPitch.toFloat(), edKeylock)
+                            edPitch = 0
                             reloadEditor("$edSlices Slices – liegen jetzt als Noten S1…S$edSlices in der Piano-Roll (🎹)")
                         }
                     }
@@ -6533,6 +6596,7 @@ class PadView(context: Context) : View(context) {
                     }
                     3 -> edSlices = (edDragVal + (edDragY - y) / dp(12f)).toInt().coerceIn(1, 32)
                     4 -> edBars = barOptions[(edDragVal + (edDragY - y) / dp(30f)).toInt().coerceIn(0, barOptions.size - 1)]
+                    9 -> edPitch = Math.round(edDragVal + (edDragY - y) / dp(14f)).coerceIn(-12, 12)
                 }
             }
             MotionEvent.ACTION_UP, MotionEvent.ACTION_POINTER_UP, MotionEvent.ACTION_CANCEL -> {
@@ -6807,6 +6871,9 @@ class PadView(context: Context) : View(context) {
         editorKnob(canvas, edKnobSlices, (edSlices - 1) / 31f, "SLICES", if (edSlices <= 1) "AUS" else "$edSlices", cols)
         val bl = when (edBars) { 0.25f -> "¼"; 0.5f -> "½"; else -> edBars.toInt().toString() }
         editorKnob(canvas, edKnobBars, barOptions.indexOfFirst { it == edBars }.coerceAtLeast(0) / 5f, "TAKTE", bl, cols)
+        val pv = if (edPitch == 0) "0" else (if (edPitch > 0) "+" else "") + edPitch
+        editorKnob(canvas, edKnobPitch, (edPitch + 12) / 24f, "PITCH (HT)", pv, cols)
+        smallBtn(canvas, edBtnKeylock, if (edKeylock) "🔒 KEY" else "KEY AUS", edKeylock, cols)
 
         val playing = edPreview >= 0
         val playSel = playing && !edLooping && edPlayFrom == edStart
@@ -6916,6 +6983,8 @@ class PadView(context: Context) : View(context) {
                 edSnapBtn.contains(x, y) -> Triple(edSnapBtn, "SNAP", "♩ BEAT: Marker rasten auf die Schläge des Taktrasters (dünne Linien, Taktanfänge hell) – liegt kein Schlag in der Nähe, auf den nächsten Nulldurchgang. 0-SNAP: nur Nulldurchgänge (kein Knacksen). FREI: ohne Raster. Antippen schaltet um.")
                 edWave.contains(x, y) || (y > edWave.bottom && y < edWave.bottom + dp(30f)) -> Triple(edWave, "Wellenform", "Zeigt das Audio des Pads. Die Marker S (Start) und E (Ende) an der Wellenform ziehen, um den Ausschnitt zu wählen. Weiße Linien zeigen die Slices.")
                 edKnobSlices.contains(x, y) -> Triple(edKnobSlices, "SLICES", "Hoch/runter ziehen: teilt den Ausschnitt in 2–32 gleich lange Stücke. AUS = nicht slicen.")
+                edKnobPitch.contains(x, y) -> Triple(edKnobPitch, "PITCH", "Hoch/runter ziehen: ±12 Halbtöne schneller/langsamer – wie der Pitch am Plattenspieler. ▶ und 🔁 hören sofort mit Pitch vor, ✂ Zuschneiden bzw. Slicen wendet ihn an. Doppeltipp = 0. Bei Loops im Raster bleibt das Tempo (Master) – dort wirkt PITCH ohne Keylock als Transponieren.")
+                edBtnKeylock.contains(x, y) -> Triple(edBtnKeylock, "KEYLOCK", "🔒 an: Pitch ändert nur das Tempo, die Tonhöhe bleibt gleich (Time-Stretch). Aus: Tempo und Tonhöhe ändern sich zusammen.")
                 edKnobBars.contains(x, y) -> Triple(edKnobBars, "TAKTE", "Wie viele Takte der gesliceten Loop lang ist (¼ bis 8). Die Slices verteilen sich darauf und folgen jedem Tempo.")
                 edBtnPlay.contains(x, y) -> Triple(edBtnPlay, "Hören S…E", "Spielt den Ausschnitt von S bis E – der grüne Kopf zeigt, wo du gerade bist. Nochmal = Stopp.")
                 edBtnLoop.contains(x, y) -> Triple(edBtnLoop, "🔁 Loop S…E", "Spielt den Ausschnitt von S bis E endlos – genau so, wie er später als Loop auf dem Pad läuft. So hörst du, ob der Übergang nahtlos ist. Marker verschieben: beim Loslassen läuft sofort der neue Loop. 0-SNAP hilft gegen Knacksen. Nochmal = Stopp.")
