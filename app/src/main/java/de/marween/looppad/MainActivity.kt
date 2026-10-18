@@ -653,6 +653,110 @@ class MainActivity : Activity() {
         }.start()
     }
 
+    // ---------------------------------------------------------------- Auf die Eins tappen
+
+    /** Pad läuft im Rhythmus, aber versetzt: im Takt auf seine Eins tippen – der Loop wird auf die Eins des Rasters geschoben. */
+    private fun showTapAlign(p: Int) {
+        if (Engine.beatLen() <= 0.0) { toast("Erst braucht es ein Tempo (ein Loop oder Tempo einstellen)"); return }
+        val d = resources.displayMetrics.density
+        fun px(v: Float) = (v * d).toInt()
+        val taps = ArrayList<Long>()
+        val sr = Engine.sampleRate
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(px(18f), px(6f), px(18f), px(6f))
+        }
+        box.addView(TextView(this).apply {
+            text = "Lass Pad ${p + 1} laufen und tippe auf TAP genau dann, wenn du in diesem Loop seine Eins hörst – am besten 4–8 Mal. Dann „Übernehmen“: der Loop wird so verschoben, dass seine Eins auf der Eins des Takts liegt. Feinkorrektur mit den Pfeilen (wirkt sofort)."
+            textSize = 13f
+            setTextColor(Color.argb(210, 255, 255, 255))
+        })
+        val info = TextView(this).apply {
+            textSize = 14f
+            setTextColor(Color.rgb(255, 176, 40))
+            gravity = Gravity.CENTER
+            setPadding(0, px(10f), 0, px(6f))
+            text = "Noch keine Taps"
+        }
+        fun median(): Long? = if (taps.isEmpty()) null else taps.sorted()[taps.size / 2]
+        fun ms(f: Long) = String.format(Locale.GERMANY, "%+.0f ms", f * 1000.0 / sr)
+        fun update() {
+            val m = median()
+            if (m == null) { info.text = "Noch keine Taps"; return }
+            val spread = if (taps.size > 1) (taps.maxOrNull()!! - taps.minOrNull()!!) else 0L
+            val beat = Engine.beatLen()
+            val beats = m / beat
+            val where = if (kotlin.math.abs(beats) >= 0.5) String.format(Locale.GERMANY, " (≈ %+.1f Schläge)", beats) else ""
+            info.text = "${taps.size} Taps · Eins liegt ${ms(m)} daneben$where · Streuung ${(spread * 1000 / sr)} ms"
+        }
+        val tap = Button(this).apply {
+            text = "TAP"
+            textSize = 26f
+            setTextColor(Color.WHITE)
+            setBackgroundColor(Color.rgb(255, 106, 16))
+            setOnTouchListener { v, e ->
+                if (e.actionMasked == android.view.MotionEvent.ACTION_DOWN) {
+                    val g = Engine.barOffsetAt(e.eventTime * 1_000_000L)
+                    if (g != null) {
+                        taps.add(g)
+                        if (taps.size > 16) taps.removeAt(0)
+                        update()
+                    }
+                    v.performHapticFeedback(android.view.HapticFeedbackConstants.VIRTUAL_KEY)
+                }
+                true
+            }
+        }
+        box.addView(info)
+        box.addView(tap, LinearLayout.LayoutParams(-1, px(110f)))
+        val bar = (Engine.beatLen() * 4).toLong()
+        val nudges = listOf(
+            "◀ 1/16" to (bar / 16), "◀ 10 ms" to (sr / 100).toLong(), "10 ms ▶" to -(sr / 100).toLong(), "1/16 ▶" to -(bar / 16)
+        )
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(0, px(10f), 0, 0)
+        }
+        for ((lab, fr) in nudges) {
+            row.addView(Button(this).apply {
+                text = lab
+                textSize = 12f
+                isAllCaps = false
+                setOnClickListener {
+                    if (Engine.shiftPad(p, fr)) hint("Pad ${p + 1}: ${if (fr > 0) "früher" else "später"} um ${kotlin.math.abs(fr) * 1000 / sr} ms")
+                }
+            }, LinearLayout.LayoutParams(0, -2, 1f))
+        }
+        box.addView(row)
+        box.addView(TextView(this).apply {
+            text = "◀ = Loop früher · ▶ = später · ↶ UNDO macht alles rückgängig"
+            textSize = 11f
+            setTextColor(Color.argb(140, 255, 255, 255))
+            gravity = Gravity.CENTER
+            setPadding(0, px(6f), 0, 0)
+        })
+        val dlg = AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
+            .setTitle("🎯 Pad ${p + 1} auf die Eins")
+            .setView(android.widget.ScrollView(this).apply { addView(box) })
+            .setPositiveButton("Übernehmen", null)
+            .setNeutralButton("Taps löschen", null)
+            .setNegativeButton("Schließen", null)
+            .create()
+        dlg.setOnShowListener {
+            dlg.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+                val m = median()
+                if (m == null) { toast("Erst ein paar Mal auf TAP tippen"); return@setOnClickListener }
+                if (Engine.shiftPad(p, m)) {
+                    hint("Pad ${p + 1} um ${ms(-m)} verschoben – seine Eins liegt jetzt auf der Eins")
+                    taps.clear()
+                    update()
+                }
+            }
+            dlg.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener { taps.clear(); update() }
+        }
+        dlg.show()
+    }
+
     private fun showPadMenu(p: Int) {
         menuPad = p
         val has = Engine.hasLoop(p)
@@ -663,6 +767,10 @@ class MainActivity : Activity() {
         actions.add { showSourceMenu(p) }
         labels.add(if (shot) "Modus: ⚡ ONE SHOT  →  auf ∞ LOOP umschalten" else "Modus: ∞ LOOP  →  auf ⚡ ONE SHOT umschalten")
         actions.add { Engine.setPadMode(p, !shot) }
+        if (has && !shot && Engine.canShiftPad(p)) {
+            labels.add("🎯 Auf die Eins tappen / verschieben …")
+            actions.add { showTapAlign(p) }
+        }
         if (has && !shot) {
             if (Engine.isFree(p)) {
                 labels.add("🎯 Jetzt beatmatchen (Tempo erkennen, ins Raster)")

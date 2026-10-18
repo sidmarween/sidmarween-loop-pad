@@ -3076,6 +3076,52 @@ object Engine {
     @Volatile var redoCount = 0
         private set
 
+    // ---------------------------------------------------------------- Auf die Eins tappen (Phase angleichen)
+
+    /** Abstand eines Zeitpunkts zur nächsten Eins des Master-Rasters in Frames (−½ … +½ Takt), oder null. */
+    fun barOffsetAt(nanos: Long): Long? {
+        val m = masterLen
+        if (m <= 0L) return null
+        val heard = outClock.frameAt(nanos, sampleRate)
+        var g = Math.floorMod(heard - masterStart, m)
+        if (g > m / 2) g -= m
+        return g
+    }
+
+    fun canShiftPad(p: Int): Boolean = loops.get(p)?.let { !it.oneShot && it.slices == null && it.data.size > 64 } ?: false
+
+    /**
+     * Loop-Inhalt um [frames] verschieben (rotieren), Länge und Raster bleiben gleich.
+     * Positiv = was bisher später kam, erklingt jetzt früher. Mit Undo.
+     */
+    fun shiftPad(p: Int, frames: Long, undo: Boolean = true): Boolean {
+        val l = loops.get(p) ?: return false
+        if (l.oneShot || l.slices != null) return false
+        val d = l.data
+        val n = d.size
+        if (n < 64) return false
+        val r = Math.floorMod(frames, n.toLong()).toInt()
+        if (r == 0) return true
+        if (undo) pushPadUndo("Pad ${p + 1} verschoben", p)
+        val out = FloatArray(n)
+        System.arraycopy(d, r, out, 0, n - r)
+        System.arraycopy(d, 0, out, n - r, r)
+        val c = cloneLoop(l, out)
+        c.fade = l.fade
+        l.src?.let { src ->
+            val sn = src.size
+            if (sn > 0) {
+                val sr = Math.floorMod(Math.round(frames.toDouble() * sn / n), sn.toLong()).toInt()
+                val so = FloatArray(sn)
+                System.arraycopy(src, sr, so, 0, sn - sr)
+                System.arraycopy(src, 0, so, sn - sr, sr)
+                c.src = so
+            }
+        }
+        loops.set(p, c)
+        return true
+    }
+
     private fun cloneLoop(l: Loop, data: FloatArray): Loop {
         val c = Loop(data)
         c.start = l.start
