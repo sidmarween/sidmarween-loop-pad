@@ -115,7 +115,12 @@ class DjView(context: Context) : View(context) {
             Skin("MESSING – Leder, Walnuss & Leinen", c(0x2b2b2b), c(0x343434), c(0x2a2a2a), 6, 2, false, 7, intArrayOf(), 7, intArrayOf(), 12, intArrayOf(c(0xeee6d4)), c(0xe8c070), 6, 2, 8,
                 c(0xeee6d4), c(0xe8b050), c(0xe8b050), c(0xc8743a), c(0x1a1712), c(0xf0d090), true),
             Skin("GLAS – blaues Licht", c(0x0a0f18), c(0xd8dde3), c(0xb9c0c8), 4, 0, false, 4, intArrayOf(c(0x4a9cff)), 4, intArrayOf(), 6, intArrayOf(c(0xe8f2ff)), c(0x4aa8ff), 4, 0, 5,
-                c(0x37404c), c(0x3a8cff), c(0x3a8cff), c(0xff7d45), c(0xe4ebf2), c(0x1e3a60), false)
+                c(0x37404c), c(0x3a8cff), c(0x3a8cff), c(0xff7d45), c(0xe4ebf2), c(0x1e3a60), false),
+            // Pastell-Creme mit Konfetti-Sprenkeln, Bonbon-Knöpfen und Chihuahua-Pads
+            Skin("CHIHUAHUA MAMA", c(0xd9def0), c(0xf8efe6), c(0xf3e6e0), 8, 0, false, 1,
+                intArrayOf(c(0xf3b8cb), c(0xc9b6ea), c(0xa9dccb), c(0xf2e3a2)), 3, intArrayOf(), 13,
+                intArrayOf(c(0xf6c6d4), c(0xf3e7a8), c(0xbfe6da), c(0xf6cbbf), c(0xcfc0ec), c(0xbcd6f0)), c(0xf3a6c0), 9, 4, 11,
+                c(0x7d6b86), c(0xe88fb2), c(0xb9a2e6), c(0xf2a98a), c(0xfdf7f1), c(0x6e5a78), false)
         )
     }
 
@@ -166,6 +171,13 @@ class DjView(context: Context) : View(context) {
         textAlign = Paint.Align.LEFT
     }
     private val glowP = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val CONFETTI = intArrayOf(Color.rgb(240, 160, 190), Color.rgb(180, 160, 230), Color.rgb(140, 210, 190), Color.rgb(240, 215, 120), Color.rgb(150, 190, 235), Color.rgb(245, 175, 140))
+    /** Chihuahua-Gesichter für die Pads (aus der Design-Vorlage „Chihuahua Mama“). */
+    private val chiFaces: Array<Bitmap?> by lazy {
+        val ids = intArrayOf(R.drawable.chi_1, R.drawable.chi_2, R.drawable.chi_3, R.drawable.chi_4, R.drawable.chi_5, R.drawable.chi_6,
+            R.drawable.chi_7, R.drawable.chi_8, R.drawable.chi_9, R.drawable.chi_10, R.drawable.chi_11, R.drawable.chi_12)
+        Array(ids.size) { i -> try { BitmapFactory.decodeResource(resources, ids[i]) } catch (e: Throwable) { null } }
+    }
     private val logo: Bitmap? = try { BitmapFactory.decodeResource(resources, R.drawable.logo) } catch (e: Throwable) { null }
     private var texture: Bitmap? = null
     private var texW = 0
@@ -361,6 +373,15 @@ class DjView(context: Context) : View(context) {
                     6 -> { // Leder
                         val n = (fbm(x / 6f, y / 6f) - 0.5f) * 14f + (fbm(x / 60f, y / 60f) - 0.5f) * 8f
                         r += n; g += n; b += n
+                    }
+                    8 -> { // Pastell-Kunststoff mit Konfetti-Sprenkeln
+                        val n = (fbm(x / 140f, y / 140f) - 0.5f) * 8f
+                        r += n; g += n; b += n
+                        val hv = hash(x * 7 + 3, y * 11 + 5)
+                        if (hv > 0.9965f) {
+                            val pc = CONFETTI[((hv - 0.9965f) * 1e5f).toInt() % CONFETTI.size]
+                            r = Color.red(pc).toFloat(); g = Color.green(pc).toFloat(); b = Color.blue(pc).toFloat()
+                        }
                     }
                     else -> {
                         val n = (hash(x, y) - 0.5f) * 2f
@@ -1039,6 +1060,17 @@ class DjView(context: Context) : View(context) {
 
     // ---------------------------------------------------------------- Fader
 
+    /** Farbige Bonbon-Platte (Chihuahua Mama). */
+    private fun pastelPlate(c: Canvas, r: RectF, col: Int) {
+        shadowRect(c, r, dp(6f))
+        fill.shader = LinearGradient(r.left, r.top, r.right, r.bottom, lighten(col, 0.12f), darken(col, 0.04f), Shader.TileMode.CLAMP)
+        c.drawRoundRect(r, dp(6f), dp(6f), fill)
+        fill.shader = null
+        stroke.strokeWidth = dp(1f)
+        stroke.color = Color.argb(40, 0, 0, 0)
+        c.drawRoundRect(r, dp(6f), dp(6f), stroke)
+    }
+
     private fun drawFader(c: Canvas, r: RectF, v: Float, col: Int, isPitch: Boolean, k: Int) {
         val s = skin
         val slotTop = r.top + dp(10f)
@@ -1055,6 +1087,7 @@ class DjView(context: Context) : View(context) {
                 c.drawRoundRect(r, dp(3f), dp(3f), stroke)
             }
             2 -> woodPaintRect(c, r, true, dp(4f))
+            4 -> pastelPlate(c, r, if (isPitch) blend(col, Color.WHITE, 0.45f) else col)
             3 -> {
                 stroke.strokeWidth = dp(0.8f)
                 stroke.color = alpha(s.ink, 0.35f)
@@ -1109,6 +1142,17 @@ class DjView(context: Context) : View(context) {
                 fill.shader = null
                 stroke.strokeWidth = dp(1f)
                 stroke.color = Color.argb(140, 60, 60, 60)
+                c.drawLine(cap.left + dp(3f), y, cap.right - dp(3f), y, stroke)
+            }
+            9 -> {
+                // Bonbon-Kappe: Deck A rosa, Deck B hellblau
+                val cc = if (k == 0) Color.rgb(244, 190, 208) else Color.rgb(176, 206, 236)
+                shadowRect(c, cap, dp(4f))
+                fill.shader = LinearGradient(cap.left, cap.top, cap.left, cap.bottom, lighten(cc, 0.25f), darken(cc, 0.08f), Shader.TileMode.CLAMP)
+                c.drawRoundRect(cap, dp(4f), dp(4f), fill)
+                fill.shader = null
+                stroke.strokeWidth = dp(1.2f)
+                stroke.color = Color.argb(70, 0, 0, 0)
                 c.drawLine(cap.left + dp(3f), y, cap.right - dp(3f), y, stroke)
             }
             1 -> {
@@ -1328,6 +1372,7 @@ class DjView(context: Context) : View(context) {
                 fill.shader = null
             }
             2 -> woodPaintRect(c, r, false, dp(4f))
+            4 -> pastelPlate(c, r, Color.rgb(243, 230, 166))
             3 -> {
                 stroke.strokeWidth = dp(0.8f)
                 stroke.color = alpha(s.ink, 0.35f)
@@ -1368,6 +1413,16 @@ class DjView(context: Context) : View(context) {
         val ch = r.height() - dp(4f)
         val cap = RectF(x - cw / 2, cy - ch / 2, x + cw / 2, cy + ch / 2)
         when (s.fader) {
+            9 -> {
+                val cc = Color.rgb(201, 184, 234)
+                shadowRect(c, cap, dp(4f))
+                fill.shader = LinearGradient(cap.left, cap.top, cap.right, cap.top, lighten(cc, 0.2f), darken(cc, 0.1f), Shader.TileMode.CLAMP)
+                c.drawRoundRect(cap, dp(4f), dp(4f), fill)
+                fill.shader = null
+                stroke.strokeWidth = dp(1.4f)
+                stroke.color = Color.argb(120, 255, 255, 255)
+                c.drawLine(x, cap.top + dp(3f), x, cap.bottom - dp(3f), stroke)
+            }
             0, 1 -> {
                 shadowRect(c, cap, dp(3f))
                 fill.shader = LinearGradient(cap.left, cap.top, cap.right, cap.top, intArrayOf(Color.rgb(200, 202, 206), Color.rgb(250, 250, 252), Color.rgb(160, 162, 166)), floatArrayOf(0f, 0.5f, 1f), Shader.TileMode.CLAMP)
@@ -1571,6 +1626,31 @@ class DjView(context: Context) : View(context) {
                     c.drawRoundRect(rr, rad, rad, fill)
                     glowRect(c, rr, rad, if (lit) blend(hotCol, Color.WHITE, 0.2f) else s.accent, dp(if (lit) 2.6f else 1.6f))
                 }
+                13 -> {
+                    // Chihuahua-Kachel: Gesicht auf Pastell, gedrückt/aktiv mit rosa Rahmen
+                    shadowRect(c, rr, rad)
+                    val face = chiFaces[i % 12]
+                    val bgc = face?.getPixel(3, face.height / 2) ?: palCol
+                    fill.color = bgc
+                    c.drawRoundRect(rr, rad, rad, fill)
+                    if (face != null) {
+                        c.save()
+                        path.reset()
+                        path.addRoundRect(rr, rad, rad, Path.Direction.CW)
+                        c.clipPath(path)
+                        val sz = min(rr.width(), rr.height())
+                        tmp.set(rr.centerX() - sz / 2, rr.centerY() - sz / 2, rr.centerX() + sz / 2, rr.centerY() + sz / 2)
+                        c.drawBitmap(face, null, tmp, bmpPaint)
+                        if (lit) {
+                            fill.color = alpha(Color.WHITE, 0.22f)
+                            c.drawRoundRect(rr, rad, rad, fill)
+                        }
+                        c.restore()
+                    }
+                    stroke.strokeWidth = dp(if (lit) 2.6f else 1f)
+                    stroke.color = if (lit) hotCol else Color.argb(50, 90, 60, 80)
+                    c.drawRoundRect(rr, rad, rad, stroke)
+                }
                 12 -> {
                     woodPaintRect(c, rr, false, dp(3f))
                     tmp.set(rr.left + dp(4f), rr.top + dp(4f), rr.right - dp(4f), rr.bottom - dp(4f))
@@ -1583,6 +1663,19 @@ class DjView(context: Context) : View(context) {
                 }
             }
             // Beschriftung
+            if (s.pad == 13) {
+                // Beschriftung als kleines Schild unten, damit das Gesicht frei bleibt
+                if (lbl.isNotEmpty()) {
+                    val pl = fitLabel(text, lbl, rr.width() - dp(10f), min(dp(9f), rr.height() * 0.2f), dp(6f))
+                    val tw2 = text.measureText(pl) + dp(8f)
+                    tmp.set(rr.centerX() - tw2 / 2, rr.bottom - text.textSize - dp(6f), rr.centerX() + tw2 / 2, rr.bottom - dp(2f))
+                    fill.color = Color.argb(205, 255, 250, 246)
+                    c.drawRoundRect(tmp, dp(5f), dp(5f), fill)
+                    text.color = Color.rgb(110, 90, 120)
+                    c.drawText(pl, rr.centerX(), tmp.bottom - dp(2.5f), text)
+                }
+                continue
+            }
             val dark = when (s.pad) { 0, 3, 5, 6, 9, 12 -> true; 1 -> lit; else -> false }
             text.color = if (dark) Color.argb(200, 30, 30, 34) else Color.argb(if (lit) 255 else 190, 255, 255, 255)
             val pl = fitLabel(text, lbl, rr.width() - dp(6f), min(dp(11f), rr.height() * 0.24f), dp(6.5f))
