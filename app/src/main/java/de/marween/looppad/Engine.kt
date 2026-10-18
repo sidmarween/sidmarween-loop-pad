@@ -67,6 +67,8 @@ class Take(val overdub: Boolean, val fromIn: Long, val downNanos: Long, val oneS
     var bounceSrc: IntArray? = null
     /** Bei src = 2: welche Pads aufgenommen werden (Bitmaske). */
     var mask: Int = 0
+    /** Taktlänge, auf die gerastert wird, wenn es noch kein Master-Tempo gibt (Sequenzer-Takt). */
+    var gridBar: Long = 0L
     /** Bei Resample: Ausgabe-Frames der Aufnahme. */
     @Volatile var fromOut: Long = 0L
     @Volatile var toOut: Long = Long.MAX_VALUE
@@ -1767,8 +1769,8 @@ object Engine {
 
     /** Wählt die Loop-Länge aus 1/8, 1/4, 1/2, 1, 2, 4, 8 x Taktgeber, die der gehaltenen Zeit am nächsten liegt. */
     /** Gehaltene Aufnahme → 1, 2, 4, 8 oder 16 ganze Takte (was der Haltezeit am nächsten liegt). */
-    private fun quantizeBars(held: Long): Long {
-        val m = masterLen
+    private fun quantizeBars(held: Long, mOverride: Long = 0L): Long {
+        val m = if (mOverride > 0L) mOverride else masterLen
         val maxFrames = sampleRate.toLong() * MAX_SECONDS
         val h = max(1L, held).toDouble()
         var best = m
@@ -1810,13 +1812,13 @@ object Engine {
             take.upNanos = upNanos
             if (take.src >= 1) {
                 val rawOut = max(take.fromOut + 1, outClock.frameAt(upNanos, sampleRate))
-                val m1 = masterLen
+                val m1 = if (masterLen > 0L) masterLen else take.gridBar
                 if (m1 <= 0L || take.oneShot) {
                     take.toOut = rawOut
                 } else {
-                    val len = quantizeBars(rawOut - take.fromOut)
+                    val len = quantizeBars(rawOut - take.fromOut, m1)
                     val unit = min(len, m1)
-                    val ms = masterStart
+                    val ms = if (masterLen > 0L) masterStart else seqOrigin
                     val qOut = ms + Math.floorDiv(take.fromOut - ms + unit / 2, unit) * unit
                     take.qOut = qOut
                     take.fromOut = qOut
@@ -2367,16 +2369,22 @@ object Engine {
             t.bounceSrc = playing.toIntArray()
         }
         val heard = outClock.frameAt(now, sampleRate)
-        val m = masterLen
+        val m0 = masterLen
         // Transport steht: Wave- und Live-Aufnahmen starten ihn sofort (Eins = jetzt)
-        if (!seqPlaying && m > 0L && !t.oneShot && (t.src >= 1 || liveBars > 0)) startTransportAt(heard)
+        if (!seqPlaying && m0 > 0L && !t.oneShot && (t.src >= 1 || liveBars > 0)) startTransportAt(heard)
+        // Raster: Master-Tempo – oder, wenn es noch keins gibt, der Takt des laufenden Sequenzers
+        // (z. B. wenn nur Instrumente oder ⚡-Pads spielen und jetzt resampelt wird)
+        val seqGrid = m0 <= 0L && t.src >= 1 && seqPlaying && !t.oneShot
+        val m = if (seqGrid) seqBar() else m0
+        val gs = if (seqGrid) seqOrigin else masterStart
+        if (seqGrid) t.gridBar = m
         if (liveBars > 0 && m > 0L) {
             var len = m * liveBars
             val maxF = sampleRate.toLong() * MAX_SECONDS
             while (len > maxF && len > m) len -= m
             if (len > maxF) len = maxF
             // nächster Taktanfang – kurz nach der Eins zählt noch die Eins
-            val prev = masterStart + Math.floorDiv(heard - masterStart, m) * m
+            val prev = gs + Math.floorDiv(heard - gs, m) * m
             val start = if (heard - prev < m / 16) prev else prev + m
             t.qOut = start
             if (t.src >= 1) {
@@ -2464,8 +2472,14 @@ object Engine {
         if (take.oneShot) {
             loop.oneShot = true
         } else if (masterLen == 0L) {
-            masterStart = loop.start
-            masterLen = len.toLong()
+            if (take.gridBar > 0L) {
+                // Sequenzer-Raster wird zum Master-Tempo (ein Takt), der Groove läuft ohne Sprung weiter
+                masterStart = seqOrigin
+                masterLen = take.gridBar
+            } else {
+                masterStart = loop.start
+                masterLen = len.toLong()
+            }
         }
         padSemi[p] = 0
         if (takes.get(p) == null && loops.get(p) == null) {
