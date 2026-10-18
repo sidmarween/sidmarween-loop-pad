@@ -93,6 +93,9 @@ class MainActivity : Activity() {
         }
         Engine.liveBars = prefs.getInt("liveBars", 0)
         Engine.bounce = prefs.getBoolean("bounce", true)
+        Engine.onBouncedInst = { pad, names ->
+            runOnUiThread { toast("Bounce → Pad ${pad + 1} · ausgeschaltet: $names (im Reiter Instrumente wieder AN)") }
+        }
         Engine.onBounced = { pad, muted ->
             runOnUiThread {
                 toast("Bounce → Pad ${pad + 1} · stumm: " + muted.joinToString(", ") { "Pad ${it + 1}" } + " (antippen holt sie zurück)")

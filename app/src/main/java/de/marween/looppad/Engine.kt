@@ -2364,7 +2364,8 @@ object Engine {
                 val l = loops.get(q) ?: continue
                 if (t.src == 3) continue
                 if (t.src == 2 && (t.mask shr q) and 1 == 0) continue
-                if (q != p && !l.oneShot && !l.muted) playing.add(q)
+                // bei Pad-Eingang auch ⚡-Pads (vom Sequenzer gespielt), sonst klänge es doppelt
+                if (q != p && (!l.oneShot || t.src == 2) && !l.muted) playing.add(q)
             }
             t.bounceSrc = playing.toIntArray()
         }
@@ -2500,6 +2501,14 @@ object Engine {
                 }
                 if (muted.isNotEmpty()) onBounced?.invoke(p, muted)
             }
+            // Instrument-Eingang: aufgenommene Instrumente ausschalten (sonst doppelt)
+            if (bounce && take.src == 3 && !take.oneShot) {
+                val off = ArrayList<String>()
+                if ((take.mask and 1) != 0 && InstState.acidOn) { InstState.acidOn = false; off.add("303") }
+                if ((take.mask and 2) != 0 && InstState.drumOn) { InstState.drumOn = false; off.add("909") }
+                if ((take.mask and 4) != 0 && InstState.synOn) { InstState.synOn = false; off.add("SYNTH") }
+                if (off.isNotEmpty()) onBouncedInst?.invoke(p, off.joinToString(", "))
+            }
             onRecorded?.invoke(p, data.copyOf(), sampleRate)
         }
     }
@@ -2507,6 +2516,7 @@ object Engine {
     /** Bounce-Funktion (wie beim Mehrspurrekorder): nach einer Wave-Aufnahme die Quell-Pads stumm schalten. */
     @Volatile var bounce = true
     var onBounced: ((Int, List<Int>) -> Unit)? = null
+    var onBouncedInst: ((Int, String) -> Unit)? = null
 
     /** Pad wartet im Live-Modus auf den nächsten Takt. */
     fun isArmed(p: Int): Boolean {
