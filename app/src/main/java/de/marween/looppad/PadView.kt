@@ -681,7 +681,9 @@ class PadView(context: Context) : View(context) {
         }
         val bTop = seqRect.top + sp + stripH + dp(6f)
         val bH = seqRect.bottom - sp - bTop
-        val bW = min(dp(46f), (seqRect.width() - 2 * sp) / 7.4f)
+        // Platz für den ⤢-Knopf rechts außen freihalten
+        val zw = if (zoomEnabled) dp(30f) + dp(6f) else 0f
+        val bW = min(dp(46f), (seqRect.width() - 2 * sp - zw) / 7.4f)
         val bg = dp(6f)
         recBtn.set(seqRect.left + sp, bTop, seqRect.left + sp + bW, bTop + bH)
         playBtn.set(recBtn.right + bg, bTop, recBtn.right + bg + bW, bTop + bH)
@@ -690,7 +692,7 @@ class PadView(context: Context) : View(context) {
         undoBtn.set(stopBtn.right + dp(10f), bTop, stopBtn.right + dp(10f) + uW, bTop + bH)
         redoBtn.set(undoBtn.right + bg, bTop, undoBtn.right + bg + uW, bTop + bH)
         mixBtn.set(redoBtn.right + dp(10f), bTop, redoBtn.right + dp(10f) + uW * 1.1f, bTop + bH)
-        if (zoomEnabled) zoomPads.set(mixBtn.right + dp(6f), bTop, mixBtn.right + dp(6f) + uW * 0.8f, bTop + bH) else zoomPads.setEmpty()
+        if (zoomEnabled) zoomPads.set(seqRect.right - sp - dp(30f), bTop, seqRect.right - sp, bTop + bH) else zoomPads.setEmpty()
         mixRect.set(left, gridTop, left + gridW, gridTop + 3 * (cell + mb + rowGap) - rowGap)
         buildHudLines(w, h)
         buildLightCaches()
@@ -1839,8 +1841,8 @@ class PadView(context: Context) : View(context) {
         }
         drawMixButton(canvas, cols)
         if (!zoomPads.isEmpty) zoomBtn(canvas, zoomPads, cols)
-        val ix = (if (zoomPads.isEmpty) mixBtn.right else zoomPads.right) + dp(8f)
-        val avail = seqRect.right - dp(6f) - ix
+        val ix = mixBtn.right + dp(8f)
+        val avail = (if (zoomPads.isEmpty) seqRect.right - dp(6f) else zoomPads.left - dp(4f)) - ix
         if (avail < dp(28f)) return
         val cin = Engine.countInBeat()
         val red = Color.rgb(255, 60, 80)
