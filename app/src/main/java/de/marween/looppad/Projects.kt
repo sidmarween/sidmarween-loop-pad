@@ -73,6 +73,7 @@ object Projects {
             o.put("bars", sv.bars.toDouble())
             o.put("semi", sv.semi)
             o.put("gain", sv.gain.toDouble())
+            o.put("free", sv.free)
             o.put("src", Engine.padSource[p])
             o.put("srcMask", Engine.padSrcMask[p])
             o.put("instMask", Engine.padInstMask[p])
@@ -119,7 +120,7 @@ object Projects {
                 Engine.PadSave(
                     data, o.optBoolean("oneShot", false), o.optBoolean("muted", false),
                     o.optInt("slices", 0), o.optDouble("bars", 1.0).toFloat(), o.optInt("semi", 0),
-                    o.optDouble("gain", 1.0).toFloat()
+                    o.optDouble("gain", 1.0).toFloat(), o.optBoolean("free", false)
                 )
             } else {
                 Engine.PadSave(null, false, false)

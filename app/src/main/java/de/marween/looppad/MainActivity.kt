@@ -120,6 +120,7 @@ class MainActivity : Activity() {
         Engine.countIn = prefs.getBoolean("countIn", true)
         Engine.launchIdx = prefs.getInt("launchIdx", 3).coerceIn(0, Engine.LAUNCH_Q.size - 1)
         Engine.playMode = prefs.getInt("playMode", 0).coerceIn(0, Engine.PLAY_NAMES.size - 1)
+        Engine.autoBeatmatch = prefs.getBoolean("autoBeat", true)
         pads.onPlayModeChanged = {
             prefs.edit().putInt("playMode", Engine.playMode).apply()
             hint(when (Engine.playMode) {
@@ -617,6 +618,41 @@ class MainActivity : Activity() {
         dlg.show()
     }
 
+    // ---------------------------------------------------------------- Auto-Beatmatch
+
+    private fun beatKey(name: String?, data: FloatArray) = (name ?: "?").trim() + "|" + data.size
+
+    private fun cachedInfo(key: String): Warp.Info? = try {
+        val j = getSharedPreferences("beatmatch", MODE_PRIVATE).getString(key, null)?.let { org.json.JSONObject(it) }
+        j?.let { Warp.Info(it.getDouble("bpm").toFloat(), it.getDouble("bars").toFloat(), "gespeichert", it.optInt("off", 0), it.optBoolean("cut", false)) }
+    } catch (e: Exception) { null }
+
+    private fun saveInfo(key: String, i: Warp.Info) {
+        try {
+            val j = org.json.JSONObject().put("bpm", i.bpm.toDouble()).put("bars", i.bars.toDouble()).put("off", i.offset).put("cut", i.cut)
+            getSharedPreferences("beatmatch", MODE_PRIVATE).edit().putString(key, j.toString()).apply()
+        } catch (ignored: Exception) {}
+    }
+
+    /** Datei auf ein Pad laden – mit Auto-Beatmatch (einmal analysiert, dann gemerkt) oder im Original-Tempo. */
+    private fun clipToPad(p: Int, data: FloatArray, rate: Int, name: String?): String {
+        if (!Engine.autoBeatmatch) return Engine.importFree(p, data)
+        val key = beatKey(name, data)
+        val info = cachedInfo(key) ?: Warp.analyze(data, rate, name).also { saveInfo(key, it) }
+        return Engine.importClip(p, data, info)
+    }
+
+    /** Pad nachträglich ins Raster bringen (Beatmatch) bzw. zurück ins Original-Tempo. */
+    private fun beatmatchPad(p: Int, on: Boolean) {
+        val src = Engine.padSource(p) ?: return
+        val rate = Engine.sampleRate
+        toast(if (on) "Beatmatch läuft …" else "Original-Tempo …")
+        Thread {
+            val desc = if (on) Engine.importClip(p, src, Warp.analyze(src, rate, null)) else Engine.importFree(p, src)
+            runOnUiThread { hint("Pad ${p + 1}: $desc · antippen startet ihn") }
+        }.start()
+    }
+
     private fun showPadMenu(p: Int) {
         menuPad = p
         val has = Engine.hasLoop(p)
@@ -627,6 +663,15 @@ class MainActivity : Activity() {
         actions.add { showSourceMenu(p) }
         labels.add(if (shot) "Modus: ⚡ ONE SHOT  →  auf ∞ LOOP umschalten" else "Modus: ∞ LOOP  →  auf ⚡ ONE SHOT umschalten")
         actions.add { Engine.setPadMode(p, !shot) }
+        if (has && !shot) {
+            if (Engine.isFree(p)) {
+                labels.add("🎯 Jetzt beatmatchen (Tempo erkennen, ins Raster)")
+                actions.add { beatmatchPad(p, true) }
+            } else {
+                labels.add("↺ Original-Tempo (Beatmatch aufheben)")
+                actions.add { beatmatchPad(p, false) }
+            }
+        }
         labels.add("Aus Bibliothek laden")
         actions.add { showLibrary(p) }
         labels.add("Audio importieren (WAV / MP3)")
@@ -737,7 +782,7 @@ class MainActivity : Activity() {
                     Engine.importLoop(p, data)
                     runOnUiThread { toast("Pad ${p + 1}: ★ ${smp.title}") }
                 } else {
-                    val desc = Engine.importClip(p, data, Warp.analyze(data, rate, smp.title))
+                    val desc = clipToPad(p, data, rate, smp.title)
                     runOnUiThread { hint("Pad ${p + 1}: ★ ${smp.title} · $desc · antippen startet ihn auf der Eins") }
                 }
             } catch (e: Exception) {
@@ -1696,7 +1741,7 @@ class MainActivity : Activity() {
                     Engine.importLoop(p, data)
                     runOnUiThread { toast("Pad ${p + 1}: ${smp.title}") }
                 } else {
-                    val desc = Engine.importClip(p, data, Warp.analyze(data, rate, smp.title + " " + smp.file))
+                    val desc = clipToPad(p, data, rate, smp.title + " " + smp.file)
                     runOnUiThread { hint("Pad ${p + 1}: ${smp.title} · $desc · antippen startet ihn auf der Eins") }
                 }
             } catch (e: Exception) {
@@ -1825,6 +1870,7 @@ class MainActivity : Activity() {
                 "🎹 MIDI (" + (if (Midi.deviceNames.isEmpty()) "kein Gerät" else Midi.deviceNames.joinToString(", ")) + ")",
                 "🔴 Meine Set-Aufnahmen (${SetRecorder.list(this).size})",
                 "📚 Bibliothek importieren / exportieren",
+                (if (Engine.autoBeatmatch) "☑" else "☐") + " 🎯 Auto-Beatmatch beim Laden (WAV/MP3 ins Tempo)",
                 if (djMode) "▦ Zurück zum Pad-Modus" else "🎧 DJ-Modus (zwei Decks, Crossfader)"
             )) { _, which ->
                 when (which) {
@@ -1834,7 +1880,13 @@ class MainActivity : Activity() {
                     12 -> showMidi()
                     13 -> showSets()
                     14 -> showLibraryIo()
-                    15 -> switchMode(!djMode)
+                    15 -> {
+                        Engine.autoBeatmatch = !Engine.autoBeatmatch
+                        getSharedPreferences("marvpad", MODE_PRIVATE).edit().putBoolean("autoBeat", Engine.autoBeatmatch).apply()
+                        toast(if (Engine.autoBeatmatch) "Auto-Beatmatch an: geladene Dateien werden erkannt und ins Tempo gebracht (einmal analysiert, dann gemerkt)"
+                              else "Auto-Beatmatch aus: Dateien laufen im Original-Tempo · pro Pad später „🎯 Jetzt beatmatchen“")
+                    }
+                    16 -> switchMode(!djMode)
                     8 -> {
                         Engine.tapOverdub = !Engine.tapOverdub
                         getSharedPreferences("marvpad", MODE_PRIVATE).edit().putBoolean("tapOverdub", Engine.tapOverdub).apply()
@@ -2117,7 +2169,7 @@ class MainActivity : Activity() {
                     Engine.importLoop(p, data)
                     runOnUiThread { toast("Pad ${p + 1}: Aufnahme geladen") }
                 } else {
-                    val desc = Engine.importClip(p, data, Warp.analyze(data, rate, f.name))
+                    val desc = clipToPad(p, data, rate, f.name)
                     runOnUiThread { hint("Pad ${p + 1}: Aufnahme · $desc · antippen startet sie auf der Eins") }
                 }
             } catch (e: Exception) {
@@ -2876,7 +2928,7 @@ class MainActivity : Activity() {
                             runOnUiThread { toast("Pad ${pad + 1}: Import fertig") }
                         } else {
                             val name = displayName(uri)
-                            val desc = Engine.importClip(pad, samples, Warp.analyze(samples, rate, name))
+                            val desc = clipToPad(pad, samples, rate, name)
                             runOnUiThread { hint("Pad ${pad + 1}: ${name ?: "Datei"} · $desc · antippen startet ihn auf der Eins") }
                         }
                     } catch (e: Exception) {

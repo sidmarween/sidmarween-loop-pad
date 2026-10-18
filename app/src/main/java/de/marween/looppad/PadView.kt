@@ -5916,7 +5916,7 @@ class PadView(context: Context) : View(context) {
     private var edSnapMode = 1
     private val edSnap: Boolean get() = edSnapMode != 0
 
-    private fun edBeatsOn(): Boolean = Engine.beatLen() > 0.0 && edPad >= 0 && !Engine.isOneShot(edPad)
+    private fun edBeatsOn(): Boolean = Engine.beatLen() > 0.0 && edPad >= 0 && !Engine.isOneShot(edPad) && !Engine.isFree(edPad)
 
     private fun snapF(f0: Int): Int {
         if (edSnapMode == 2 && edBeatsOn()) {

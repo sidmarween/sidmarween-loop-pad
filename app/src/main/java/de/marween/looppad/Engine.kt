@@ -43,6 +43,8 @@ class Loop(val data: FloatArray) {
     @Volatile var warpBars: Float = 0f
     /** Lautstärke des Pads (Wischen hoch/runter). */
     @Volatile var gain: Float = 1f
+    /** Original-Tempo: nicht ins Raster gedehnt (Auto-Beatmatch war aus). */
+    @Volatile var free: Boolean = false
     /** Quantisierter Start/Stopp: Ausgabe-Frame und Ziel (true = spielen). */
     @Volatile var pendAt: Long = Long.MIN_VALUE
     @Volatile var pendOn: Boolean = false
@@ -334,14 +336,16 @@ object Engine {
 
     class PadSave(
         val data: FloatArray?, val oneShot: Boolean, val muted: Boolean,
-        val slices: Int = 0, val bars: Float = 1f, val semi: Int = 0, val gain: Float = 1f
+        val slices: Int = 0, val bars: Float = 1f, val semi: Int = 0, val gain: Float = 1f,
+        val free: Boolean = false
     )
 
     fun snapshotPads(): Array<PadSave> = Array(PADS) { p ->
         val l = loops.get(p)
         PadSave(
             l?.data?.copyOf(), l?.oneShot ?: padOneShot[p], l?.muted ?: false,
-            l?.slices?.let { it.size - 1 } ?: 0, l?.bars ?: 1f, l?.semi ?: padSemi[p], l?.gain ?: 1f
+            l?.slices?.let { it.size - 1 } ?: 0, l?.bars ?: 1f, l?.semi ?: padSemi[p], l?.gain ?: 1f,
+            l?.free ?: false
         )
     }
 
@@ -417,7 +421,8 @@ object Engine {
                 l.bars = sv.bars
                 buildSliceBufs(l)
             }
-            setWarpSource(l)
+            l.free = sv.free && !sv.oneShot
+            if (!l.free) setWarpSource(l)
             loops.set(p, l)
         }
         if (pattern != null) {
@@ -3085,6 +3090,7 @@ object Engine {
         c.srcBpm = l.srcBpm
         c.warpBars = l.warpBars
         c.gain = l.gain
+        c.free = l.free
         return c
     }
 
@@ -3656,6 +3662,8 @@ object Engine {
         val m = masterLen
         if (q <= 0f || m <= 0L) {
             if (turnOn) stopOthers(p, Long.MIN_VALUE)
+            // Original-Tempo-Loops starten beim Antippen von vorne
+            if (turnOn && l.free) { l.start = written; l.fade = 0f }
             l.muted = !turnOn
             return 0
         }
@@ -3696,6 +3704,40 @@ object Engine {
      */
     /** Pads, die beim Antippen immer vom Startpunkt im Takt starten (DJ-Clips). */
     val padSyncStart = BooleanArray(PADS)
+
+    /** Auto-Beatmatch beim Laden von Dateien (aus = Original-Tempo). */
+    @Volatile var autoBeatmatch = true
+
+    /** Datei ohne Beatmatch laden: Original-Tempo und -Länge, läuft frei (nicht im Raster). */
+    fun importFree(p: Int, src: FloatArray): String {
+        padSyncStart[p] = false
+        if (src.size < 64) return "Leere Datei"
+        if (padOneShot[p]) {
+            importLoop(p, src)
+            return "⚡ One Shot"
+        }
+        pushPadUndo("Laden Pad ${p + 1}", p)
+        val data = src.copyOf()
+        val fade = min(data.size / 4, sampleRate * FADE_MS / 1000)
+        for (i in 0 until fade) {
+            val g = i.toFloat() / fade
+            data[i] *= g
+            data[data.size - 1 - i] *= g
+        }
+        val loop = Loop(data)
+        loop.free = true
+        loop.start = written
+        loop.muted = true
+        takes.set(p, null)
+        padSemi[p] = 0
+        loops.set(p, loop)
+        return String.format(java.util.Locale.GERMANY, "Original-Tempo · %.1f s (nicht synchronisiert)", data.size.toFloat() / sampleRate)
+    }
+
+    fun isFree(p: Int): Boolean = loops.get(p)?.free ?: false
+
+    /** Ursprüngliches (ungedehntes) Audio eines gebeatmatchten Pads, falls vorhanden. */
+    fun padSource(p: Int): FloatArray? = loops.get(p)?.let { l -> if (l.oneShot) null else (l.src ?: l.data)?.copyOf() }
 
     fun importClip(p: Int, src: FloatArray, info: Warp.Info): String {
         padSyncStart[p] = false
