@@ -48,6 +48,8 @@ class Loop(val data: FloatArray) {
     /** Quantisierter Start/Stopp: Ausgabe-Frame und Ziel (true = spielen). */
     @Volatile var pendAt: Long = Long.MIN_VALUE
     @Volatile var pendOn: Boolean = false
+    /** Eigener Startpunkt (Frame in [data]): ⚡ spielt ab hier, ∞ setzt beim Starten hier ein. */
+    @Volatile var cue: Int = 0
 }
 
 /** Eine laufende Aufnahme (neu oder Overdub) auf einem Pad. */
@@ -337,7 +339,7 @@ object Engine {
     class PadSave(
         val data: FloatArray?, val oneShot: Boolean, val muted: Boolean,
         val slices: Int = 0, val bars: Float = 1f, val semi: Int = 0, val gain: Float = 1f,
-        val free: Boolean = false
+        val free: Boolean = false, val cue: Int = 0
     )
 
     fun snapshotPads(): Array<PadSave> = Array(PADS) { p ->
@@ -345,7 +347,7 @@ object Engine {
         PadSave(
             l?.data?.copyOf(), l?.oneShot ?: padOneShot[p], l?.muted ?: false,
             l?.slices?.let { it.size - 1 } ?: 0, l?.bars ?: 1f, l?.semi ?: padSemi[p], l?.gain ?: 1f,
-            l?.free ?: false
+            l?.free ?: false, l?.cue ?: 0
         )
     }
 
@@ -422,6 +424,7 @@ object Engine {
                 buildSliceBufs(l)
             }
             l.free = sv.free && !sv.oneShot
+            l.cue = sv.cue.coerceIn(0, max(0, d.size - 2))
             if (!l.free) setWarpSource(l)
             loops.set(p, l)
         }
@@ -1964,7 +1967,7 @@ object Engine {
                 if (pa != Long.MIN_VALUE && pa < w + block) {
                     // quantisierter Start/Stopp genau auf dem Rasterpunkt
                     if (loop.pendOn) {
-                        loop.start = pa
+                        loop.start = pa - cueOf(loop)
                         loop.fade = 0f
                         loop.muted = false
                     } else {
@@ -1986,15 +1989,18 @@ object Engine {
                         val rate = loop.rate
                         val sg = loop.shotGain
                         val rel = w - ss
-                        val total = (len / rate).toLong()
+                        val cue = loop.cue.coerceIn(0, max(0, len - 2))
+                        val total = ((len - cue) / rate).toLong()
                         if (rel + block > 0 && rel < total) {
                             var i = if (rel < 0) (-rel).toInt() else 0
                             while (i < block) {
-                                val sp = (rel + i) * rate
+                                val sp = cue + (rel + i) * rate
                                 val i0 = sp.toInt()
                                 if (i0 >= len - 1) break
                                 val fr = (sp - i0).toFloat()
-                                val v = (d[i0] + (d[i0 + 1] - d[i0]) * fr) * sg * gn
+                                var v = (d[i0] + (d[i0 + 1] - d[i0]) * fr) * sg * gn
+                                // eigener Startpunkt: ganz kurz einblenden (kein Knacksen)
+                                if (cue > 0 && rel + i < 96) v *= (rel + i) / 96f
                                 val a = abs(v)
                                 if (a > peak) peak = a
                                 dst[i] += v
@@ -2608,8 +2614,9 @@ object Engine {
         if (!l.oneShot || ss == Long.MIN_VALUE || l.data.isEmpty()) return -1f
         if (ss == SHOT_NOW) return 0f
         val rel = outClock.frameAt(System.nanoTime(), sampleRate) - ss
-        if (rel < 0 || rel >= l.data.size) return -1f
-        return rel.toFloat() / l.data.size
+        val pos = rel + l.cue
+        if (rel < 0 || pos >= l.data.size) return -1f
+        return pos.toFloat() / l.data.size
     }
 
     /** Loops starten schon beim Berühren (nicht erst beim Loslassen). */
@@ -2845,8 +2852,8 @@ object Engine {
         if (l.oneShot) {
             val ss = l.shotStart
             if (ss == Long.MIN_VALUE || ss == SHOT_NOW) return -1.0
-            val pos = (heard - ss) * l.rate
-            return if (pos >= 0.0 && pos < len - 1) pos else -1.0
+            val pos = l.cue + (heard - ss) * l.rate
+            return if (pos >= l.cue && pos < len - 1) pos else -1.0
         }
         if (!seqPlaying || l.muted) return -1.0
         val rel = heard - l.start
@@ -3112,6 +3119,53 @@ object Engine {
     fun padDataId(p: Int): Int = loops.get(p)?.let { System.identityHashCode(it.data) } ?: 0
 
     /** Spitzenwerte für eine Wellenform-Anzeige ([cols] Spalten), ohne die Daten zu kopieren. */
+    /** Startpunkt, ab dem ein ∞ Loop beim Starten einsetzt (bei Slices nicht). */
+    private fun cueOf(l: Loop): Long = if (l.slices == null) l.cue.coerceIn(0, max(0, l.data.size - 2)).toLong() else 0L
+
+    fun padCue(p: Int): Int = loops.get(p)?.cue ?: 0
+
+    /** Eigenen Startpunkt setzen (0 = Anfang); rastet auf den nächsten Nulldurchgang (±2 ms). Liefert den gesetzten Frame. */
+    fun setPadCue(p: Int, frame: Int): Int {
+        val l = loops.get(p) ?: return 0
+        val d = l.data
+        if (d.size < 4 || frame <= 0) { l.cue = 0; editVersion++; return 0 }
+        var f = frame.coerceIn(0, d.size - 2)
+        val win = sampleRate / 500
+        var best = f
+        var bestA = Float.MAX_VALUE
+        for (k in max(1, f - win)..min(d.size - 2, f + win)) {
+            if ((d[k - 1] <= 0f) != (d[k] <= 0f)) {
+                val dist = abs(k - f)
+                if (dist < bestA) { bestA = dist.toFloat(); best = k }
+            }
+        }
+        f = best
+        l.cue = f
+        editVersion++
+        return f
+    }
+
+    /** Spitzenwerte für einen Ausschnitt [from, to) – für die gezoomte Wellenform. */
+    fun padPeaksRange(p: Int, from: Int, to: Int, cols: Int): FloatArray? {
+        val d = loops.get(p)?.data ?: return null
+        val a0 = from.coerceIn(0, d.size)
+        val b0 = to.coerceIn(a0, d.size)
+        if (b0 - a0 < 2 || cols <= 0) return null
+        val out = FloatArray(cols)
+        val span = (b0 - a0).toDouble()
+        val per = span / cols
+        val stride = max(1, (per / 256).toInt())
+        for (c in 0 until cols) {
+            val a = a0 + (c * per).toInt()
+            val b = min(b0, max(a + 1, a0 + ((c + 1) * per).toInt()))
+            var m = 0f
+            var i = a
+            while (i < b) { val v = abs(d[i]); if (v > m) m = v; i += stride }
+            out[c] = m
+        }
+        return out
+    }
+
     fun padPeaks(p: Int, cols: Int): FloatArray? {
         val d = loops.get(p)?.data ?: return null
         if (d.isEmpty() || cols <= 0) return null
@@ -3217,6 +3271,7 @@ object Engine {
         c.warpBars = l.warpBars
         c.gain = l.gain
         c.free = l.free
+        c.cue = if (data.size == l.data.size) l.cue else 0
         return c
     }
 
@@ -3251,6 +3306,7 @@ object Engine {
             val l = loops.get(p)
             mix(if (l == null) 0L else System.identityHashCode(l.data).toLong())
             mix(if (l?.muted == true) 1L else 0L)
+            mix((l?.cue ?: 0).toLong())
             mix(java.util.Arrays.hashCode(seq[p]).toLong())
             mix(noteCount(p).toLong())
         }
@@ -3811,6 +3867,8 @@ object Engine {
                 stopOthers(p, Long.MIN_VALUE)
                 l.muted = false
                 transportPlay(false)
+                val c = cueOf(l)
+                if (c > 0) { l.start -= c; l.fade = 0f }
             } else {
                 l.muted = true
             }
@@ -3822,7 +3880,7 @@ object Engine {
         if (q <= 0f || m <= 0L) {
             if (turnOn) stopOthers(p, Long.MIN_VALUE)
             // Original-Tempo-Loops starten beim Antippen von vorne
-            if (turnOn && l.free) { l.start = written; l.fade = 0f }
+            if (turnOn && (l.free || cueOf(l) > 0L)) { l.start = written - cueOf(l); l.fade = 0f }
             l.muted = !turnOn
             return 0
         }
@@ -3894,6 +3952,23 @@ object Engine {
     }
 
     fun isFree(p: Int): Boolean = loops.get(p)?.free ?: false
+
+    fun isSliced(p: Int): Boolean = loops.get(p)?.slices != null
+
+    private var peakMaxData: FloatArray? = null
+    private var peakMaxVal = 0f
+
+    /** Höchster Ausschlag eines Pads (für gleichbleibenden Maßstab der gezoomten Wellenform). */
+    fun padPeakMax(p: Int): Float {
+        val d = loops.get(p)?.data ?: return 0f
+        if (d !== peakMaxData) {
+            var m = 0f
+            for (v in d) { val a = abs(v); if (a > m) m = a }
+            peakMaxVal = m
+            peakMaxData = d
+        }
+        return peakMaxVal
+    }
 
     /** Ursprüngliches (ungedehntes) Audio eines gebeatmatchten Pads, falls vorhanden. */
     fun padSource(p: Int): FloatArray? = loops.get(p)?.let { l -> if (l.oneShot) null else (l.src ?: l.data)?.copyOf() }
