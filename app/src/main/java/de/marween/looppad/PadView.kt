@@ -603,13 +603,14 @@ class PadView(context: Context) : View(context) {
         val rowGap = dp(4f)
         val mb = dp(20f)
         val seqH = dp(84f)
-        var cell = min((inner - 3 * colGap) / 4f, (avail * 0.66f - seqH - gap - 2 * rowGap - 3 * mb) / 3f)
-        var gridH = 3 * cell + 3 * mb + 2 * rowGap + gap + seqH
+        val selH = dp(30f)
+        var cell = min((inner - 3 * colGap) / 4f, (avail * 0.66f - seqH - gap - 2 * rowGap - 3 * mb - selH) / 3f)
+        var gridH = 3 * cell + 3 * mb + 2 * rowGap + gap + seqH + selH
         var xyH = avail - gridH - gap
         val minXy = dp(110f)
         if (xyH < minXy) {
             cell -= (minXy - xyH) / 3f
-            gridH = 3 * cell + 3 * mb + 2 * rowGap + gap + seqH
+            gridH = 3 * cell + 3 * mb + 2 * rowGap + gap + seqH + selH
             xyH = minXy
         }
         xyRect.set(margin, contentTop, w - margin, contentTop + xyH)
@@ -622,9 +623,21 @@ class PadView(context: Context) : View(context) {
         if (zoomEnabled) zoomXy.set(xyRect.right - tabH, contentTop, xyRect.right, contentTop + tabH) else zoomXy.setEmpty()
         xyRect.top = contentTop + tabH + dp(5f)
 
-        val gridTop = xyRect.bottom + gap
+        val gridTop = xyRect.bottom + gap + selH
         val gridW = 4 * cell + 3 * colGap
         val left = (w - gridW) / 2f
+        // Auswahl-Leiste über den Pads: SELECT · Pad · WAVE · NOTEN · FX · ⋯
+        selRow.set(left, xyRect.bottom + gap - dp(2f), left + gridW, gridTop - dp(6f))
+        run {
+            val g = dp(5f)
+            val ws = floatArrayOf(1.35f, 0.9f, 1f, 1f, 0.8f, 0.6f)
+            val unit = (selRow.width() - 5 * g) / ws.sum()
+            var x = selRow.left
+            for (i in 0 until 6) {
+                selBtns[i].set(x, selRow.top, x + unit * ws[i], selRow.bottom)
+                x += unit * ws[i] + g
+            }
+        }
         radius = when (theme) {
             STUDIO -> cell * 0.10f
             HUD -> dp(5f)
@@ -818,6 +831,7 @@ class PadView(context: Context) : View(context) {
         }
         if (!zoomXy.isEmpty) zoomBtn(canvas, zoomXy, overlayColors())
         if (!zoomFx.isEmpty) zoomBtn(canvas, zoomFx, overlayColors())
+        drawSelRow(canvas)
         if (mixView) drawMixer(canvas) else for (i in 0 until VISIBLE_PADS) {
             drawPad(canvas, i, dt)
             if (!sceneView) drawStatus(canvas, i)
@@ -826,6 +840,7 @@ class PadView(context: Context) : View(context) {
             if (!sceneView) drawFxBadge(canvas, i)
             drawPadOverlay(canvas, i)
         }
+        if (!mixView) drawSelOutline(canvas)
         drawSequencer(canvas)
         drawShocks(canvas, dt)
         drawParticles(canvas, dt)
@@ -1359,7 +1374,7 @@ class PadView(context: Context) : View(context) {
 
     private fun sectionRect(sec: Int, out: RectF) {
         when (sec) {
-            1 -> out.set(mixRect)
+            1 -> { out.set(mixRect); out.union(selRow) }
             2 -> {
                 out.set(xyRect)
                 out.union(modeRects[0]); out.union(modeRects[1])
@@ -1407,6 +1422,7 @@ class PadView(context: Context) : View(context) {
 
     fun closeFocus() {
         if (focus == 0) return
+        wvStop()
         focus = 0
         layoutPads()
         onFocusChanged?.invoke(false)
@@ -1416,6 +1432,11 @@ class PadView(context: Context) : View(context) {
         sectionRect(focus, focusSrc)
         val top = insetTop + dp(46f)
         focusDst.set(dp(8f), top, width - dp(8f), height - insetBottom - dp(8f))
+        if (wvOn()) {
+            val ph = focusDst.height() * (if (width > height) 0.48f else 0.40f)
+            wvPanel.set(focusDst.left, focusDst.top, focusDst.right, focusDst.top + ph)
+            focusDst.top = wvPanel.bottom + dp(8f)
+        } else wvPanel.setEmpty()
         val sc = min(focusDst.width() / focusSrc.width(), focusDst.height() / focusSrc.height())
         val tx = focusDst.centerX() - focusSrc.centerX() * sc
         val ty = focusDst.centerY() - focusSrc.centerY() * sc
@@ -1434,13 +1455,17 @@ class PadView(context: Context) : View(context) {
         canvas.concat(focusM)
         when (focus) {
             1 -> {
-                if (mixView) drawMixer(canvas) else for (i in 0 until VISIBLE_PADS) {
-                    drawPad(canvas, i, dt)
-                    if (!sceneView) drawStatus(canvas, i)
-                    drawMore(canvas, i)
-                    drawKeyButton(canvas, i)
-                    if (!sceneView) drawFxBadge(canvas, i)
-                    drawPadOverlay(canvas, i)
+                drawSelRow(canvas)
+                if (mixView) drawMixer(canvas) else {
+                    for (i in 0 until VISIBLE_PADS) {
+                        drawPad(canvas, i, dt)
+                        if (!sceneView) drawStatus(canvas, i)
+                        drawMore(canvas, i)
+                        drawKeyButton(canvas, i)
+                        if (!sceneView) drawFxBadge(canvas, i)
+                        drawPadOverlay(canvas, i)
+                    }
+                    drawSelOutline(canvas)
                 }
             }
             2 -> {
@@ -1465,6 +1490,7 @@ class PadView(context: Context) : View(context) {
         drawShocks(canvas, dt)
         drawParticles(canvas, dt)
         canvas.restore()
+        if (!wvPanel.isEmpty && wvOn()) drawWavePanel(canvas)
         // Kopfzeile der großen Ansicht
         val cols = overlayColors()
         textPaint.textAlign = Paint.Align.LEFT
@@ -1484,6 +1510,299 @@ class PadView(context: Context) : View(context) {
         drawInfo(canvas)
         message?.let { drawMessage(canvas, it) }
     }
+
+    // ---------------------------------------------------------------- Pad-Auswahl (SELECT) und Wellenform-Ansicht
+
+    /** SELECT an: Antippen wählt ein Pad aus, statt es zu spielen. */
+    var selectMode = false
+    /** Ausgewähltes Pad – Ziel für Wave-Editor, Noten, Effekte und die Wellenform in der großen Ansicht. */
+    var selPad = -1
+    private val selRow = RectF()
+    private val selBtns = Array(6) { RectF() }
+
+    private fun drawSelRow(canvas: Canvas) {
+        val cols = overlayColors()
+        val has = selPad >= 0 && Engine.hasLoop(selPad)
+        smallBtn(canvas, selBtns[0], if (selectMode) "◉ SELECT" else "○ SELECT", selectMode, cols)
+        textPaint.color = if (selPad >= 0) cols[2] else alpha(cols[1], 0.5f)
+        val lb = fitLabel(textPaint, if (selPad >= 0) "PAD ${selPad + 1}" else "–", selBtns[1].width(), dp(12f), dp(8f))
+        canvas.drawText(lb, selBtns[1].centerX(), selBtns[1].centerY() + textPaint.textSize * 0.36f, textPaint)
+        val labels = arrayOf("〰 WAVE", "🎹 NOTEN", "✨ FX", "⋯")
+        for (k in 0 until 4) {
+            val r = selBtns[2 + k]
+            smallBtn(canvas, r, labels[k], false, cols)
+            if (!has && k < 2) {
+                fillPaint.color = alpha(cols[0], 0.55f)
+                canvas.drawRoundRect(r, dp(8f), dp(8f), fillPaint)
+            }
+        }
+    }
+
+    private fun drawSelOutline(canvas: Canvas) {
+        val p = selPad
+        if (p !in 0 until VISIBLE_PADS) return
+        val r = padRects[p]
+        if (r.width() <= 0f) return
+        strokePaint.shader = null
+        strokePaint.strokeWidth = dp(3f)
+        strokePaint.color = overlayColors()[2]
+        tmpRect.set(r.left - dp(3f), r.top - dp(3f), r.right + dp(3f), r.bottom + dp(3f))
+        canvas.drawRoundRect(tmpRect, radius + dp(3f), radius + dp(3f), strokePaint)
+    }
+
+    /** Auswahl-Leiste antippen. true = verbraucht. */
+    private fun selRowDown(x: Float, y: Float): Boolean {
+        if (!selRow.contains(x, y)) return false
+        performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+        val p = selPad
+        val has = p >= 0 && Engine.hasLoop(p)
+        when {
+            selBtns[0].contains(x, y) -> {
+                selectMode = !selectMode
+                hint(if (selectMode) "SELECT: Pad antippen wählt es aus (spielt nicht) – Wave, Noten, FX und ⋯ gelten dann nur für dieses Pad" else "SELECT aus: Pads spielen wieder")
+            }
+            selBtns[2].contains(x, y) -> if (has) { closeFocus(); openEditor(p) } else hint(if (p < 0) "Erst ein Pad wählen (SELECT)" else "Pad ${p + 1} ist leer")
+            selBtns[3].contains(x, y) -> if (has) { closeFocus(); openKeyboard(p) } else hint(if (p < 0) "Erst ein Pad wählen (SELECT)" else "Pad ${p + 1} ist leer")
+            selBtns[4].contains(x, y) -> if (p >= 0) onPadFxEditor?.invoke(p) else hint("Erst ein Pad wählen (SELECT)")
+            selBtns[5].contains(x, y) -> if (p >= 0) onPadMenu?.invoke(p) else hint("Erst ein Pad wählen (SELECT)")
+        }
+        return true
+    }
+
+    // ---- Wellenform-Ansicht über den Pads (große Ansicht)
+    private val wvPanel = RectF()
+    private val wvWave = RectF()
+    private val wvBtns = Array(16) { RectF() }
+    private var wvPeaks: FloatArray? = null
+    private var wvPeaksId = 0
+    private var wvCursor = 0
+    private var wvPreview = -1
+    private var wvPlayFrom = 0
+    private var wvPointer = -1
+
+    private fun wvOn(): Boolean = focus == 1 && selPad >= 0 && Engine.hasLoop(selPad)
+
+    private fun wvLen(): Int = Engine.padDataLen(selPad)
+
+    private fun wvStop() {
+        if (wvPreview >= 0) Engine.noteOff(wvPreview)
+        wvPreview = -1
+    }
+
+    private fun wvPlay(from: Int) {
+        wvStop()
+        val d = Engine.loopData(selPad) ?: return
+        val f = from.coerceIn(0, max(0, d.size - 2))
+        wvPlayFrom = f
+        wvPreview = Engine.preview(d.copyOfRange(f, d.size))
+    }
+
+    private fun wvStep(): Int = if (Engine.beatLen() > 0.0) Engine.beatLen().toInt() else Engine.sampleRate
+
+    private fun layoutWave() {
+        val r = wvPanel
+        val top = r.top + dp(26f)
+        val rowH = dp(30f)
+        val gap = dp(5f)
+        val rows = 3
+        val waveBottom = r.bottom - dp(8f) - rows * rowH - (rows - 1) * gap - dp(8f)
+        wvWave.set(r.left + dp(10f), top, r.right - dp(10f), max(top + dp(30f), waveBottom))
+        var y = wvWave.bottom + dp(8f)
+        // Reihe 1: Transport (4) · Reihe 2+3: je 6 Einstellungen
+        val per = intArrayOf(4, 6, 6)
+        var i = 0
+        for (row in 0 until rows) {
+            val n = per[row]
+            val w = (r.width() - dp(20f) - (n - 1) * gap) / n
+            for (k in 0 until n) {
+                val x = r.left + dp(10f) + k * (w + gap)
+                wvBtns[i++].set(x, y, x + w, y + rowH)
+            }
+            y += rowH + gap
+        }
+    }
+
+    private fun wvLabels(): Array<String> {
+        val p = selPad
+        val shot = Engine.isOneShot(p)
+        return arrayOf(
+            "⏮", "◀◀ " + (if (Engine.beatLen() > 0.0) "SCHLAG" else "1 s"), if (wvPreview >= 0) "■ STOP" else "▶ AB HIER", (if (Engine.beatLen() > 0.0) "SCHLAG" else "1 s") + " ▶▶",
+            if (shot) "⚡ ONE-SHOT" else "∞ LOOP", if (Engine.isMuted(p)) "🔇 STUMM" else "MUTE", if (Engine.solo[p]) "★ SOLO" else "SOLO",
+            "⇆ RÜCKWÄRTS", "⤒ NORMAL.", "〰 EDITOR",
+            "− HALBTON", "+ HALBTON", "◀ 1/16", "1/16 ▶", "VOL −", "VOL +"
+        )
+    }
+
+    private fun drawWavePanel(canvas: Canvas) {
+        val cols = overlayColors()
+        val p = selPad
+        val r = wvPanel
+        layoutWave()
+        fillPaint.shader = null
+        fillPaint.color = alpha(blend(cols[0], cols[1], 0.04f), 0.96f)
+        canvas.drawRoundRect(r, dp(12f), dp(12f), fillPaint)
+        strokePaint.strokeWidth = dp(1.3f)
+        strokePaint.color = alpha(cols[2], 0.6f)
+        canvas.drawRoundRect(r, dp(12f), dp(12f), strokePaint)
+        val len = wvLen()
+        val sr = Engine.sampleRate.toFloat()
+        // Kopfzeile
+        val g = Engine.padGain(p)
+        val db = if (g <= 0.001f) "-∞" else String.format(Locale.GERMANY, "%+.1f dB", 20f * kotlin.math.log10(g))
+        val bars = if (Engine.beatLen() > 0.0 && !Engine.isOneShot(p)) String.format(Locale.GERMANY, " · %.2f Takte", len / (Engine.beatLen() * 4)) else ""
+        val semi = Engine.padSemitone(p)
+        val head = "PAD ${p + 1} · " + String.format(Locale.GERMANY, "%.2f s", len / sr) + bars + " · $db" + (if (semi != 0) " · ${if (semi > 0) "+" else ""}$semi HT" else "") + if (Engine.isFree(p)) " · Original-Tempo" else ""
+        textPaint.textAlign = Paint.Align.LEFT
+        textPaint.color = cols[1]
+        val ht = fitLabel(textPaint, head, r.width() - dp(20f), dp(12f), dp(8f))
+        canvas.drawText(ht, r.left + dp(10f), r.top + dp(18f), textPaint)
+        textPaint.textAlign = Paint.Align.CENTER
+        // Wellenform
+        val w = wvWave
+        fillPaint.color = Color.argb(150, 0, 0, 0)
+        canvas.drawRoundRect(w, dp(6f), dp(6f), fillPaint)
+        val colsN = max(16, (w.width() / dp(2f)).toInt())
+        val id = Engine.padDataId(p) xor colsN
+        if (id != wvPeaksId || wvPeaks == null) {
+            wvPeaks = Engine.padPeaks(p, colsN)
+            wvPeaksId = id
+        }
+        val pk = wvPeaks
+        if (pk != null) {
+            var mx = 0.001f
+            for (v in pk) if (v > mx) mx = v
+            val cw = w.width() / pk.size
+            fillPaint.color = cols[2]
+            for (i in pk.indices) {
+                val hh = (pk[i] / mx) * w.height() * 0.46f
+                canvas.drawRect(w.left + i * cw, w.centerY() - hh, w.left + i * cw + max(1f, cw - dp(0.6f)), w.centerY() + hh, fillPaint)
+            }
+        }
+        // Taktlinien
+        if (Engine.beatLen() > 0.0 && !Engine.isOneShot(p) && !Engine.isFree(p) && len > 0) {
+            val bl = Engine.beatLen()
+            var k = 0
+            while (k * bl < len && k < 512) {
+                val x = w.left + (k * bl / len).toFloat() * w.width()
+                strokePaint.strokeWidth = dp(if (k % 4 == 0) 1.2f else 0.6f)
+                strokePaint.color = Color.argb(if (k % 4 == 0) 110 else 40, 255, 255, 255)
+                canvas.drawLine(x, w.top, x, w.bottom, strokePaint)
+                k++
+            }
+        }
+        fun xOf(f: Double) = w.left + (f / max(1, len)).toFloat() * w.width()
+        // LIVE (im Mix)
+        val lp = Engine.padPlayPos(p)
+        if (lp >= 0) {
+            strokePaint.strokeWidth = dp(2f)
+            strokePaint.color = Color.rgb(255, 176, 40)
+            val lx = xOf(lp)
+            canvas.drawLine(lx, w.top, lx, w.bottom, strokePaint)
+        }
+        // Vorhör-Kopf
+        if (wvPreview >= 0) {
+            val vp = Engine.voicePos(wvPreview)
+            if (vp < 0) wvPreview = -1 else {
+                strokePaint.strokeWidth = dp(2f)
+                strokePaint.color = Color.rgb(80, 230, 120)
+                val hx = xOf(wvPlayFrom + vp)
+                canvas.drawLine(hx, w.top, hx, w.bottom, strokePaint)
+            }
+        }
+        // Cursor
+        val cx = xOf(wvCursor.toDouble())
+        strokePaint.strokeWidth = dp(2f)
+        strokePaint.color = Color.WHITE
+        canvas.drawLine(cx, w.top, cx, w.bottom, strokePaint)
+        val tri = Path()
+        tri.moveTo(cx - dp(6f), w.top); tri.lineTo(cx + dp(6f), w.top); tri.lineTo(cx, w.top + dp(9f)); tri.close()
+        fillPaint.color = Color.WHITE
+        canvas.drawPath(tri, fillPaint)
+        textPaint.textSize = dp(9f)
+        textPaint.color = Color.argb(200, 255, 255, 255)
+        textPaint.textAlign = Paint.Align.RIGHT
+        canvas.drawText(String.format(Locale.GERMANY, "%.2f s", wvCursor / sr), w.right - dp(4f), w.bottom - dp(4f), textPaint)
+        textPaint.textAlign = Paint.Align.CENTER
+        // Knöpfe
+        val labels = wvLabels()
+        val on = booleanArrayOf(false, false, wvPreview >= 0, false, !Engine.isOneShot(p), Engine.isMuted(p), Engine.solo[p], false, false, false, false, false, false, false, false, false)
+        for (i in 0 until 16) smallBtn(canvas, wvBtns[i], labels[i], on[i], cols)
+    }
+
+    /** Touch auf der Wellenform-Ansicht (Bildschirm-Koordinaten). true = Ereignis verbraucht. */
+    private fun wavePanelTouch(e: MotionEvent): Boolean {
+        if (!wvOn()) return false
+        val am = e.actionMasked
+        val idx = e.actionIndex
+        val id = e.getPointerId(idx)
+        val len = wvLen()
+        fun frameAt(x: Float): Int = (((x - wvWave.left) / wvWave.width()).coerceIn(0f, 1f) * len).toInt()
+        when (am) {
+            MotionEvent.ACTION_DOWN, MotionEvent.ACTION_POINTER_DOWN -> {
+                val x = e.getX(idx)
+                val y = e.getY(idx)
+                if (!wvPanel.contains(x, y)) return false
+                layoutWave()
+                if (RectF(wvWave).apply { inset(0f, -dp(6f)) }.contains(x, y)) {
+                    wvPointer = id
+                    wvCursor = frameAt(x)
+                    return true
+                }
+                val p = selPad
+                val i = wvBtns.indexOfFirst { it.contains(x, y) }
+                if (i < 0) return true
+                performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+                val st = wvStep()
+                when (i) {
+                    0 -> { wvCursor = 0; if (wvPreview >= 0) wvPlay(0) }
+                    1 -> { wvCursor = max(0, wvCursor - st); if (wvPreview >= 0) wvPlay(wvCursor) }
+                    2 -> if (wvPreview >= 0) wvStop() else wvPlay(wvCursor)
+                    3 -> { wvCursor = min(max(0, len - 2), wvCursor + st); if (wvPreview >= 0) wvPlay(wvCursor) }
+                    4 -> { Engine.setPadMode(p, !Engine.isOneShot(p)); hint(if (Engine.isOneShot(p)) "Pad ${p + 1}: ⚡ One-Shot" else "Pad ${p + 1}: ∞ Loop") }
+                    5 -> Engine.toggleMute(p)
+                    6 -> Engine.toggleSolo(p)
+                    7 -> { wvStop(); if (Engine.reversePad(p)) hint("Pad ${p + 1} rückwärts – ↶ UNDO holt es zurück") }
+                    8 -> { if (Engine.normalizePad(p)) hint("Pad ${p + 1} normalisiert (−1 dB Spitze)") }
+                    9 -> { wvStop(); closeFocus(); openEditor(p) }
+                    10, 11 -> {
+                        wvStop()
+                        val d = if (i == 10) -1 else 1
+                        hint("Pad ${p + 1}: transponiere …")
+                        Thread { if (Engine.transposePad(p, d)) post { hint("Pad ${p + 1}: ${if (Engine.padSemitone(p) != 0 && Engine.isOneShot(p)) "Tonhöhe ${Engine.padSemitone(p)} HT" else if (d > 0) "+1 Halbton" else "−1 Halbton"}") } }.start()
+                    }
+                    12, 13 -> {
+                        if (!Engine.canShiftPad(p)) hint("Verschieben geht bei ∞ Loops ohne Slices")
+                        else {
+                            val bar = if (Engine.beatLen() > 0.0) (Engine.beatLen() * 4).toLong() else Engine.sampleRate.toLong()
+                            Engine.shiftPad(p, if (i == 12) bar / 16 else -bar / 16)
+                            hint("Pad ${p + 1} um 1/16 ${if (i == 12) "früher" else "später"}")
+                        }
+                    }
+                    14 -> Engine.setPadGain(p, Engine.padGain(p) / 1.122f)
+                    15 -> Engine.setPadGain(p, Engine.padGain(p) * 1.122f)
+                }
+                return true
+            }
+            MotionEvent.ACTION_MOVE -> {
+                if (wvPointer >= 0) {
+                    val pi = e.findPointerIndex(wvPointer)
+                    if (pi >= 0) wvCursor = frameAt(e.getX(pi))
+                }
+                return false
+            }
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_POINTER_UP -> {
+                if (id == wvPointer) {
+                    wvPointer = -1
+                    if (wvPreview >= 0) wvPlay(wvCursor)
+                    return true
+                }
+                return false
+            }
+            MotionEvent.ACTION_CANCEL -> { wvPointer = -1; return false }
+        }
+        return false
+    }
+
 
     // ---------------------------------------------------------------- Mischpult-Ansicht
 
@@ -2964,6 +3283,7 @@ class PadView(context: Context) : View(context) {
                 closeFocus()
                 return true
             }
+            if (focus == 1 && wavePanelTouch(e)) return true
             val ev = MotionEvent.obtain(e)
             ev.transform(focusInv)
             try {
@@ -3013,6 +3333,7 @@ class PadView(context: Context) : View(context) {
                     onMessageTap?.invoke()
                     return true
                 }
+                if (selRowDown(x, y)) return true
                 if (focus == 0 && zoomEnabled) {
                     val zsec = when {
                         zoomPads.contains(x, y) -> 1
@@ -3268,6 +3589,14 @@ class PadView(context: Context) : View(context) {
                         twoLong = false
                         postDelayed(twoLongPress, 500L)
                     }
+                    return true
+                }
+                if (p != selPad) { selPad = p; wvStop(); wvCursor = 0 }
+                if (selectMode) {
+                    flash[p] = 1f
+                    performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+                    burst(padRects[p].centerX(), padRects[p].centerY(), overlayColors()[2], 14, 180f)
+                    hint("Pad ${p + 1} ausgewählt" + if (Engine.hasLoop(p)) " – 〰 WAVE / 🎹 NOTEN / ✨ FX gelten jetzt für dieses Pad" else " (leer)")
                     return true
                 }
                 pointerPad[id] = p
@@ -7039,6 +7368,7 @@ class PadView(context: Context) : View(context) {
                 else -> Triple(kbRect, "🎹 Piano-Roll", "Klaviatur links, Matrix rechts – wie in Ableton. ✕ schließt.")
             }
         }
+        if (selRow.contains(x, y)) return Triple(selRow, "Pad-Auswahl", "SELECT an: ein Pad antippen wählt es aus, ohne es zu spielen (sonst wählt jedes gespielte Pad sich selbst aus). 〰 WAVE, 🎹 NOTEN, ✨ FX und ⋯ gelten für das ausgewählte Pad. In der großen Pad-Ansicht (⤢) erscheint darüber seine Wellenform mit Vor/Zurück, Abspielen ab Cursor und vielen Einstellungen.")
         if (zoomPads.contains(x, y) || zoomXy.contains(x, y) || zoomFx.contains(x, y)) return Triple(if (zoomPads.contains(x, y)) zoomPads else if (zoomXy.contains(x, y)) zoomXy else zoomFx, "⤢ Groß", "Öffnet diese Sektion bildschirmfüllend (Pads, Touchpad bzw. Effekte) – besser lesbar und bedienbar. Alternativ: Doppeltipp auf den Rahmen. ✕ oben rechts = zurück. Abschaltbar in Einstellungen → Aussehen.")
         if (mixBtn.contains(x, y)) return Triple(mixBtn, "MIX – Mischpult", "Schaltet die Pads auf eine Mischpult-Ansicht um: pro Pad ein Fader (Finger hoch/runter = Lautstärke, doppelt tippen = 0 dB), M = stumm, S = solo, Nummer antippen = Pad auswählen. Nochmal MIX = zurück zu den Pads, das gewählte Pad ist dann aktiv.")
         if (mixView && mixRect.contains(x, y)) return Triple(mixRect, "Mischpult", "Fader: Finger hoch/runter ändert die Lautstärke des Pads (bis +3,5 dB), doppelt tippen setzt 0 dB. M = stumm, S = solo. Pad-Nummer antippen = auswählen, doppelt antippen = direkt in die Piano-Roll des Pads.")

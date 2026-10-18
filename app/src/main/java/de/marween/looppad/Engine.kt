@@ -3107,6 +3107,67 @@ object Engine {
         return g
     }
 
+    // ---------------------------------------------------------------- Pad-Werkzeuge (Auswahl-Ansicht)
+
+    fun padDataId(p: Int): Int = loops.get(p)?.let { System.identityHashCode(it.data) } ?: 0
+
+    /** Spitzenwerte für eine Wellenform-Anzeige ([cols] Spalten), ohne die Daten zu kopieren. */
+    fun padPeaks(p: Int, cols: Int): FloatArray? {
+        val d = loops.get(p)?.data ?: return null
+        if (d.isEmpty() || cols <= 0) return null
+        val out = FloatArray(cols)
+        val per = max(1, d.size / cols)
+        for (c in 0 until cols) {
+            val a = (c.toLong() * d.size / cols).toInt()
+            val b = min(d.size, a + per)
+            var m = 0f
+            var i = a
+            while (i < b) { val v = abs(d[i]); if (v > m) m = v; i++ }
+            out[c] = m
+        }
+        return out
+    }
+
+    private fun replaceData(p: Int, label: String, op: (FloatArray) -> FloatArray): Boolean {
+        val l = loops.get(p) ?: return false
+        pushPadUndo(label, p)
+        val c = cloneLoop(l, op(l.data.copyOf()))
+        c.fade = l.fade
+        l.src?.let { c.src = op(it.copyOf()) }
+        if (l.slices != null) { buildSliceBufs(c) }
+        loops.set(p, c)
+        return true
+    }
+
+    /** Rückwärts abspielen (Daten umdrehen). */
+    fun reversePad(p: Int): Boolean = replaceData(p, "Pad ${p + 1} rückwärts") { d -> d.reverse(); d }
+
+    /** Lautheit auf −1 dB Spitze bringen. */
+    fun normalizePad(p: Int): Boolean = replaceData(p, "Pad ${p + 1} normalisiert") { d ->
+        var m = 0f
+        for (v in d) { val a = abs(v); if (a > m) m = a }
+        if (m > 1e-4f) { val g = 0.89f / m; for (i in d.indices) d[i] *= g }
+        d
+    }
+
+    /**
+     * Transponieren um [semi] Halbtöne. ⚡-Pads: Tonhöhe des Pads (verlustfrei).
+     * Loops: Tonhöhe ändern, Länge bleibt (Raster bleibt synchron).
+     */
+    fun transposePad(p: Int, semi: Int): Boolean {
+        val l = loops.get(p) ?: return false
+        if (l.oneShot) {
+            setPadPitch(p, (padSemi[p] + semi).coerceIn(-24, 24))
+            return true
+        }
+        return replaceData(p, "Pad ${p + 1} transponiert") { d ->
+            val shifted = pitchProcess(d, semi.toFloat(), false)
+            if (shifted.size == d.size) shifted else Warp.stretch(shifted, d.size, sampleRate)
+        }
+    }
+
+    fun padSemitone(p: Int): Int = padSemi[p]
+
     fun canShiftPad(p: Int): Boolean = loops.get(p)?.let { !it.oneShot && it.slices == null && it.data.size > 64 } ?: false
 
     /**
