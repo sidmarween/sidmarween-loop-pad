@@ -170,4 +170,32 @@ object SampleLibrary {
     )
 
     fun inCategory(c: String): List<Sample> = samples.filter { it.category == c }
+
+    /** Fertige Drumsets für die 12 Pads (oben links = Pad 1; unten liegen Kick und Snare, wie bei Drum-Pads üblich). */
+    class Kit(val name: String, val files: List<String>)
+
+    val KITS = listOf(
+        Kit("808 – Elektro", listOf(
+            "vcsl/crash_becken.wav", "ride.wav", "tom_hoch.wav", "tom_tief.wav",
+            "hihat_zu.wav", "hihat_offen.wav", "clap.wav", "rimshot.wav",
+            "kick.wav", "snare.wav", "cowbell_808.wav", "clap_2.wav")),
+        Kit("909 – House & Techno", listOf(
+            "vcsl/crash_becken.wav", "ride.wav", "tom_hoch.wav", "tom_tief.wav",
+            "hihat_909_zu.wav", "hihat_909_offen.wav", "clap_2.wav", "rim_909.wav",
+            "kick_909.wav", "snare_909.wav", "kick.wav", "clap.wav")),
+        Kit("Akustisch – echtes Schlagzeug", listOf(
+            "vcsl/crash_becken.wav", "vcsl/becken.wav", "vcsl/tom2_akustisch.wav", "vcsl/tom_akustisch.wav",
+            "vcsl/hi_hat_akustisch.wav", "vcsl/hihat_offen_akustisch.wav", "vcsl/hihat_pedal_akustisch.wav", "vcsl/snare_sidestick.wav",
+            "vcsl/bass_drum_akustisch.wav", "vcsl/snare_akustisch.wav", "vcsl/snare_modern2.wav", "vcsl/clash_becken.wav")),
+        Kit("Percussion – Hand & Latin", listOf(
+            "vcsl/triangel.wav", "vcsl/tamburin.wav", "vcsl/shaker.wav", "vcsl/agogo.wav",
+            "vcsl/claves.wav", "vcsl/woodblock.wav", "vcsl/kuhglocke.wav", "vcsl/klatschen.wav",
+            "vcsl/cajon.wav", "vcsl/conga.wav", "vsco/bongo_hoch.wav", "vsco/bongo_tief.wav")),
+        Kit("Gemischt – Hybrid", listOf(
+            "vcsl/crash_becken.wav", "ride.wav", "vcsl/conga.wav", "tom_tief.wav",
+            "hihat_909_zu.wav", "vcsl/hihat_offen_akustisch.wav", "clap.wav", "vcsl/snare_sidestick.wav",
+            "kick.wav", "vcsl/snare_akustisch.wav", "vcsl/shaker.wav", "vcsl/tamburin.wav"))
+    )
+
+    fun byFile(file: String): Sample? = samples.firstOrNull { it.file == file }
 }

@@ -75,6 +75,7 @@ object Projects {
             o.put("gain", sv.gain.toDouble())
             o.put("free", sv.free)
             o.put("cue", sv.cue)
+            if (sv.name != null) o.put("name", sv.name)
             o.put("src", Engine.padSource[p])
             o.put("srcMask", Engine.padSrcMask[p])
             o.put("instMask", Engine.padInstMask[p])
@@ -123,7 +124,7 @@ object Projects {
                     data, o.optBoolean("oneShot", false), o.optBoolean("muted", false),
                     o.optInt("slices", 0), o.optDouble("bars", 1.0).toFloat(), o.optInt("semi", 0),
                     o.optDouble("gain", 1.0).toFloat(), o.optBoolean("free", false),
-                    o.optInt("cue", 0)
+                    o.optInt("cue", 0), o.optString("name", "").ifEmpty { null }
                 )
             } else {
                 Engine.PadSave(null, false, false)

@@ -1415,6 +1415,7 @@ class PadView(context: Context) : View(context) {
     fun openFocus(sec: Int) {
         if (sec !in 1..3) return
         focus = sec
+        Engine.drumRec = drumActive()
         performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
         layoutPads()
         onFocusChanged?.invoke(true)
@@ -1425,6 +1426,7 @@ class PadView(context: Context) : View(context) {
         if (focus == 0) return
         wvStop()
         focus = 0
+        Engine.drumRec = false
         layoutPads()
         onFocusChanged?.invoke(false)
     }
@@ -1433,11 +1435,17 @@ class PadView(context: Context) : View(context) {
         sectionRect(focus, focusSrc)
         val top = insetTop + dp(46f)
         focusDst.set(dp(8f), top, width - dp(8f), height - insetBottom - dp(8f))
-        if (wvOn()) {
+        if (drumActive()) {
+            val ph = focusDst.height() * (if (width > height) 0.40f else 0.30f)
+            drPanel.set(focusDst.left, focusDst.top, focusDst.right, focusDst.top + ph)
+            focusDst.top = drPanel.bottom + dp(8f)
+            wvPanel.setEmpty()
+        } else if (wvOn()) {
+            drPanel.setEmpty()
             val ph = focusDst.height() * (if (width > height) 0.48f else 0.40f)
             wvPanel.set(focusDst.left, focusDst.top, focusDst.right, focusDst.top + ph)
             focusDst.top = wvPanel.bottom + dp(8f)
-        } else wvPanel.setEmpty()
+        } else { wvPanel.setEmpty(); drPanel.setEmpty() }
         val sc = min(focusDst.width() / focusSrc.width(), focusDst.height() / focusSrc.height())
         val tx = focusDst.centerX() - focusSrc.centerX() * sc
         val ty = focusDst.centerY() - focusSrc.centerY() * sc
@@ -1447,6 +1455,8 @@ class PadView(context: Context) : View(context) {
         focusM.invert(focusInv)
         val cs = dp(36f)
         focusClose.set(width - dp(10f) - cs, insetTop + dp(5f), width - dp(10f), insetTop + dp(5f) + cs)
+        if (focus == 1) drToggle.set(focusClose.left - dp(8f) - dp(104f), focusClose.top, focusClose.left - dp(8f), focusClose.bottom)
+        else drToggle.setEmpty()
     }
 
     private fun drawFocus(canvas: Canvas, dt: Float) {
@@ -1466,6 +1476,7 @@ class PadView(context: Context) : View(context) {
                         if (!sceneView) drawFxBadge(canvas, i)
                         drawPadOverlay(canvas, i)
                         drawCueMark(canvas, i)
+                        if (drumActive()) drawPadName(canvas, i)
                     }
                     drawSelOutline(canvas)
                 }
@@ -1492,12 +1503,16 @@ class PadView(context: Context) : View(context) {
         drawShocks(canvas, dt)
         drawParticles(canvas, dt)
         canvas.restore()
-        if (!wvPanel.isEmpty && wvOn()) drawWavePanel(canvas)
+        if (drumActive() && !drPanel.isEmpty) drawDrumPanel(canvas)
+        else if (!wvPanel.isEmpty && wvOn()) drawWavePanel(canvas)
         // Kopfzeile der großen Ansicht
         val cols = overlayColors()
+        if (!drToggle.isEmpty) {
+            smallBtn(canvas, drToggle, if (drumMode) "🥁 DRUM AN" else "🥁 DRUM", drumMode, cols)
+        }
         textPaint.textAlign = Paint.Align.LEFT
         textPaint.color = cols[1]
-        val t = fitLabel(textPaint, FOCUS_NAMES[focus], focusClose.left - dp(24f), dp(15f), dp(10f))
+        val t = fitLabel(textPaint, if (drumActive()) "Drum-Pads" else FOCUS_NAMES[focus], (if (drToggle.isEmpty) focusClose.left else drToggle.left) - dp(24f), dp(15f), dp(10f))
         canvas.drawText(t, dp(14f), focusClose.centerY() + textPaint.textSize * 0.36f, textPaint)
         textPaint.textAlign = Paint.Align.CENTER
         fillPaint.shader = null
@@ -1615,7 +1630,7 @@ class PadView(context: Context) : View(context) {
     private var wvPinchAnchor = 0.0
     private var wvLastPad = -1
 
-    private fun wvOn(): Boolean = focus == 1 && selPad >= 0 && Engine.hasLoop(selPad)
+    private fun wvOn(): Boolean = focus == 1 && !drumMode && selPad >= 0 && Engine.hasLoop(selPad)
 
     private fun wvLen(): Int = Engine.padDataLen(selPad)
 
@@ -2022,6 +2037,236 @@ class PadView(context: Context) : View(context) {
         return false
     }
 
+
+    // ---------------------------------------------------------------- Drum-Modus (große Pad-Ansicht)
+
+    /** Drum-Modus: Pads zum Einspielen – Drumset laden, Aufnahme mit feinem Raster, Spur-Übersicht. */
+    var drumMode = false
+        private set
+    /** Anschlagstärke nach Tipp-Höhe im Pad (oben = laut). */
+    var drumVelPos = false
+    private val drToggle = RectF()
+    private val drPanel = RectF()
+    private val drLine = RectF()
+    private val drBtns = Array(12) { RectF() }
+    private val QUANTS = intArrayOf(0, 4, 8, 16, 32)
+    private val DBARS = intArrayOf(1, 2, 4, 8)
+
+    private fun drumActive(): Boolean = focus == 1 && drumMode
+
+    fun setDrumMode(on: Boolean) {
+        drumMode = on
+        Engine.drumRec = drumActive()
+        if (on) {
+            wvStop()
+            hint("🥁 Drum-Modus: ⚡-Pads spielen sofort, ● REC nimmt die Anschläge auf (läuft im Kreis, Schicht für Schicht). Leere Pads = Sample laden")
+        } else hint("Drum-Modus aus")
+        invalidate()
+    }
+
+    private fun quantName(q: Int): String = if (q <= 0) "FREI" else "1/$q"
+
+    private fun layoutDrum() {
+        val r = drPanel
+        val rowH = dp(32f)
+        val gap = dp(5f)
+        val bottom = r.bottom - dp(8f)
+        var y = bottom - 2 * rowH - gap
+        drLine.set(r.left + dp(10f), r.top + dp(28f), r.right - dp(10f), max(r.top + dp(48f), y - dp(8f)))
+        var i = 0
+        for (row in 0 until 2) {
+            val n = 6
+            val w = (r.width() - dp(20f) - (n - 1) * gap) / n
+            for (k in 0 until n) {
+                val x = r.left + dp(10f) + k * (w + gap)
+                drBtns[i++].set(x, y, x + w, y + rowH)
+            }
+            y += rowH + gap
+        }
+    }
+
+    private fun drumPads(): List<Int> = (0 until VISIBLE_PADS).filter { Engine.isOneShot(it) && (Engine.hasLoop(it) || Engine.noteCount(it) > 0) }
+
+    private fun drawDrumPanel(canvas: Canvas) {
+        val cols = overlayColors()
+        val r = drPanel
+        layoutDrum()
+        fillPaint.shader = null
+        fillPaint.color = alpha(blend(cols[0], cols[1], 0.04f), 0.96f)
+        canvas.drawRoundRect(r, dp(12f), dp(12f), fillPaint)
+        strokePaint.strokeWidth = dp(1.3f)
+        strokePaint.color = alpha(if (Engine.seqRecording) Color.rgb(255, 60, 60) else cols[2], 0.7f)
+        canvas.drawRoundRect(r, dp(12f), dp(12f), strokePaint)
+        val bars = Engine.drumBars
+        val prog = Engine.drumProgress()
+        // Kopfzeile: Status
+        val bpm = Engine.currentBpm()
+        var head = "🥁 " + (if (bpm > 0f) String.format(Locale.GERMANY, "%.1f BPM", bpm) else "kein Tempo – Takt = 2 s") + " · $bars ${if (bars == 1) "Takt" else "Takte"} · Raster ${quantName(Engine.rollQuant)}"
+        if (prog >= 0f) {
+            val pos = prog * bars
+            head += " · Takt ${pos.toInt() + 1}.${((pos - pos.toInt()) * 4).toInt() + 1}"
+        }
+        textPaint.textAlign = Paint.Align.LEFT
+        textPaint.color = cols[1]
+        canvas.drawText(fitLabel(textPaint, head, r.width() * 0.68f, dp(12f), dp(8f)), r.left + dp(10f), r.top + dp(19f), textPaint)
+        textPaint.textAlign = Paint.Align.RIGHT
+        val st = when {
+            Engine.countingIn() -> "EINZÄHLEN …"
+            Engine.seqRecording && Engine.seqPlaying -> "● AUFNAHME"
+            Engine.seqPlaying -> "▶ LÄUFT"
+            else -> "■ STEHT"
+        }
+        textPaint.color = if (Engine.seqRecording) Color.rgb(255, 80, 80) else cols[2]
+        canvas.drawText(fitLabel(textPaint, st, r.width() * 0.3f, dp(13f), dp(8f)), r.right - dp(10f), r.top + dp(19f), textPaint)
+        textPaint.textAlign = Paint.Align.CENTER
+        // Spur-Übersicht: eine Zeile je ⚡-Pad, Anschläge als Striche
+        val tl = drLine
+        fillPaint.color = Color.argb(150, 0, 0, 0)
+        canvas.drawRoundRect(tl, dp(6f), dp(6f), fillPaint)
+        val list = drumPads()
+        val lab = min(dp(78f), tl.width() * 0.22f)
+        val gx = tl.left + lab
+        val gw = tl.right - dp(4f) - gx
+        if (list.isEmpty()) {
+            textPaint.textSize = dp(12f)
+            textPaint.color = alpha(cols[1], 0.75f)
+            canvas.drawText(fitLabel(textPaint, "🥁 DRUMSET legt ein Set auf die Pads – oder leere Pads antippen und Samples laden", tl.width() - dp(16f), dp(12f), dp(8f)), tl.centerX(), tl.centerY() + dp(4f), textPaint)
+        } else {
+            // Raster
+            val q = if (Engine.rollQuant > 0) Engine.rollQuant else 16
+            val steps = bars * q
+            if (gw / steps > dp(3f)) for (k in 0..steps) {
+                val x = gx + gw * k / steps
+                val bar = k % q == 0
+                val beat = (k * 4) % q == 0
+                strokePaint.strokeWidth = dp(if (bar) 1.4f else 0.6f)
+                strokePaint.color = Color.argb(if (bar) 130 else if (beat) 55 else 20, 255, 255, 255)
+                canvas.drawLine(x, tl.top + dp(2f), x, tl.bottom - dp(2f), strokePaint)
+            } else for (k in 0..bars * 4) {
+                val x = gx + gw * k / (bars * 4)
+                strokePaint.strokeWidth = dp(if (k % 4 == 0) 1.4f else 0.6f)
+                strokePaint.color = Color.argb(if (k % 4 == 0) 130 else 55, 255, 255, 255)
+                canvas.drawLine(x, tl.top + dp(2f), x, tl.bottom - dp(2f), strokePaint)
+            }
+            val rh = (tl.height() - dp(4f)) / list.size
+            for ((n, p) in list.withIndex()) {
+                val y0 = tl.top + dp(2f) + n * rh
+                if (p == selPad) {
+                    fillPaint.color = alpha(cols[2], 0.18f)
+                    canvas.drawRect(tl.left, y0, tl.right, y0 + rh, fillPaint)
+                }
+                textPaint.textSize = min(dp(11f), rh * 0.75f)
+                textPaint.textAlign = Paint.Align.LEFT
+                textPaint.color = if (p == selPad) cols[2] else alpha(cols[1], 0.85f)
+                val nm = "${p + 1} " + (Engine.padName(p) ?: "")
+                canvas.drawText(fitLabel(textPaint, nm, lab - dp(8f), textPaint.textSize, dp(6f)), tl.left + dp(5f), y0 + rh * 0.5f + textPaint.textSize * 0.36f, textPaint)
+                textPaint.textAlign = Paint.Align.CENTER
+                val rb = max(1, Engine.rollBars[p])
+                val hit = flash[p]
+                fillPaint.color = padAccent(p)
+                for (ev in Engine.notesOf(p)) {
+                    var k = 0
+                    while (ev.pos + k * rb < bars && k < 64) {
+                        val x = gx + gw * ((ev.pos + k * rb) / bars).toFloat()
+                        val hh = rh * (0.35f + 0.6f * ev.vel) * 0.5f
+                        canvas.drawRect(x - dp(1.2f), y0 + rh / 2 - hh, x + dp(1.2f), y0 + rh / 2 + hh, fillPaint)
+                        k++
+                    }
+                }
+                if (hit > 0f) {
+                    fillPaint.color = alpha(Color.WHITE, 0.25f * hit)
+                    canvas.drawRect(tl.left, y0, gx, y0 + rh, fillPaint)
+                }
+            }
+            if (prog >= 0f) {
+                val x = gx + gw * prog
+                strokePaint.strokeWidth = dp(2f)
+                strokePaint.color = if (Engine.seqRecording) Color.rgb(255, 70, 70) else Color.rgb(80, 230, 120)
+                canvas.drawLine(x, tl.top, x, tl.bottom, strokePaint)
+            }
+        }
+        // Knöpfe
+        val rec = Engine.seqRecording
+        val sel = selPad
+        val labels = arrayOf(
+            if (rec) "■ REC" else "● REC", if (Engine.seqPlaying) "■ STOPP" else "▶ PLAY", if (Engine.metronome) "♩ KLICK AN" else "♩ KLICK",
+            "RASTER ${quantName(Engine.rollQuant)}", "LÄNGE $bars T", "↶ UNDO",
+            "🥁 DRUMSET", if (drumVelPos) "ANSCHLAG: HÖHE" else "ANSCHLAG: FEST", if (Engine.countIn) "EINZÄHLEN AN" else "EINZÄHLEN AUS",
+            if (sel >= 0) "⌫ PAD ${sel + 1}" else "⌫ PAD", "⌫ ALLE", "🎹 NOTEN"
+        )
+        val on = booleanArrayOf(rec, Engine.seqPlaying, Engine.metronome, false, false, false, false, drumVelPos, Engine.countIn, false, false, false)
+        for (i in 0 until 12) {
+            smallBtn(canvas, drBtns[i], labels[i], on[i], cols)
+            if (i == 0 && rec) {
+                fillPaint.color = Color.argb(70, 255, 40, 40)
+                canvas.drawRoundRect(drBtns[i], dp(8f), dp(8f), fillPaint)
+            }
+        }
+    }
+
+    /** Pad-Name groß im Pad (Drum-Modus). */
+    private fun drawPadName(canvas: Canvas, i: Int) {
+        val n = Engine.padName(i) ?: return
+        val r = padRects[i]
+        if (r.width() <= 0f) return
+        textPaint.textAlign = Paint.Align.CENTER
+        textPaint.color = Color.argb(230, 255, 255, 255)
+        val t = fitLabel(textPaint, n.uppercase(Locale.GERMANY), r.width() * 0.86f, min(dp(15f), r.width() * 0.14f), dp(7f))
+        textPaint.setShadowLayer(dp(3f), 0f, 0f, Color.BLACK)
+        canvas.drawText(t, r.centerX(), r.bottom - r.height() * 0.12f, textPaint)
+        textPaint.clearShadowLayer()
+    }
+
+    /** Touch auf der Drum-Leiste (Bildschirm-Koordinaten). */
+    private fun drumPanelTouch(e: MotionEvent): Boolean {
+        val am = e.actionMasked
+        if (am != MotionEvent.ACTION_DOWN && am != MotionEvent.ACTION_POINTER_DOWN) return false
+        val idx = e.actionIndex
+        val x = e.getX(idx)
+        val y = e.getY(idx)
+        if (!drPanel.contains(x, y)) return false
+        layoutDrum()
+        if (drLine.contains(x, y)) {
+            val list = drumPads()
+            if (list.isNotEmpty()) {
+                val k = (((y - drLine.top) / drLine.height()) * list.size).toInt().coerceIn(0, list.size - 1)
+                selPad = list[k]
+                performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+            }
+            return true
+        }
+        val i = drBtns.indexOfFirst { it.contains(x, y) }
+        if (i < 0) return true
+        performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+        when (i) {
+            0 -> {
+                Engine.seqToggleRec()
+                hint(if (Engine.seqRecording) (if (Engine.countIn) "● Aufnahme – erst 1 Takt einzählen, dann einspielen. Jede Runde kommt dazu" else "● Aufnahme läuft – einspielen, jede Runde kommt dazu") else "Aufnahme beendet – ▶ läuft weiter, ↶ UNDO nimmt sie zurück")
+            }
+            1 -> if (Engine.seqPlaying) Engine.seqStop() else Engine.seqPlay()
+            2 -> { Engine.metronome = !Engine.metronome; hint(if (Engine.metronome) "Klick an" else "Klick aus") }
+            3 -> {
+                val k = (QUANTS.indexOf(Engine.rollQuant) + 1) % QUANTS.size
+                Engine.rollQuant = QUANTS[k]
+                hint(if (QUANTS[k] == 0) "Raster FREI: Anschläge bleiben genau so, wie gespielt" else "Raster 1/${QUANTS[k]}: Anschläge rasten ein")
+            }
+            4 -> {
+                val k = (DBARS.indexOf(Engine.drumBars).coerceAtLeast(0) + 1) % DBARS.size
+                Engine.setDrumBars(DBARS[k])
+                hint("Drum-Spur: ${DBARS[k]} ${if (DBARS[k] == 1) "Takt" else "Takte"} (längere Spur wiederholt das bisherige Muster)")
+            }
+            5 -> { val l = Engine.undo(); hint(if (l == null) "Nichts rückgängig zu machen" else "↶ Rückgängig: $l") }
+            6 -> onDrumKit?.invoke()
+            7 -> { drumVelPos = !drumVelPos; hint(if (drumVelPos) "Anschlag nach Höhe: oben im Pad = laut, unten = leise" else "Anschlag fest: immer volle Lautstärke") }
+            8 -> { Engine.countIn = !Engine.countIn; hint(if (Engine.countIn) "Vor der Aufnahme 1 Takt einzählen" else "Aufnahme startet sofort") }
+            9 -> if (sel() >= 0) { Engine.clearHits(sel()); hint("Spur von Pad ${sel() + 1} geleert") } else hint("Erst ein Pad antippen")
+            10 -> { Engine.clearHits(-1); hint("Alle Drum-Spuren geleert – ↶ UNDO holt sie zurück") }
+            11 -> if (sel() >= 0 && Engine.hasLoop(sel())) { closeFocus(); openKeyboard(sel()) } else hint("Erst ein Pad antippen")
+        }
+        return true
+    }
+
+    private fun sel(): Int = selPad
 
     // ---------------------------------------------------------------- Mischpult-Ansicht
 
@@ -2540,6 +2785,8 @@ class PadView(context: Context) : View(context) {
     private var twoPad = -1
     private var twoLong = false
     var onImportMenu: ((Int) -> Unit)? = null
+    /** Drumset-Auswahl öffnen (Drum-Modus). */
+    var onDrumKit: (() -> Unit)? = null
     var onPadFxEditor: ((Int) -> Unit)? = null
     private var fxBadgePointer = -1
     private var fxBadgePad = -1
@@ -2568,6 +2815,8 @@ class PadView(context: Context) : View(context) {
     /** Fingerbewegung auf einem Pad auswerten. */
     private fun padGesture(id: Int, x: Float, y: Float) {
         val p = pointerPad[id] ?: return
+        // Drum-Modus: beim Trommeln keine Wischgesten (kein versehentliches Löschen/Leiser)
+        if (drumActive() && Engine.isOneShot(p)) return
         val g = gest[id]
         val d = downXY[id] ?: return
         if (g == null) {
@@ -3502,6 +3751,13 @@ class PadView(context: Context) : View(context) {
                 closeFocus()
                 return true
             }
+            if (focus == 1 && (e.actionMasked == MotionEvent.ACTION_DOWN || e.actionMasked == MotionEvent.ACTION_POINTER_DOWN) &&
+                drToggle.contains(e.getX(e.actionIndex), e.getY(e.actionIndex))) {
+                performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+                setDrumMode(!drumMode)
+                return true
+            }
+            if (focus == 1 && drumActive() && drumPanelTouch(e)) return true
             if (focus == 1 && wavePanelTouch(e)) return true
             val ev = MotionEvent.obtain(e)
             ev.transform(focusInv)
@@ -3796,7 +4052,7 @@ class PadView(context: Context) : View(context) {
                     funcPad(p)
                     return true
                 }
-                if (pointerPad.containsValue(p)) {
+                if (pointerPad.containsValue(p) && !(drumActive() && Engine.isOneShot(p))) {
                     // zweiter Finger auf demselben Pad: Mute (kurz) bzw. Solo (lang)
                     val first = pointerPad.entries.firstOrNull { it.value == p }?.key
                     if (first != null && gest[first] == null && twoPointer < 0) {
@@ -3818,9 +4074,19 @@ class PadView(context: Context) : View(context) {
                     hint("Pad ${p + 1} ausgewählt" + if (Engine.hasLoop(p)) " – 〰 WAVE / 🎹 NOTEN / ✨ FX gelten jetzt für dieses Pad" else " (leer)")
                     return true
                 }
+                if (drumActive() && Engine.state(p) == Engine.PadState.EMPTY && !Engine.isArmed(p)) {
+                    // Drum-Modus: leeres Pad = Sample laden statt aufnehmen
+                    performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+                    onImportMenu?.invoke(p)
+                    return true
+                }
                 pointerPad[id] = p
                 downXY[id] = floatArrayOf(x, y)
-                val res = Engine.liveDown(p)
+                val vel = if (drumActive() && drumVelPos && Engine.isOneShot(p)) {
+                    val r = padRects[p]
+                    (0.2f + 0.8f * (1f - (y - r.top) / max(1f, r.height()))).coerceIn(0.2f, 1f)
+                } else 1f
+                val res = Engine.liveDown(p, vel)
                 val shot = (res and Engine.LIVE_SHOT) != 0
                 if ((res and Engine.LIVE_LAUNCHED) != 0) launchedPointers.add(id) else launchedPointers.remove(id)
                 if (shot) {

@@ -140,6 +140,7 @@ class MainActivity : Activity() {
         Engine.tapOverdub = prefs.getBoolean("tapOverdub", true)
         pads.statusColors = prefs.getBoolean("statusColors", true)
         pads.onImportMenu = { p -> showImportMenu(p) }
+        pads.onDrumKit = { showDrumKits() }
         pads.onPadFxEditor = { p -> showPadFxEditor(p) }
         pads.onEditorSave = { p, data, slices, cues -> showEditorSave(p, data, slices, cues) }
         pads.onRollIo = { p -> showRollIo(p) }
@@ -1956,9 +1957,11 @@ class MainActivity : Activity() {
                 Engine.padOneShot[p] = smp.oneShot
                 if (smp.oneShot) {
                     Engine.importLoop(p, data)
+                    Engine.setPadName(p, smp.title)
                     runOnUiThread { toast("Pad ${p + 1}: ${smp.title}") }
                 } else {
                     val desc = clipToPad(p, data, rate, smp.title + " " + smp.file)
+                    Engine.setPadName(p, smp.title)
                     runOnUiThread { hint("Pad ${p + 1}: ${smp.title} · $desc · antippen startet ihn auf der Eins") }
                 }
             } catch (e: Exception) {
@@ -3265,6 +3268,46 @@ class MainActivity : Activity() {
     }
 
     /** 📂 auf einem leeren Pad: Datei, Bibliothek oder eigene Aufnahme. */
+    /** Drumset auf die 12 Pads legen – ersetzt alles oder füllt nur leere Pads. */
+    private fun showDrumKits() {
+        val kits = SampleLibrary.KITS
+        ui()
+            .setTitle("🥁 Drumset auf die Pads legen")
+            .setItems(kits.map { k -> k.name + "\n   " + k.files.mapNotNull { SampleLibrary.byFile(it)?.title?.substringBefore(" (") }.take(6).joinToString(" · ") + " …" }.toTypedArray()) { _, which ->
+                val kit = kits[which]
+                val empty = (0 until min(12, kit.files.size)).filter { !Engine.hasLoop(it) }
+                ui()
+                    .setTitle(kit.name)
+                    .setMessage("Pad 1–12 belegen (oben links = Pad 1, Kick und Snare liegen unten links). Alle Pads werden ⚡ One-Shots.")
+                    .setPositiveButton("Alle 12 ersetzen") { _, _ -> loadKit(kit, (0 until min(12, kit.files.size)).toList()) }
+                    .setNeutralButton("Nur leere (${empty.size})") { _, _ -> if (empty.isEmpty()) hint("Keine leeren Pads") else loadKit(kit, empty) }
+                    .setNegativeButton("Abbrechen", null)
+                    .show()
+            }
+            .setNegativeButton("Abbrechen", null)
+            .show()
+    }
+
+    private fun loadKit(kit: SampleLibrary.Kit, pads: List<Int>) {
+        val rate = Engine.sampleRate
+        hint("Lade ${kit.name} …")
+        Thread {
+            try {
+                val data = ArrayList<FloatArray>()
+                val names = ArrayList<String?>()
+                for (p in pads) {
+                    val f = kit.files[p]
+                    data.add(AudioFiles.decodeAsset(this, f, rate, Engine.MAX_SECONDS))
+                    names.add(SampleLibrary.byFile(f)?.title?.substringBefore(" (") ?: f.substringAfterLast('/').substringBefore('.'))
+                }
+                Engine.loadKit(pads, data, names)
+                runOnUiThread { hint("🥁 ${kit.name} auf ${pads.size} Pads – ↶ UNDO holt die alten Pads zurück") }
+            } catch (e: Exception) {
+                runOnUiThread { toast("Drumset laden fehlgeschlagen: ${e.message ?: e}") }
+            }
+        }.start()
+    }
+
     private fun showImportMenu(p: Int) {
         menuPad = p
         val shot = Engine.padOneShot[p]

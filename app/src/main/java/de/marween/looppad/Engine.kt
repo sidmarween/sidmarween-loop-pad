@@ -50,6 +50,8 @@ class Loop(val data: FloatArray) {
     @Volatile var pendOn: Boolean = false
     /** Eigener Startpunkt (Frame in [data]): ⚡ spielt ab hier, ∞ setzt beim Starten hier ein. */
     @Volatile var cue: Int = 0
+    /** Name des Samples (aus der Bibliothek / Drumset), sonst null. */
+    @Volatile var name: String? = null
 }
 
 /** Eine laufende Aufnahme (neu oder Overdub) auf einem Pad. */
@@ -339,7 +341,7 @@ object Engine {
     class PadSave(
         val data: FloatArray?, val oneShot: Boolean, val muted: Boolean,
         val slices: Int = 0, val bars: Float = 1f, val semi: Int = 0, val gain: Float = 1f,
-        val free: Boolean = false, val cue: Int = 0
+        val free: Boolean = false, val cue: Int = 0, val name: String? = null
     )
 
     fun snapshotPads(): Array<PadSave> = Array(PADS) { p ->
@@ -347,7 +349,7 @@ object Engine {
         PadSave(
             l?.data?.copyOf(), l?.oneShot ?: padOneShot[p], l?.muted ?: false,
             l?.slices?.let { it.size - 1 } ?: 0, l?.bars ?: 1f, l?.semi ?: padSemi[p], l?.gain ?: 1f,
-            l?.free ?: false, l?.cue ?: 0
+            l?.free ?: false, l?.cue ?: 0, l?.name
         )
     }
 
@@ -425,6 +427,7 @@ object Engine {
             }
             l.free = sv.free && !sv.oneShot
             l.cue = sv.cue.coerceIn(0, max(0, d.size - 2))
+            l.name = sv.name
             if (!l.free) setWarpSource(l)
             loops.set(p, l)
         }
@@ -655,13 +658,13 @@ object Engine {
     private val voiceLock = Any()
     private var voiceIds = 0
 
-    private fun startVoice(data: FloatArray, pad: Int, rate: Double, loop: Boolean): Int {
+    private fun startVoice(data: FloatArray, pad: Int, rate: Double, loop: Boolean, from: Double = 0.0): Int {
         if (data.size < 2) return -1
         synchronized(voiceLock) {
             var v = voices.firstOrNull { !it.active }
             if (v == null) v = voices.minByOrNull { it.id }!!
             v.data = data
-            v.pos = 0.0
+            v.pos = from.coerceIn(0.0, (data.size - 2).toDouble())
             v.rate = rate
             v.loop = loop
             v.gain = 1f
@@ -822,6 +825,96 @@ object Engine {
         val raw = max(1L, heard - ev.startHeard).toDouble() / bar
         ev.len = qLen(raw, rollQuant)
     }
+
+    // ---------------------------------------------------------------- Drum-Modus (Einspielen auf ⚡-Pads)
+
+    /** Drum-Modus: Anschläge auf ⚡-Pads werden bei laufender Aufnahme als Noten mit feinem Timing aufgenommen. */
+    @Volatile var drumRec = false
+    /** Länge der Drum-Spur in Takten (1, 2, 4, 8). */
+    @Volatile var drumBars = 2
+
+    fun padName(p: Int): String? = loops.get(p)?.name
+
+    /** Drumset auf mehrere Pads legen (alle als ⚡ One-Shot) – ein Undo-Schritt. */
+    fun loadKit(pads: List<Int>, data: List<FloatArray>, names: List<String?>) {
+        if (pads.isEmpty()) return
+        pushPadUndo("Drumset laden", *pads.toIntArray())
+        for (k in pads.indices) {
+            val p = pads[k]
+            if (p !in 0 until PADS || k >= data.size) continue
+            padOneShot[p] = true
+            importLoopRaw(p, data[k])
+            loops.get(p)?.name = names.getOrNull(k)
+        }
+    }
+    fun setPadName(p: Int, n: String?) { loops.get(p)?.name = n }
+
+    /** Ein Anschlag als Note: Position auf [rollQuant] gerastert, Länge = ganzer Klang (wird nicht abgeschnitten). */
+    private fun recordHit(p: Int, vel: Float, l: Loop) {
+        val bar = seqBar()
+        if (bar <= 0L) return
+        if (rollBars[p] != drumBars) fitRollBars(p, drumBars)
+        val origin = seqStart()
+        val bars = rollBars[p]
+        val loopLen = bar * bars
+        val heard = outClock.frameAt(System.nanoTime(), sampleRate)
+        val rel = Math.floorMod(heard - origin, loopLen)
+        var pos = qPos(rel.toDouble() / bar, rollQuant)
+        if (pos >= bars) pos -= bars
+        val dur = (l.data.size - l.cue) / l.rate / bar
+        val ev = NoteEv(pos, dur.coerceIn(1.0 / 16, bars.toDouble()), padSemi[p], vel.coerceIn(0.05f, 1f))
+        ev.startHeard = heard
+        ev.validFrom = heard + loopLen / 2
+        synchronized(notesLock) {
+            notes[p].removeAll { abs(it.pos - ev.pos) < 1.0 / 128 }
+            notes[p].add(ev)
+        }
+        editVersion++
+    }
+
+    /** Spur-Länge ändern: länger = vorhandenes Muster wiederholen, kürzer = abschneiden. */
+    private fun fitRollBars(p: Int, bars: Int) {
+        val old = rollBars[p]
+        synchronized(notesLock) {
+            if (bars > old && notes[p].isNotEmpty()) {
+                val base = notes[p].toList()
+                var k = 1
+                while (k * old < bars) {
+                    for (n in base) if (n.pos + k * old < bars) notes[p].add(NoteEv(n.pos + k * old, n.len, n.semi, n.vel))
+                    k++
+                }
+            } else if (bars < old) notes[p].removeAll { it.pos >= bars }
+            rollBars[p] = bars
+        }
+    }
+
+    /** Länge der Drum-Spur für alle ⚡-Pads setzen. */
+    fun setDrumBars(bars: Int) {
+        pushPatternUndo("Drum-Länge $bars Takte")
+        drumBars = bars
+        for (p in 0 until PADS) if (isOneShot(p) && (loops.get(p) != null || noteCount(p) > 0)) fitRollBars(p, bars)
+    }
+
+    /** Eingespielte Anschläge löschen (ein Pad oder alle ⚡-Pads). */
+    fun clearHits(p: Int) {
+        pushPatternUndo(if (p >= 0) "Drum-Spur Pad ${p + 1} leeren" else "Alle Drum-Spuren leeren")
+        for (q in 0 until PADS) if (q == p || (p < 0 && isOneShot(q))) {
+            clearNotes(q)
+            java.util.Arrays.fill(seq[q], 0f)
+        }
+    }
+
+    /** Position in der Drum-Spur 0..1 (oder -1). */
+    fun drumProgress(): Float {
+        if (!seqPlaying) return -1f
+        val loopLen = seqBar() * drumBars
+        val rel = heardNow() - seqStart()
+        if (rel < 0) return -1f
+        return Math.floorMod(rel, loopLen).toFloat() / loopLen
+    }
+
+    /** Läuft gerade der Einzähler? */
+    fun countingIn(): Boolean = countTo != Long.MIN_VALUE && seqPlaying && heardNow() < countTo
 
     /** Sequenzer-Anzeige: liegt im ersten Takt eine Note auf diesem 1/16-Schritt? */
     fun noteAt(p: Int, step: Int): Boolean {
@@ -1002,7 +1095,7 @@ object Engine {
                         val k = ev.semi - SLICE_BASE
                         if (k !in sb.indices) continue
                         startVoice(sb[k], p, 1.0, false)
-                    } else startVoice(l.data, p, 2.0.pow((ev.semi + 0) / 12.0), !l.oneShot)
+                    } else startVoice(l.data, p, 2.0.pow((ev.semi + 0) / 12.0), !l.oneShot, if (l.oneShot) l.cue.toDouble() else 0.0)
                     if (id < 0) continue
                     synchronized(voiceLock) {
                         for (v in voices) if (v.id == id) {
@@ -2320,7 +2413,7 @@ object Engine {
         val loop = loops.get(p)
         if (loop != null && loop.oneShot) {
             seqSelected = p
-            if (recLive()) {
+            if (recLive() && !drumRec) {
                 val bar = seqBar()
                 val origin = seqStart()
                 val heard = outClock.frameAt(System.nanoTime(), sampleRate)
@@ -2329,7 +2422,7 @@ object Engine {
                 seq[p][Math.floorMod(n, STEPS.toLong()).toInt()] = 1f
                 // Liegt der Rasterpunkt noch vor uns, spielt ihn gleich der Sequenzer – kein Doppelschlag
                 if (f >= written) return true
-            }
+            } else if (recLive() && drumRec) recordHit(p, velocity, loop)
             loop.shotGain = velocity
             loop.shotStart = SHOT_NOW
             return true
@@ -3272,6 +3365,7 @@ object Engine {
         c.gain = l.gain
         c.free = l.free
         c.cue = if (data.size == l.data.size) l.cue else 0
+        c.name = l.name
         return c
     }
 
