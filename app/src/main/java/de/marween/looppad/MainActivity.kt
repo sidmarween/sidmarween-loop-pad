@@ -2068,88 +2068,110 @@ class MainActivity : Activity() {
 
     // ---------------------------------------------------------------- Menü & Projekte
 
+    /** Hauptmenü in Gruppen: Projekt · Aufnahme & Wiedergabe · Aussehen · Audio & MIDI · Hilfe. */
     private fun showMainMenu() {
-        ui()
-            .setTitle("Marv PAD")
-            .setItems(arrayOf(
-                "💾 Projekt speichern",
-                "📂 Projekt laden",
-                "✨ Neues Projekt",
-                "🎙 Meine Aufnahmen",
-                if (Engine.bounce) "🔁 Bounce: AN (Quellen nach Wave-Aufnahme stumm)" else "🔁 Bounce: AUS",
-                (if (pads.infoMode) "☑" else "☐") + " ℹ Info-Modus (Funktionen erklären)",
-                "🔌 Audio-Geräte (USB-Interface, Kopfhörer …)",
-                "🎨 Design wählen",
-                if (Engine.tapOverdub) "👆 Tipp auf laufenden Loop: ● OVERDUB (→ auf Stopp)" else "👆 Tipp auf laufenden Loop: ■ STOPP (→ auf Overdub)",
-                (if (pads.statusColors) "☑" else "☐") + " 🚦 Status-Farben (Rot Aufnahme · Grün Play · Gelb Overdub)",
-                String.format(Locale.GERMANY, "⚡ Latenz & Live-Reaktion (%.0f ms)", Engine.outputLatencyMs()),
-                (if (Engine.monitorOn) "☑" else "☐") + " 🎙 Live-Mikrofon mit Effekten …",
-                "🎹 MIDI (" + (if (Midi.deviceNames.isEmpty()) "kein Gerät" else Midi.deviceNames.joinToString(", ")) + ")",
-                "🔴 Meine Set-Aufnahmen (${SetRecorder.list(this).size})",
-                "📚 Bibliothek importieren / exportieren",
-                (if (Engine.autoBeatmatch) "☑" else "☐") + " 🎯 Auto-Beatmatch beim Laden (WAV/MP3 ins Tempo)",
-                "✨ Menü-Aussehen (Schrift, Hell/Dunkel, Farbe)",
-                (if (pads.zoomEnabled) "☑" else "☐") + " 🔍 Doppeltipp auf Rahmen = große Ansicht (Pads, Touchpad, Effekte)",
-                (if (zoomLandscape) "☑" else "☐") + " ↻ Große Ansicht automatisch im Querformat",
-                if (djMode) "▦ Zurück zum Pad-Modus" else "🎧 DJ-Modus (zwei Decks, Crossfader)"
-            )) { _, which ->
-                when (which) {
-                    7 -> showDesigns()
-                    10 -> showLatency()
-                    11 -> showMonitor()
-                    12 -> showMidi()
-                    13 -> showSets()
-                    14 -> showLibraryIo()
-                    15 -> {
-                        Engine.autoBeatmatch = !Engine.autoBeatmatch
-                        getSharedPreferences("marvpad", MODE_PRIVATE).edit().putBoolean("autoBeat", Engine.autoBeatmatch).apply()
-                        toast(if (Engine.autoBeatmatch) "Auto-Beatmatch an: geladene Dateien werden erkannt und ins Tempo gebracht (einmal analysiert, dann gemerkt)"
-                              else "Auto-Beatmatch aus: Dateien laufen im Original-Tempo · pro Pad später „🎯 Jetzt beatmatchen“")
-                    }
-                    16 -> showMenuLook()
-                    17 -> {
-                        pads.zoomEnabled = !pads.zoomEnabled
-                        getSharedPreferences("marvpad", MODE_PRIVATE).edit().putBoolean("zoomOn", pads.zoomEnabled).apply()
-                        if (!pads.zoomEnabled) pads.closeFocus()
-                        toast(if (pads.zoomEnabled) "Doppeltipp auf den Rahmen der Pads, des Touchpads oder der Effekt-Sektion öffnet sie groß" else "Große Ansicht aus")
-                    }
-                    18 -> {
-                        zoomLandscape = !zoomLandscape
-                        getSharedPreferences("marvpad", MODE_PRIVATE).edit().putBoolean("zoomLand", zoomLandscape).apply()
-                        toast(if (zoomLandscape) "Große Ansicht dreht automatisch ins Querformat" else "Große Ansicht bleibt im Hochformat")
-                    }
-                    19 -> switchMode(!djMode)
-                    8 -> {
-                        Engine.tapOverdub = !Engine.tapOverdub
-                        getSharedPreferences("marvpad", MODE_PRIVATE).edit().putBoolean("tapOverdub", Engine.tapOverdub).apply()
-                        toast(if (Engine.tapOverdub) "Tipp auf laufenden Loop = Overdub (gelb), nochmal tippen beendet. Stoppen: zwei Finger" else "Tipp auf laufenden Loop = stoppen (im Start-Raster)")
-                    }
-                    9 -> {
-                        pads.statusColors = !pads.statusColors
-                        getSharedPreferences("marvpad", MODE_PRIVATE).edit().putBoolean("statusColors", pads.statusColors).apply()
-                    }
-                    0 -> askProjectName(null, 0)
-                    1 -> showProjects()
-                    2 -> confirm("Neues Projekt?", "Alle Pads, das Pattern und das Tempo werden geleert. Nicht gespeicherte Änderungen gehen verloren.") {
+        val groups = listOf(
+            "💾 Projekt & Dateien" to { showMenuGroup(0) },
+            "🎙 Aufnahme & Wiedergabe" to { showMenuGroup(1) },
+            "🎨 Aussehen: Designs, Schriften, Ansicht" to { showMenuGroup(2) },
+            "🔌 Audio, Latenz & MIDI" to { showMenuGroup(3) },
+            "ℹ Hilfe & Info" to { showMenuGroup(4) },
+            (if (djMode) "▦ Zurück zum Pad-Modus" else "🎧 DJ-Modus (zwei Decks, Crossfader)") to { switchMode(!djMode) }
+        )
+        ui().setTitle("Marv PAD · Einstellungen")
+            .setItems(groups.map { it.first }.toTypedArray()) { _, w -> groups[w].second() }
+            .setNegativeButton("Schließen", null)
+            .show()
+    }
+
+    private fun showMenuGroup(g: Int) {
+        val prefs = getSharedPreferences("marvpad", MODE_PRIVATE)
+        fun check(on: Boolean) = if (on) "☑" else "☐"
+        // Einträge: Text, Aktion, danach Gruppe wieder öffnen (bei Schaltern)
+        val items = ArrayList<Triple<String, () -> Unit, Boolean>>()
+        val title: String
+        when (g) {
+            0 -> {
+                title = "💾 Projekt & Dateien"
+                items.add(Triple("💾 Projekt speichern", { askProjectName(null, 0) }, false))
+                items.add(Triple("📂 Projekt laden", { showProjects() }, false))
+                items.add(Triple("✨ Neues Projekt", {
+                    confirm("Neues Projekt?", "Alle Pads, das Pattern und das Tempo werden geleert. Nicht gespeicherte Änderungen gehen verloren.") {
                         Engine.newProject()
                         toast("Neues Projekt")
                     }
-                    3 -> showRecordings()
-                    4 -> {
-                        Engine.bounce = !Engine.bounce
-                        getSharedPreferences("marvpad", MODE_PRIVATE).edit().putBoolean("bounce", Engine.bounce).apply()
-                        toast(if (Engine.bounce) "Bounce an: nach einer Wave-Aufnahme spielt nur noch das neue Pad" else "Bounce aus: Quell-Pads spielen weiter")
-                    }
-                    6 -> showAudioDevices()
-                    5 -> {
-                        pads.infoMode = !pads.infoMode
-                        getSharedPreferences("marvpad", MODE_PRIVATE).edit().putBoolean("info", pads.infoMode).apply()
-                        toast(if (pads.infoMode) "Info-Modus an: tippe auf ein Element, um es erklärt zu bekommen" else "Info-Modus aus")
-                    }
-                    else -> showDesigns()
-                }
+                }, false))
+                items.add(Triple("🎙 Meine Aufnahmen", { showRecordings() }, false))
+                items.add(Triple("🔴 Meine Set-Aufnahmen (${SetRecorder.list(this).size})", { showSets() }, false))
+                items.add(Triple("📚 Bibliothek importieren / exportieren", { showLibraryIo() }, false))
+                items.add(Triple("🌐 Weitere freie Samples im Netz", { showFreeSampleLinks() }, false))
             }
-            .setNegativeButton("Schließen", null)
+            1 -> {
+                title = "🎙 Aufnahme & Wiedergabe"
+                items.add(Triple(check(Engine.bounce) + " 🔁 Bounce: Quellen nach Wave-/Pad-Aufnahme stumm", {
+                    Engine.bounce = !Engine.bounce
+                    prefs.edit().putBoolean("bounce", Engine.bounce).apply()
+                }, true))
+                items.add(Triple(if (Engine.tapOverdub) "👆 Tipp auf laufenden Loop: ● OVERDUB" else "👆 Tipp auf laufenden Loop: ■ STOPP", {
+                    Engine.tapOverdub = !Engine.tapOverdub
+                    prefs.edit().putBoolean("tapOverdub", Engine.tapOverdub).apply()
+                }, true))
+                items.add(Triple(check(Engine.autoBeatmatch) + " 🎯 Auto-Beatmatch beim Laden (WAV/MP3 ins Tempo)", {
+                    Engine.autoBeatmatch = !Engine.autoBeatmatch
+                    prefs.edit().putBoolean("autoBeat", Engine.autoBeatmatch).apply()
+                }, true))
+                items.add(Triple("⏱ Start-Raster: " + Engine.LAUNCH_NAMES[Engine.launchIdx] + " (weiterschalten)", {
+                    Engine.launchIdx = (Engine.launchIdx + 1) % Engine.LAUNCH_Q.size
+                    prefs.edit().putInt("launchIdx", Engine.launchIdx).apply()
+                }, true))
+                items.add(Triple("⇄ Abspiel-Modus: " + Engine.PLAY_NAMES[Engine.playMode] + " (weiterschalten)", {
+                    Engine.playMode = (Engine.playMode + 1) % Engine.PLAY_NAMES.size
+                    prefs.edit().putInt("playMode", Engine.playMode).apply()
+                }, true))
+            }
+            2 -> {
+                title = "🎨 Aussehen"
+                items.add(Triple("🖼 Design wählen (HUD, Pad- und DJ-Designs)", { showDesigns() }, false))
+                items.add(Triple("✨ Menü-Aussehen: Schrift, Hell/Dunkel, Farbe, Größe", { showMenuLook() }, false))
+                items.add(Triple(check(pads.statusColors) + " 🚦 Status-Farben (Rot Aufnahme · Grün Play · Gelb Overdub)", {
+                    pads.statusColors = !pads.statusColors
+                    prefs.edit().putBoolean("statusColors", pads.statusColors).apply()
+                }, true))
+                items.add(Triple(check(pads.zoomEnabled) + " 🔍 Doppeltipp auf Rahmen = große Ansicht", {
+                    pads.zoomEnabled = !pads.zoomEnabled
+                    prefs.edit().putBoolean("zoomOn", pads.zoomEnabled).apply()
+                    if (!pads.zoomEnabled) pads.closeFocus()
+                }, true))
+                items.add(Triple(check(zoomLandscape) + " ↻ Große Ansicht automatisch im Querformat", {
+                    zoomLandscape = !zoomLandscape
+                    prefs.edit().putBoolean("zoomLand", zoomLandscape).apply()
+                }, true))
+            }
+            3 -> {
+                title = "🔌 Audio, Latenz & MIDI"
+                items.add(Triple("🔌 Audio-Geräte (USB-Interface, Kopfhörer …)", { showAudioDevices() }, false))
+                items.add(Triple(String.format(Locale.GERMANY, "⚡ Latenz & Live-Reaktion (%.0f ms)", Engine.outputLatencyMs()), { showLatency() }, false))
+                items.add(Triple(check(Engine.monitorOn) + " 🎙 Live-Mikrofon mit Effekten …", { showMonitor() }, false))
+                items.add(Triple("🎹 MIDI (" + (if (Midi.deviceNames.isEmpty()) "kein Gerät" else Midi.deviceNames.joinToString(", ")) + ")", { showMidi() }, false))
+            }
+            else -> {
+                title = "ℹ Hilfe & Info"
+                items.add(Triple(check(pads.infoMode) + " ℹ Info-Modus (Element antippen = Erklärung)", {
+                    pads.infoMode = !pads.infoMode
+                    prefs.edit().putBoolean("info", pads.infoMode).apply()
+                    if (pads.infoMode) toast("Info-Modus an: tippe auf ein Element, um es erklärt zu bekommen")
+                }, false))
+                items.add(Triple("📄 Info-Seite: Version & alle Änderungen", { showAbout() }, false))
+                items.add(Triple("⏻ Programm schließen", { requestClose() }, false))
+            }
+        }
+        ui().setTitle(title)
+            .setItems(items.map { it.first }.toTypedArray()) { _, w ->
+                val it = items[w]
+                it.second()
+                if (it.third) showMenuGroup(g)
+            }
+            .setNegativeButton("Zurück") { _, _ -> showMainMenu() }
             .show()
     }
 
