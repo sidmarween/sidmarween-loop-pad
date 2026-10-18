@@ -121,6 +121,7 @@ class MainActivity : Activity() {
         Engine.launchIdx = prefs.getInt("launchIdx", 3).coerceIn(0, Engine.LAUNCH_Q.size - 1)
         Engine.playMode = prefs.getInt("playMode", 0).coerceIn(0, Engine.PLAY_NAMES.size - 1)
         Engine.autoBeatmatch = prefs.getBoolean("autoBeat", true)
+        MenuStyle.load(this)
         pads.onPlayModeChanged = {
             prefs.edit().putInt("playMode", Engine.playMode).apply()
             hint(when (Engine.playMode) {
@@ -254,7 +255,7 @@ class MainActivity : Activity() {
             highlightColor = Color.TRANSPARENT
             setPadding(px(8f), px(18f), px(8f), px(8f))
         }
-        AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
+        ui()
             .setView(android.widget.ScrollView(this).apply { addView(box) })
             .setPositiveButton("Schließen", null)
             .show()
@@ -283,7 +284,7 @@ class MainActivity : Activity() {
             addView(tv)
             addView(hintTv)
         }
-        val dlg = AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
+        val dlg = ui()
             .setTitle("Kontakt – marween")
             .setView(box)
             .setNegativeButton("Schließen", null)
@@ -337,7 +338,7 @@ class MainActivity : Activity() {
                 setPadding(px(6f), px(2f), 0, px(2f))
             })
         }
-        AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
+        ui()
             .setTitle("Änderungen seit Version 1")
             .setView(android.widget.ScrollView(this).apply { addView(box) })
             .setPositiveButton("Schließen", null)
@@ -530,7 +531,7 @@ class MainActivity : Activity() {
             "🎹 Instrumente: 303, Drumcomputer, Synth …"
         )
         val cur = Engine.padSource[p].coerceIn(0, 3)
-        AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
+        ui()
             .setTitle("Eingang für Pad ${p + 1}")
             .setSingleChoiceItems(labels, cur) { d, w ->
                 d.dismiss()
@@ -553,7 +554,7 @@ class MainActivity : Activity() {
         val names = arrayOf("🔊 ACID 303 (Bass)", "🥁 DRUM 909 (Drumcomputer)", "🎹 SYNTH (polyfon, Akkorde)")
         val m0 = if (Engine.padSource[p] == 3) Engine.padInstMask[p] else 7
         val checked = BooleanArray(3) { (m0 shr it) and 1 != 0 }
-        AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
+        ui()
             .setTitle("🎹 Instrumente → Pad ${p + 1}")
             .setMultiChoiceItems(names, checked) { _, i, on -> checked[i] = on }
             .setPositiveButton("Übernehmen") { _, _ ->
@@ -585,7 +586,7 @@ class MainActivity : Activity() {
         }.toTypedArray()
         val mask0 = if (Engine.padSource[p] == 2) Engine.padSrcMask[p] else 0
         val checked = BooleanArray(others.size) { (mask0 shr others[it]) and 1 != 0 }
-        val dlg = AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
+        val dlg = ui()
             .setTitle("Pad ${p + 1} nimmt auf von …")
             .setMultiChoiceItems(names, checked) { _, i, on -> checked[i] = on }
             .setPositiveButton("Übernehmen") { _, _ ->
@@ -735,7 +736,7 @@ class MainActivity : Activity() {
             gravity = Gravity.CENTER
             setPadding(0, px(6f), 0, 0)
         })
-        val dlg = AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
+        val dlg = ui()
             .setTitle("🎯 Pad ${p + 1} auf die Eins")
             .setView(android.widget.ScrollView(this).apply { addView(box) })
             .setPositiveButton("Übernehmen", null)
@@ -755,6 +756,76 @@ class MainActivity : Activity() {
             dlg.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener { taps.clear(); update() }
         }
         dlg.show()
+    }
+
+    // ---------------------------------------------------------------- Menü-Aussehen
+
+    /** Dialog-Builder im gewählten Menü-Aussehen (Schrift, Hell/Dunkel, Akzent, Größe, Ecken). */
+    private inner class StyledBuilder : AlertDialog.Builder(this@MainActivity, MenuStyle.themeRes(this@MainActivity)) {
+        override fun create(): AlertDialog {
+            val d = super.create()
+            MenuStyle.attach(d, this@MainActivity)
+            return d
+        }
+    }
+
+    private fun ui(): AlertDialog.Builder = StyledBuilder()
+
+    /** Liste, deren Einträge in einer bestimmten Schrift erscheinen (Vorschau der Schriften). */
+    private fun fontAdapter(): android.widget.ArrayAdapter<String> {
+        val names = MenuStyle.FONTS.map { it.name }
+        return object : android.widget.ArrayAdapter<String>(this, android.R.layout.simple_list_item_single_choice, names) {
+            override fun getView(position: Int, convertView: View?, parent: android.view.ViewGroup): View {
+                val v = super.getView(position, convertView, parent) as TextView
+                v.tag = MenuStyle.KEEP
+                v.typeface = MenuStyle.typeface(this@MainActivity, position)
+                v.setTextColor(MenuStyle.ink(this@MainActivity))
+                v.textSize = 17f * MenuStyle.FONTS[position].scale
+                return v
+            }
+        }
+    }
+
+    private fun showMenuLook() {
+        val items = arrayOf(
+            "🔤 Schrift: " + MenuStyle.FONTS[MenuStyle.font].name,
+            "🌓 Modus: " + MenuStyle.MODES[MenuStyle.mode],
+            "🎨 Akzentfarbe: " + MenuStyle.ACCENT_NAMES[MenuStyle.accent],
+            "🔠 Schriftgröße: " + MenuStyle.SIZES[MenuStyle.size],
+            "▢ Ecken: " + MenuStyle.CORNERS[MenuStyle.corner],
+            "↺ Zurücksetzen"
+        )
+        fun done() { MenuStyle.save(this); showMenuLook() }
+        ui().setTitle("✨ Menü-Aussehen")
+            .setItems(items) { _, w ->
+                when (w) {
+                    0 -> {
+                        val dlg = ui().setTitle("🔤 Schrift für Menüs")
+                            .setSingleChoiceItems(fontAdapter(), MenuStyle.font) { d, i ->
+                                MenuStyle.font = i
+                                d.dismiss()
+                                done()
+                            }
+                            .setNegativeButton("Zurück") { _, _ -> showMenuLook() }
+                            .create()
+                        dlg.show()
+                    }
+                    1 -> ui().setTitle("🌓 Modus").setSingleChoiceItems(MenuStyle.MODES, MenuStyle.mode) { d, i -> MenuStyle.mode = i; d.dismiss(); done() }
+                        .setNegativeButton("Zurück") { _, _ -> showMenuLook() }.show()
+                    2 -> ui().setTitle("🎨 Akzentfarbe").setSingleChoiceItems(MenuStyle.ACCENT_NAMES.mapIndexed { i, n -> "●  $n" }.toTypedArray(), MenuStyle.accent) { d, i -> MenuStyle.accent = i; d.dismiss(); done() }
+                        .setNegativeButton("Zurück") { _, _ -> showMenuLook() }.show()
+                    3 -> ui().setTitle("🔠 Schriftgröße").setSingleChoiceItems(MenuStyle.SIZES, MenuStyle.size) { d, i -> MenuStyle.size = i; d.dismiss(); done() }
+                        .setNegativeButton("Zurück") { _, _ -> showMenuLook() }.show()
+                    4 -> ui().setTitle("▢ Ecken").setSingleChoiceItems(MenuStyle.CORNERS, MenuStyle.corner) { d, i -> MenuStyle.corner = i; d.dismiss(); done() }
+                        .setNegativeButton("Zurück") { _, _ -> showMenuLook() }.show()
+                    else -> {
+                        MenuStyle.font = 1; MenuStyle.mode = 0; MenuStyle.accent = 0; MenuStyle.size = 1; MenuStyle.corner = 0
+                        done()
+                    }
+                }
+            }
+            .setNegativeButton("Schließen", null)
+            .show()
     }
 
     private fun showPadMenu(p: Int) {
@@ -810,7 +881,7 @@ class MainActivity : Activity() {
             labels.add("Löschen")
             actions.add { Engine.clear(p) }
         }
-        AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
+        ui()
             .setTitle("Pad ${p + 1}")
             .setItems(labels.toTypedArray()) { _, which -> actions[which]() }
             .setNegativeButton("Abbrechen", null)
@@ -825,7 +896,7 @@ class MainActivity : Activity() {
         if (recs.isNotEmpty()) {
             labels.add("🎙 Meine Aufnahmen (${recs.size})")
             actions.add {
-                AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
+                ui()
                     .setTitle("🎙 Meine Aufnahmen")
                     .setItems(recs.map { Projects.sampleTitle(it) }.toTypedArray()) { _, i -> loadRecording(recs[i], p) }
                     .setNegativeButton("Zurück") { _, _ -> showLibrary(p) }
@@ -845,7 +916,7 @@ class MainActivity : Activity() {
         actions.add { showLibraryIo() }
         labels.add("🌐 Weitere freie Samples im Netz …")
         actions.add { showFreeSampleLinks() }
-        AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
+        ui()
             .setTitle("Bibliothek → Pad ${p + 1}")
             .setItems(labels.toTypedArray()) { _, which -> actions[which]() }
             .setNegativeButton("Abbrechen", null)
@@ -856,7 +927,7 @@ class MainActivity : Activity() {
         val own = Projects.userSamples(this).filter { it.category == cat }
         val builtIn = SampleLibrary.inCategory(cat)
         val labels = own.map { "★ " + it.title + (if (it.oneShot) "" else " ∞") } + builtIn.map { it.title }
-        AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
+        ui()
             .setTitle(cat)
             .setItems(labels.toTypedArray()) { _, i ->
                 if (i < own.size) userSampleActions(p, own[i]) else loadLibrarySample(builtIn[i - own.size], p)
@@ -866,7 +937,7 @@ class MainActivity : Activity() {
     }
 
     private fun userSampleActions(p: Int, smp: Projects.UserSample) {
-        AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
+        ui()
             .setTitle("★ ${smp.title}")
             .setItems(arrayOf("▶ Auf Pad ${p + 1} laden", "💾 Als WAV exportieren", "🗑 Aus der Bibliothek löschen")) { _, w ->
                 if (w == 0) loadUserSample(smp, p)
@@ -914,7 +985,7 @@ class MainActivity : Activity() {
             "📤 Einzelnes Sample als WAV (auch mitgelieferte)",
             "🌐 Weitere freie Samples im Netz …"
         )
-        AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
+        ui()
             .setTitle("📚 Bibliothek – Import / Export")
             .setItems(labels.toTypedArray()) { _, w ->
                 when (w) {
@@ -929,7 +1000,7 @@ class MainActivity : Activity() {
                     2 -> {
                         val cats = user.map { it.category }.distinct()
                         if (cats.isEmpty()) { toast("Noch keine eigenen Samples (★) – speichere welche aus dem Wave-Editor oder importiere sie"); return@setItems }
-                        AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
+                        ui()
                             .setTitle("Kategorie exportieren")
                             .setItems(cats.map { c -> "$c (${user.count { it.category == c }})" }.toTypedArray()) { _, i ->
                                 val c = cats[i]
@@ -1007,7 +1078,7 @@ class MainActivity : Activity() {
                 })
             })
         }
-        AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
+        ui()
             .setTitle("🌐 Freie Samples im Netz")
             .setView(android.widget.ScrollView(this).apply { addView(box) })
             .setPositiveButton("📥 Importieren …") { _, _ -> pickLibraryImport() }
@@ -1044,14 +1115,14 @@ class MainActivity : Activity() {
         val cats = LinkedHashSet<String>(SampleLibrary.categories)
         cats.addAll(user.map { it.category })
         val list = cats.toList()
-        AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
+        ui()
             .setTitle("Sample exportieren · Kategorie")
             .setItems(list.toTypedArray()) { _, ci ->
                 val c = list[ci]
                 val own = user.filter { it.category == c }
                 val builtIn = SampleLibrary.inCategory(c)
                 val labels = own.map { "★ " + it.title } + builtIn.map { it.title }
-                AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
+                ui()
                     .setTitle(c)
                     .setItems(labels.toTypedArray()) { _, i ->
                         if (i < own.size) {
@@ -1168,7 +1239,7 @@ class MainActivity : Activity() {
             exportRate = Engine.sampleRate
             pickCreate("MarvPAD_Ausschnitt", REQ_EXPORT)
         }
-        AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
+        ui()
             .setTitle("Speichern · " + String.format(Locale.GERMANY, "%.2f s", data.size.toFloat() / Engine.sampleRate) + if (slices > 1) " · $slices Slices" else "")
             .setItems(labels.toTypedArray()) { _, w -> actions[w]() }
             .setNegativeButton("Abbrechen", null)
@@ -1202,11 +1273,11 @@ class MainActivity : Activity() {
             return
         }
         val labels = items.map { String.format(Locale.GERMANY, "%s · %.1f BPM · %s", it.title, it.bpm, Dj.fmt(it.seconds)) }
-        AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
+        ui()
             .setTitle(title)
             .setItems(labels.toTypedArray()) { _, i -> onPick(items[i]) }
             .setNeutralButton("Löschen …") { _, _ ->
-                AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
+                ui()
                     .setTitle("Aus der DJ-Bibliothek löschen")
                     .setItems(labels.toTypedArray()) { _, i -> confirm("Löschen?", items[i].title) { DjLibrary.delete(this, items[i].id) } }
                     .show()
@@ -1257,7 +1328,7 @@ class MainActivity : Activity() {
             items.add("🗑 Pad leeren")
             acts.add { Engine.clear(p) }
         }
-        AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
+        ui()
             .setTitle("Sampler-Pad ${p + 1}")
             .setItems(items.toTypedArray()) { _, w -> acts[w]() }
             .setNegativeButton("Abbrechen", null)
@@ -1334,7 +1405,7 @@ class MainActivity : Activity() {
         val f = SetRecorder.stop() ?: return
         val dur = SetRecorder.fmt(SetRecorder.seconds())
         val lost = SetRecorder.dropped
-        AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
+        ui()
             .setTitle("Set aufgenommen · $dur")
             .setMessage(String.format(Locale.GERMANY, "%s\n%.1f MB · WAV Stereo 16 Bit", f.name, f.length() / 1048576.0) +
                 (if (lost > 0) "\n⚠ ${lost} Frames übersprungen (Speicher zu langsam)" else ""))
@@ -1369,11 +1440,11 @@ class MainActivity : Activity() {
             val sec = (f.length() - 44) / (Engine.sampleRate * 4.0)
             String.format(Locale.GERMANY, "%s · %s · %.0f MB", f.nameWithoutExtension, SetRecorder.fmt(sec), f.length() / 1048576.0)
         }
-        AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
+        ui()
             .setTitle("🔴 Meine Set-Aufnahmen")
             .setItems(labels.toTypedArray()) { _, i ->
                 val f = sets[i]
-                AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
+                ui()
                     .setTitle(f.nameWithoutExtension)
                     .setItems(arrayOf("📤 Exportieren (WAV)", "✎ Umbenennen", "🎧 In Deck A laden", "🗑 Löschen")) { _, a ->
                         when (a) {
@@ -1406,7 +1477,7 @@ class MainActivity : Activity() {
     private fun showSynthPresets() {
         val genres = InstPresets.SYNTHS.map { it.genre }.distinct()
         val items = listOf("🎲 Zufallsmelodie") + genres.map { g -> "$g (${InstPresets.SYNTHS.count { it.genre == g }})" } + listOf("📥 Eigene MIDI-Datei laden …")
-        AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
+        ui()
             .setTitle("🎹 SYNTH · Presets")
             .setItems(items.toTypedArray()) { _, w ->
                 when {
@@ -1419,7 +1490,7 @@ class MainActivity : Activity() {
                     else -> {
                         val g = genres[w - 1]
                         val list = InstPresets.SYNTHS.filter { it.genre == g }
-                        AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK).setTitle(g)
+                        ui().setTitle(g)
                             .setItems(list.map { "${it.name} · ${it.bpm} BPM" }.toTypedArray()) { _, i ->
                                 val p = list[i]
                                 Engine.pushPatternUndo("SYNTH Preset")
@@ -1442,7 +1513,7 @@ class MainActivity : Activity() {
             val n = if (isAcid) InstPresets.ACIDS.count { it.genre == g } else InstPresets.DRUMS.count { it.genre == g }
             "$g ($n)"
         } + listOf("📥 Eigene MIDI-Datei laden …")
-        AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
+        ui()
             .setTitle(if (isAcid) "ACID 303 · Presets" else "DRUM 909 · Beats")
             .setItems(items.toTypedArray()) { _, w ->
                 when {
@@ -1456,7 +1527,7 @@ class MainActivity : Activity() {
                         val g = genres[w - 1]
                         if (isAcid) {
                             val list = InstPresets.ACIDS.filter { it.genre == g }
-                            AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK).setTitle(g)
+                            ui().setTitle(g)
                                 .setItems(list.map { "${it.name} · ${it.bpm} BPM" }.toTypedArray()) { _, i ->
                                     val p = list[i]
                                     Engine.pushPatternUndo("ACID Preset")
@@ -1466,7 +1537,7 @@ class MainActivity : Activity() {
                                 }.show()
                         } else {
                             val list = InstPresets.DRUMS.filter { it.genre == g }
-                            AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK).setTitle(g)
+                            ui().setTitle(g)
                                 .setItems(list.map { if (it.bpm > 0) "${it.name} · ${it.bpm} BPM" else it.name }.toTypedArray()) { _, i ->
                                     val p = list[i]
                                     Engine.pushPatternUndo("DRUM Preset")
@@ -1501,7 +1572,7 @@ class MainActivity : Activity() {
     private fun showInstMidi(k: Int) {
         instIoKind = k
         val name = when (k) { 1 -> "ACID 303"; 3 -> "SYNTH"; else -> "DRUM 909" }
-        AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
+        ui()
             .setTitle("$name · Noten")
             .setItems(arrayOf(
                 "📤 Als MIDI-Datei exportieren (.mid)",
@@ -1671,7 +1742,7 @@ class MainActivity : Activity() {
     private fun showRollIo(p: Int) {
         rollIoPad = p
         val n = Engine.noteCount(p)
-        AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
+        ui()
             .setTitle("Pad ${p + 1} · Noten ($n)")
             .setItems(arrayOf(
                 "📤 Noten als MIDI-Datei exportieren (.mid)",
@@ -1765,7 +1836,7 @@ class MainActivity : Activity() {
         cats.addAll(SampleLibrary.categories)
         val list = cats.toList()
         val labels = list.map { it } + "＋ Neue Kategorie …"
-        AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
+        ui()
             .setTitle("$title · Kategorie")
             .setItems(labels.toTypedArray()) { _, w ->
                 if (w < list.size) onPick(list[w])
@@ -1786,7 +1857,7 @@ class MainActivity : Activity() {
             setPadding((20 * d).toInt(), (8 * d).toInt(), (20 * d).toInt(), 0)
             addView(input, LinearLayout.LayoutParams(-1, -2))
         }
-        AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
+        ui()
             .setTitle(title)
             .setView(box)
             .setPositiveButton("OK") { _, _ -> onOk(input.text.toString().trim().ifEmpty { def }) }
@@ -1864,7 +1935,7 @@ class MainActivity : Activity() {
     private var pendingSongRate = 48000
 
     private fun showRecMenu() {
-        AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
+        ui()
             .setTitle("Aufnehmen")
             .setItems(arrayOf(
                 if (Engine.seqRecording) "■ Pattern-Aufnahme beenden" else "● Pattern aufnehmen  (REC kurz antippen)",
@@ -1911,7 +1982,7 @@ class MainActivity : Activity() {
         pendingSong = data
         pendingSongRate = rate
         val secs = data.size / rate
-        AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
+        ui()
             .setTitle(String.format(Locale.GERMANY, "Song aufgenommen (%d:%02d)", secs / 60, secs % 60))
             .setItems(arrayOf(
                 "🎧 Als Audio speichern (WAV)",
@@ -1934,7 +2005,7 @@ class MainActivity : Activity() {
 
     private fun finishPattern() {
         if (!Engine.seqHasAny()) return
-        AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
+        ui()
             .setTitle("Pattern aufgenommen")
             .setItems(arrayOf(
                 "🎧 Als Audio speichern (WAV, 1 Takt)",
@@ -1960,7 +2031,7 @@ class MainActivity : Activity() {
     // ---------------------------------------------------------------- Menü & Projekte
 
     private fun showMainMenu() {
-        AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
+        ui()
             .setTitle("Marv PAD")
             .setItems(arrayOf(
                 "💾 Projekt speichern",
@@ -1979,6 +2050,7 @@ class MainActivity : Activity() {
                 "🔴 Meine Set-Aufnahmen (${SetRecorder.list(this).size})",
                 "📚 Bibliothek importieren / exportieren",
                 (if (Engine.autoBeatmatch) "☑" else "☐") + " 🎯 Auto-Beatmatch beim Laden (WAV/MP3 ins Tempo)",
+                "✨ Menü-Aussehen (Schrift, Hell/Dunkel, Farbe)",
                 if (djMode) "▦ Zurück zum Pad-Modus" else "🎧 DJ-Modus (zwei Decks, Crossfader)"
             )) { _, which ->
                 when (which) {
@@ -1994,7 +2066,8 @@ class MainActivity : Activity() {
                         toast(if (Engine.autoBeatmatch) "Auto-Beatmatch an: geladene Dateien werden erkannt und ins Tempo gebracht (einmal analysiert, dann gemerkt)"
                               else "Auto-Beatmatch aus: Dateien laufen im Original-Tempo · pro Pad später „🎯 Jetzt beatmatchen“")
                     }
-                    16 -> switchMode(!djMode)
+                    16 -> showMenuLook()
+                    17 -> switchMode(!djMode)
                     8 -> {
                         Engine.tapOverdub = !Engine.tapOverdub
                         getSharedPreferences("marvpad", MODE_PRIVATE).edit().putBoolean("tapOverdub", Engine.tapOverdub).apply()
@@ -2111,7 +2184,7 @@ class MainActivity : Activity() {
             "\n\nEingang: " + (if (inSel != null) deviceName(inSel) else "Automatisch") +
             (if (inNow != null) "\n   aktiv: ${deviceName(inNow)}" else "") +
             "\n\n" + (if (usbCount > 0) "🔌 USB-Audio erkannt." else "Kein USB-Audio-Gerät erkannt. Class-compliant Interfaces per USB-C (oder OTG-Adapter) anschließen – Android bindet sie automatisch ein.")
-        AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
+        ui()
             .setTitle("🔌 Audio-Geräte")
             .setMessage(msg)
             .setPositiveButton("Ausgang …") { _, _ -> pickDevice(false) }
@@ -2127,7 +2200,7 @@ class MainActivity : Activity() {
         for (d in list) names.add(deviceName(d))
         val cur = if (input) Engine.inKey else Engine.outKey
         val checked = if (cur == null) 0 else (list.indexOfFirst { Engine.deviceKey(it) == cur } + 1).coerceAtLeast(0)
-        AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
+        ui()
             .setTitle(if (input) "Eingang wählen" else "Ausgang wählen")
             .setSingleChoiceItems(names.toTypedArray(), checked) { d, which ->
                 val key = if (which == 0) null else Engine.deviceKey(list[which - 1])
@@ -2144,7 +2217,7 @@ class MainActivity : Activity() {
     }
 
     private fun confirm(title: String, msg: String, onYes: () -> Unit) {
-        AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
+        ui()
             .setTitle(title)
             .setMessage(msg)
             .setPositiveButton("Ja") { _, _ -> onYes() }
@@ -2163,7 +2236,7 @@ class MainActivity : Activity() {
             setPadding(pad, pad / 2, pad, 0)
             addView(input, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
         }
-        AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
+        ui()
             .setTitle("Projekt speichern")
             .setView(box)
             .setPositiveButton("Speichern") { _, _ ->
@@ -2191,7 +2264,7 @@ class MainActivity : Activity() {
         }
         val fmt = SimpleDateFormat("dd.MM.yyyy HH:mm", Locale.GERMANY)
         val names = list.map { "${it.name}\n${fmt.format(Date(it.date))}${if (it.hasSong) " · mit Song" else ""}" }.toTypedArray()
-        AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
+        ui()
             .setTitle("Projekte")
             .setItems(names) { _, which -> projectActions(list[which]) }
             .setNegativeButton("Schließen", null)
@@ -2227,7 +2300,7 @@ class MainActivity : Activity() {
                 toast("Gelöscht")
             }
         }
-        AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
+        ui()
             .setTitle(info.name)
             .setItems(labels.toTypedArray()) { _, which -> actions[which]() }
             .setNegativeButton("Zurück", null)
@@ -2240,17 +2313,17 @@ class MainActivity : Activity() {
             toast("Noch keine Aufnahmen – halte ein leeres Pad gedrückt")
             return
         }
-        AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
+        ui()
             .setTitle("Meine Aufnahmen")
             .setItems(files.map { Projects.sampleTitle(it) }.toTypedArray()) { _, which ->
                 val f = files[which]
-                AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
+                ui()
                     .setTitle(Projects.sampleTitle(f))
                     .setItems(arrayOf("⬇ Auf Pad laden", "🎧 Exportieren (WAV)", "🗑 Löschen")) { _, a ->
                         when (a) {
                             0 -> {
                                 val padNames = Array(PadView.VISIBLE_PADS) { "Pad ${it + 1}" }
-                                AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
+                                ui()
                                     .setTitle("Auf welches Pad?")
                                     .setItems(padNames) { _, p -> loadRecording(f, p) }
                                     .show()
@@ -2398,7 +2471,7 @@ class MainActivity : Activity() {
             }
         })
         show()
-        AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
+        ui()
             .setTitle("Master-Tempo")
             .setView(box)
             .setPositiveButton("Fertig", null)
@@ -2410,7 +2483,7 @@ class MainActivity : Activity() {
         val n = PadView.DESIGN_NAMES.size
         val names = PadView.DESIGN_NAMES.map { "▦ $it" } + DjView.SKINS.map { "🎧 DJ · ${it.name}" }
         val cur = if (djMode) n + dj.skinIdx else pads.theme
-        AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
+        ui()
             .setTitle("Design wählen · ▦ Pads · 🎧 DJ-Modus")
             .setSingleChoiceItems(names.toTypedArray(), cur) { d, which ->
                 val prefs = getSharedPreferences("marvpad", MODE_PRIVATE)
@@ -2446,7 +2519,7 @@ class MainActivity : Activity() {
             items.add("⏏ Auswerfen")
             items.add(if (dd.libId != null) "💾 Cue-Punkte in der DJ-Bibliothek speichern" else "💿 Track mit Cue-Punkten in die DJ-Bibliothek")
         }
-        AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
+        ui()
             .setTitle("Deck ${"AB"[k]} laden")
             .setItems(items.toTypedArray()) { _, w0 ->
                 if (dd.loaded() && w0 == 0) {
@@ -2467,7 +2540,7 @@ class MainActivity : Activity() {
                     2 -> {
                         val files = Projects.listSamples(this)
                         if (files.isEmpty()) { toast("Noch keine Aufnahmen"); return@setItems }
-                        AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
+                        ui()
                             .setTitle("Aufnahme → Deck ${"AB"[k]}")
                             .setItems(files.map { Projects.sampleTitle(it) }.toTypedArray()) { _, i ->
                                 val f = files[i]
@@ -2478,7 +2551,7 @@ class MainActivity : Activity() {
                     3 -> {
                         val used = (0 until PadView.VISIBLE_PADS).filter { Engine.hasLoop(it) }
                         if (used.isEmpty()) { toast("Alle Pads sind leer"); return@setItems }
-                        AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
+                        ui()
                             .setTitle("Pad → Deck ${"AB"[k]}")
                             .setItems(used.map { "Pad ${it + 1}" }.toTypedArray()) { _, i ->
                                 val p = used[i]
@@ -2538,7 +2611,7 @@ class MainActivity : Activity() {
 
     private fun fixDeckTempo(k: Int) {
         val dd = Dj.decks[k]
-        AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
+        ui()
             .setTitle(String.format(Locale.GERMANY, "Deck %s · %.1f BPM", "AB"[k], dd.bpm))
             .setItems(arrayOf("× 2 (doppelt)", "÷ 2 (halb)", "Tempo eingeben …", "Schlag 1 = aktuelle Position (Raster setzen)")) { _, w ->
                 when (w) {
@@ -2561,14 +2634,14 @@ class MainActivity : Activity() {
     private fun deckFromLibrary(k: Int) {
         val user = Projects.userSamples(this)
         val cats = (SampleLibrary.categories + user.map { it.category }).distinct()
-        AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
+        ui()
             .setTitle("Bibliothek → Deck ${"AB"[k]}")
             .setItems(cats.toTypedArray()) { _, ci ->
                 val cat = cats[ci]
                 val own = user.filter { it.category == cat }
                 val lib = SampleLibrary.samples.filter { it.category == cat }
                 val labels = own.map { "★ " + it.title } + lib.map { it.title }
-                AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
+                ui()
                     .setTitle(cat)
                     .setItems(labels.toTypedArray()) { _, i ->
                         if (i < own.size) {
@@ -2718,7 +2791,7 @@ class MainActivity : Activity() {
             }
         }
         note(box, "ONE SHOTS und Noten klingen immer im nächsten Audio-Block (wenige Millisekunden). Touch-Ereignisse werden ohne Bildtakt-Verzögerung zugestellt.")
-        AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
+        ui()
             .setTitle("⚡ Latenz & Live-Reaktion")
             .setView(scroll)
             .setPositiveButton("Fertig", null)
@@ -2756,7 +2829,7 @@ class MainActivity : Activity() {
             setOnClickListener { showPadFxEditor(Engine.MIC_CHAIN) }
         })
         note(box, "Mit Effekten aufnehmen: Pad-Eingang auf WAVE stellen (REC-Menü) – dann landet die Stimme samt Effekten im Pad. Der Song-Rekorder nimmt sie ebenfalls mit.")
-        AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
+        ui()
             .setTitle("🎙 Live-Mikrofon")
             .setView(scroll)
             .setPositiveButton("Fertig", null)
@@ -2784,7 +2857,7 @@ class MainActivity : Activity() {
         chLabel()
         chBtn.setOnClickListener {
             val names = Array(17) { chName(it) }
-            AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK).setTitle("MIDI-Kanal der Pads")
+            ui().setTitle("MIDI-Kanal der Pads")
                 .setSingleChoiceItems(names, Midi.channel) { d, w -> Midi.channel = w; chLabel(); d.dismiss() }.show()
         }
         box.addView(chBtn)
@@ -2793,7 +2866,7 @@ class MainActivity : Activity() {
         baseLabel()
         baseBtn.setOnClickListener {
             val opts = (24..84).toList()
-            AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK).setTitle("Pad 1 = Note …")
+            ui().setTitle("Pad 1 = Note …")
                 .setSingleChoiceItems(opts.map { "${Midi.noteName(it)} ($it)" + if (it == 36) " · MPC/Maschine" else if (it == 48) " · Keyboard C3" else "" }.toTypedArray(), opts.indexOf(Midi.padBase)) { d, w ->
                     Midi.padBase = opts[w]
                     for (i in 0 until 12) Midi.padNotes[i] = -1
@@ -2814,12 +2887,12 @@ class MainActivity : Activity() {
         keysLabel()
         keysBtn.setOnClickListener {
             val names = arrayOf("aus") + Array(16) { "Kanal ${it + 1}" }
-            AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK).setTitle("Kanal für die Tastatur (chromatisch, C4 = Originalton)")
+            ui().setTitle("Kanal für die Tastatur (chromatisch, C4 = Originalton)")
                 .setSingleChoiceItems(names, Midi.keysChannel) { d, w ->
                     Midi.keysChannel = w
                     d.dismiss()
                     val pn = arrayOf("Pad aus der offenen Piano-Roll") + Array(PadView.VISIBLE_PADS) { "Pad ${it + 1}" }
-                    AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK).setTitle("Welches Pad spielt die Tastatur?")
+                    ui().setTitle("Welches Pad spielt die Tastatur?")
                         .setItems(pn) { _, p -> Midi.keysPad = p - 1; keysLabel() }.show()
                     keysLabel()
                 }.show()
@@ -2839,7 +2912,7 @@ class MainActivity : Activity() {
                 val all = Midi.allDevices()
                 if (all.isEmpty()) { toast("Kein MIDI-Gerät gefunden"); return@setOnClickListener }
                 val on = BooleanArray(all.size) { all[it] !in Midi.disabled }
-                AlertDialog.Builder(this@MainActivity, AlertDialog.THEME_DEVICE_DEFAULT_DARK).setTitle("MIDI-Geräte")
+                ui().setTitle("MIDI-Geräte")
                     .setMultiChoiceItems(all.toTypedArray(), on) { _, w, c -> on[w] = c }
                     .setPositiveButton("OK") { _, _ ->
                         Midi.disabled.clear()
@@ -2848,7 +2921,7 @@ class MainActivity : Activity() {
                     }.show()
             }
         })
-        AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
+        ui()
             .setTitle("🎹 MIDI")
             .setView(scroll)
             .setPositiveButton("Fertig", null)
@@ -2868,7 +2941,7 @@ class MainActivity : Activity() {
                 "Pad ${i + 1}: " + if (n < 0) "–" else "${Midi.noteName(n)} ($n)"
             }
         }
-        AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
+        ui()
             .setTitle("Pad antippen, dann Taste am Controller drücken")
             .setItems(labels) { _, w ->
                 if (w == PadView.VISIBLE_PADS) {
@@ -2885,10 +2958,10 @@ class MainActivity : Activity() {
 
     private fun midiCcMap() {
         val labels = Array(Midi.TARGETS.size) { i -> Midi.TARGETS[i] + ": " + (if (Midi.ccMap[i] < 0) "–" else "CC ${Midi.ccMap[i]}") }
-        AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
+        ui()
             .setTitle("Ziel wählen")
             .setItems(labels) { _, t ->
-                AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
+                ui()
                     .setTitle(Midi.TARGETS[t])
                     .setItems(arrayOf("🎓 Lernen – jetzt Regler am Controller bewegen", "Nummer eingeben …", "Zuordnung löschen")) { _, a ->
                         when (a) {
@@ -2909,7 +2982,7 @@ class MainActivity : Activity() {
     }
 
     private fun showFxList() {
-        AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
+        ui()
             .setTitle("Platz ${Engine.editSlot + 1} · Effekt wählen · ${fxRoutingText()}")
             .setSingleChoiceItems(Fx.NAMES, Engine.fxType) { d, which ->
                 Engine.selectFx(which)
@@ -2935,7 +3008,7 @@ class MainActivity : Activity() {
         val n = PadView.VISIBLE_PADS
         val names = Array(n) { "Pad ${it + 1}" + if (Engine.hasLoop(it)) "" else " (leer)" }
         val checked = BooleanArray(n) { Engine.padFx[it] }
-        AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
+        ui()
             .setTitle("Effekt wirkt auf …")
             .setMultiChoiceItems(names, checked) { _, i, c -> Engine.padFx[i] = c }
             .setPositiveButton("Fertig", null)
@@ -3119,7 +3192,7 @@ class MainActivity : Activity() {
     private fun showImportMenu(p: Int) {
         menuPad = p
         val shot = Engine.padOneShot[p]
-        AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
+        ui()
             .setTitle("Pad ${p + 1} laden")
             .setItems(arrayOf(
                 "📂 Datei (WAV / MP3) – Tempo wird erkannt und gewarpt",
@@ -3187,7 +3260,7 @@ class MainActivity : Activity() {
                 text = if (t >= 0) Fx.NAMES[t] + "  ▾" else "— leer —  ▾"
                 setOnClickListener {
                     val names = arrayOf("— leer —") + Fx.NAMES
-                    AlertDialog.Builder(this@MainActivity, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
+                    ui()
                         .setTitle("${chainName(p)} · Platz ${k + 1}")
                         .setItems(names) { _, w ->
                             Engine.setPadFxType(p, k, w - 1)
@@ -3226,7 +3299,7 @@ class MainActivity : Activity() {
             buildSlot(k)
             box.addView(slotBoxes[k])
         }
-        AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
+        ui()
             .setTitle("✨ Effekte ${chainName(p)}")
             .setView(scroll)
             .setPositiveButton("Fertig", null)
@@ -3246,7 +3319,7 @@ class MainActivity : Activity() {
         labels.add("⏱ Länge in der Kette: ${Engine.sceneBars(i)} Takt" + (if (Engine.sceneBars(i) > 1) "e" else ""))
         actions.add {
             val opts = intArrayOf(1, 2, 4, 8, 16, 32)
-            AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
+            ui()
                 .setTitle("Szene ${i + 1}: Länge")
                 .setItems(opts.map { "$it Takt" + if (it > 1) "e" else "" }.toTypedArray()) { _, w ->
                     if (!Engine.sceneExists(i)) Engine.launchScene(i)
@@ -3263,7 +3336,7 @@ class MainActivity : Activity() {
             labels.add(if (i == Engine.curScene) "🗑 Szene leeren (Pattern & Instrumente)" else "🗑 Szene löschen")
             actions.add { Engine.deleteScene(i) }
         }
-        AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
+        ui()
             .setTitle("Szene ${i + 1}" + if (i == Engine.curScene) " (läuft)" else "")
             .setItems(labels.toTypedArray()) { _, w -> actions[w]() }
             .setNegativeButton("Schließen", null)
