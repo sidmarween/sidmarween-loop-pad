@@ -441,11 +441,10 @@ class DjView(context: Context) : View(context) {
             drawSide(c, side[k][3], "🎧", dd.cue, col)
             drawSide(c, side[k][4], "FX", dd.fxOn || dd.fxAmt > 0.02f, col)
             // Pitch-Anzeige
-            text.textSize = dp(8.5f)
             text.color = alpha(s.ink, 0.75f)
             val pr = if (dd.sync) "SYNC" else String.format(Locale.GERMANY, "%+.1f%%", dd.pitch * dd.range * 100f)
-            c.drawText(pr, pitch[k].centerX(), pitch[k].bottom + dp(9f), text)
-            c.drawText("LINE " + "AB"[k], vol[k].centerX(), vol[k].top - dp(3f), text)
+            c.drawText(fitLabel(text, pr, pitch[k].width() + dp(12f), dp(8.5f), dp(6.5f)), pitch[k].centerX(), pitch[k].bottom + dp(9f), text)
+            c.drawText(fitLabel(text, "LINE " + "AB"[k], vol[k].width() + dp(10f), dp(8.5f), dp(6.5f)), vol[k].centerX(), vol[k].top - dp(3f), text)
         }
         drawXy(c)
         drawCross(c)
@@ -546,9 +545,9 @@ class DjView(context: Context) : View(context) {
         val blink = rec && (SystemClock.uptimeMillis() / 500) % 2 == 0L
         fill.color = if (rec && !blink) Color.WHITE else Color.rgb(235, 40, 55)
         c.drawCircle(setRecBtn.left + dp(10f), setRecBtn.centerY(), dp(4f), fill)
-        text.textSize = dp(11f)
         text.color = if (rec) Color.WHITE else skin.ink
-        c.drawText(if (rec) SetRecorder.fmt(SetRecorder.seconds()) else "REC", setRecBtn.centerX() + dp(6f), setRecBtn.centerY() + dp(4f), text)
+        val recLbl = fitLabel(text, if (rec) SetRecorder.fmt(SetRecorder.seconds()) else "REC", setRecBtn.width() - dp(22f), dp(11f), dp(7f))
+        c.drawText(recLbl, setRecBtn.centerX() + dp(6f), setRecBtn.centerY() + text.textSize * 0.36f, text)
         chip(c, menuBtn, "☰", false)
     }
 
@@ -560,9 +559,9 @@ class DjView(context: Context) : View(context) {
         stroke.strokeWidth = dp(1f)
         stroke.color = alpha(s.ink, 0.35f)
         c.drawRoundRect(r, dp(9f), dp(9f), stroke)
-        text.textSize = dp(12f)
         text.color = if (on) Color.WHITE else s.ink
-        c.drawText(label, r.centerX(), r.centerY() + dp(4.2f), text)
+        val lb = fitLabel(text, label, r.width() - dp(8f), dp(12f), dp(7f))
+        c.drawText(lb, r.centerX(), r.centerY() + text.textSize * 0.36f, text)
     }
 
     // ---------------------------------------------------------------- Display mit beiden Decks
@@ -862,9 +861,8 @@ class DjView(context: Context) : View(context) {
                 indicator(c, cx, cy, r * 0.6f, ang, s.accent, dp(2.2f))
             }
         }
-        text.textSize = dp(9.5f)
         text.color = alpha(s.ink, 0.8f)
-        c.drawText(label, cx, box.bottom - dp(1f), text)
+        c.drawText(fitLabel(text, label, box.width() + dp(4f), dp(9.5f), dp(6.5f)), cx, box.bottom - dp(1f), text)
     }
 
     private fun shadow(c: Canvas, x: Float, y: Float, r: Float) {
@@ -924,24 +922,22 @@ class DjView(context: Context) : View(context) {
         val s = skin
         val bc = if (s.btnCols.isNotEmpty()) s.btnCols[i % s.btnCols.size] else col
         button(c, r, on, if (s.btn == 1 || s.btn == 5) bc else col, i)
-        text.textSize = dp(9f)
         text.color = alpha(s.ink, 0.85f)
-        var lbl = label
-        while (lbl.length > 3 && text.measureText(lbl) > r.width() + dp(20f)) lbl = lbl.dropLast(1)
+        val lbl = fitLabel(text, label, r.width() + dp(10f), dp(9f), dp(6.5f))
         c.drawText(lbl, r.centerX(), r.bottom + dp(10f), text)
     }
 
     private fun drawSide(c: Canvas, r: RectF, label: String, on: Boolean, col: Int) {
         val s = skin
         button(c, r, on, col, 9)
-        text.textSize = min(dp(11f), r.height() * 0.38f)
+        val sideLbl = fitLabel(text, label, r.width() - dp(6f), min(dp(11f), r.height() * 0.38f), dp(6.5f))
         val lit = on && s.btn != 6
         text.color = when {
             lit && (s.btn == 1 || s.btn == 5) -> Color.rgb(20, 20, 20)
             on -> if (s.dark || s.btn == 1) Color.WHITE else col
             else -> alpha(if (s.btn == 8 || s.btn == 1 || s.dark) Color.WHITE else s.ink, 0.8f)
         }
-        c.drawText(label, r.centerX(), r.centerY() + text.textSize * 0.36f, text)
+        c.drawText(sideLbl, r.centerX(), r.centerY() + text.textSize * 0.36f, text)
     }
 
     private fun button(c: Canvas, r: RectF, on: Boolean, col: Int, i: Int) {
@@ -1279,9 +1275,8 @@ class DjView(context: Context) : View(context) {
             fill.color = Color.WHITE
             c.drawCircle(px, py, dp(4f), fill)
         }
-        text.textSize = dp(8.5f)
         text.color = alpha(s.ink, 0.75f)
-        c.drawText(if (xyHold) "FX ${"AB"[focus]} · HOLD" else "FX ${"AB"[focus]}", r.centerX(), r.bottom + dp(10f), text)
+        c.drawText(fitLabel(text, if (xyHold) "FX ${"AB"[focus]} · HOLD" else "FX ${"AB"[focus]}", r.width(), dp(8.5f), dp(6.5f)), r.centerX(), r.bottom + dp(10f), text)
     }
 
     private fun grid(c: Canvas, r: RectF, n: Int, col: Int, glow: Boolean) {
@@ -1588,10 +1583,10 @@ class DjView(context: Context) : View(context) {
                 }
             }
             // Beschriftung
-            text.textSize = min(dp(11f), rr.height() * 0.24f)
             val dark = when (s.pad) { 0, 3, 5, 6, 9, 12 -> true; 1 -> lit; else -> false }
             text.color = if (dark) Color.argb(200, 30, 30, 34) else Color.argb(if (lit) 255 else 190, 255, 255, 255)
-            c.drawText(lbl, rr.centerX(), rr.centerY() + text.textSize * 0.36f, text)
+            val pl = fitLabel(text, lbl, rr.width() - dp(6f), min(dp(11f), rr.height() * 0.24f), dp(6.5f))
+            c.drawText(pl, rr.centerX(), rr.centerY() + text.textSize * 0.36f, text)
         }
         // Deck-Kennung über den Pad-Hälften
         if (padMode == 0) {
@@ -2086,7 +2081,7 @@ class DjView(context: Context) : View(context) {
         val btnH = rows * bh + (rows - 1) * gap
         val waveH = max(dp(120f), evRect.bottom - dp(10f) - btnH - dp(30f) - y)
         evWave.set(evRect.left + dp(10f), y, evRect.right - dp(10f), y + waveH)
-        y = evWave.bottom + dp(30f)
+        y = evWave.bottom + dp(38f)
         val L = evRect.left + dp(10f)
         val W = evRect.width() - dp(20f)
         for (r in 0 until rows) {
@@ -2189,10 +2184,8 @@ class DjView(context: Context) : View(context) {
         stroke.color = col
         c.drawRoundRect(evRect, dp(14f), dp(14f), stroke)
         text.textAlign = Paint.Align.LEFT
-        text.textSize = dp(15f)
         text.color = Color.WHITE
-        var title = "〰 Deck ${"AB"[editDeck]} · ${d.title}"
-        while (title.length > 6 && text.measureText(title) > evRect.width() - dp(70f)) title = title.dropLast(2)
+        val title = fitLabel(text, "〰 Deck ${"AB"[editDeck]} · ${d.title}", evClose.left - evRect.left - dp(22f), dp(15f), dp(12f))
         c.drawText(title, evRect.left + dp(14f), evClose.centerY() + dp(5f), text)
         text.textSize = dp(11f)
         text.color = Color.rgb(190, 195, 205)
@@ -2201,7 +2194,8 @@ class DjView(context: Context) : View(context) {
             Locale.GERMANY, "%.2f BPM · Start %s.%02d · Raster %.3f s · Länge %s · Zoom %s",
             d.bpm, Dj.fmt(d.cuePoint / r), ((d.cuePoint / r * 100) % 100).toInt(), d.grid / r, Dj.fmt(d.seconds()), evZoomLabel()
         )
-        c.drawText(info, evRect.left + dp(14f), evClose.bottom + dp(16f), text)
+        val infoSize = text.textSize
+        c.drawText(fitLabel(text, info, evRect.width() - dp(28f), infoSize, dp(8f)), evRect.left + dp(14f), evClose.bottom + dp(16f), text)
         text.textAlign = Paint.Align.CENTER
         drawBtnE(c, evClose, "✕", false, col)
         // Übersicht (ganzer Track) mit Sichtfenster
@@ -2293,9 +2287,10 @@ class DjView(context: Context) : View(context) {
         val hx = evX(d.pos)
         c.drawLine(hx, w.top, hx, w.bottom, stroke)
         c.restore()
-        text.textSize = dp(10f)
         text.color = Color.rgb(170, 175, 185)
-        c.drawText("S ziehen = Startpunkt · weiße Linie ziehen = Abspielkopf · antippen = Kopf · ▶ spielt ab Kopf · 2 Finger = Zoom", evRect.centerX(), w.bottom + dp(18f), text)
+        val hw = evRect.width() - dp(24f)
+        c.drawText(fitLabel(text, "S ziehen = Startpunkt · weiße Linie ziehen = Abspielkopf", hw, dp(10f), dp(7.5f)), evRect.centerX(), w.bottom + dp(15f), text)
+        c.drawText(fitLabel(text, "antippen = Kopf · ▶ spielt ab Kopf · 2 Finger = Zoom", hw, dp(10f), dp(7.5f)), evRect.centerX(), w.bottom + dp(29f), text)
         // Tasten
         val labels = evLabels
         for (rI in 0 until 6) for (i in 0 until 5) {
@@ -2378,9 +2373,9 @@ class DjView(context: Context) : View(context) {
         stroke.strokeWidth = dp(1f)
         stroke.color = alpha(col, if (on) 1f else 0.45f)
         c.drawRoundRect(r, dp(8f), dp(8f), stroke)
-        text.textSize = min(dp(12f), (r.width() - dp(8f)) / max(2f, label.length * 0.6f))
         text.color = if (on) Color.rgb(15, 15, 15) else Color.WHITE
-        c.drawText(label, r.centerX(), r.centerY() + text.textSize * 0.36f, text)
+        val el = fitLabel(text, label, r.width() - dp(10f), dp(12f), dp(7f))
+        c.drawText(el, r.centerX(), r.centerY() + text.textSize * 0.36f, text)
     }
 
     private fun evZoomLabel(): String {

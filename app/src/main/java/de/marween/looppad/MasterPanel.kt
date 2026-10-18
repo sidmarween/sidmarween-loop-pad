@@ -108,21 +108,26 @@ class MasterPanel(private val host: View) {
         }
         btn(c, bOn, if (MasterBus.on[mod]) "● ${MasterBus.MODULES[mod]} AN" else "○ ${MasterBus.MODULES[mod]} AUS", MasterBus.on[mod], accent)
         text.textAlign = Paint.Align.LEFT
-        text.textSize = dp(10f)
         text.color = Color.argb(170, 255, 255, 255)
-        c.drawText(info(mod), bOn.right + dp(10f), bOn.centerY() + dp(4f), text)
+        c.drawText(fitLabel(text, info(mod), box.right - dp(12f) - (bOn.right + dp(10f)), dp(10f), dp(7.5f)), bOn.right + dp(10f), bOn.centerY() + dp(4f), text)
         text.textAlign = Paint.Align.CENTER
         val p = MasterBus.par[mod]
         for (i in sliders.indices) {
             val r = sliders[i]
             val v = p[i].coerceIn(0f, 1f)
             text.textAlign = Paint.Align.LEFT
-            text.textSize = min(dp(11f), r.height() * 0.32f)
-            text.color = Color.WHITE
-            c.drawText(MasterBus.NAMES[mod][i], r.left, r.top + text.textSize, text)
+            val ts = min(dp(11f), r.height() * 0.32f)
             text.textAlign = Paint.Align.RIGHT
+            val valLbl = fitLabel(text, MasterBus.label(mod, i), r.width() * 0.45f, ts, dp(7f))
+            val valSize = text.textSize
+            val valW = text.measureText(valLbl)
+            text.textAlign = Paint.Align.LEFT
+            text.color = Color.WHITE
+            c.drawText(fitLabel(text, MasterBus.NAMES[mod][i], r.width() - valW - dp(8f), ts, dp(7f)), r.left, r.top + ts, text)
+            text.textAlign = Paint.Align.RIGHT
+            text.textSize = valSize
             text.color = accent
-            c.drawText(MasterBus.label(mod, i), r.right, r.top + text.textSize, text)
+            c.drawText(valLbl, r.right, r.top + ts, text)
             text.textAlign = Paint.Align.CENTER
             val bar = RectF(r.left, r.bottom - max(dp(8f), r.height() * 0.3f), r.right, r.bottom)
             fill.color = Color.rgb(40, 42, 52)
@@ -160,9 +165,8 @@ class MasterPanel(private val host: View) {
         val w = (r.width() - dp(16f)) / 5
         for ((k, it) in items.withIndex()) {
             val x0 = r.left + dp(8f) + k * w
-            text.textSize = dp(9f)
             text.color = Color.argb(170, 255, 255, 255)
-            c.drawText(it.first, x0 + w / 2, r.top + dp(12f), text)
+            c.drawText(fitLabel(text, it.first, w - dp(4f), dp(9f), dp(6.5f)), x0 + w / 2, r.top + dp(12f), text)
             val bar = RectF(x0 + dp(6f), r.top + dp(18f), x0 + w - dp(6f), r.top + dp(30f))
             fill.color = Color.rgb(34, 36, 44)
             c.drawRoundRect(bar, dp(3f), dp(3f), fill)
@@ -198,9 +202,9 @@ class MasterPanel(private val host: View) {
         stroke.strokeWidth = dp(1f)
         stroke.color = Color.argb(if (on) 255 else 90, Color.red(col), Color.green(col), Color.blue(col))
         c.drawRoundRect(r, dp(8f), dp(8f), stroke)
-        text.textSize = min(dp(11.5f), (r.width() - dp(6f)) / max(2f, label.length * 0.6f))
         text.color = Color.WHITE
-        c.drawText(label, r.centerX(), r.centerY() + text.textSize * 0.36f, text)
+        val bl = fitLabel(text, label, r.width() - dp(8f), dp(11.5f), dp(7f))
+        c.drawText(bl, r.centerX(), r.centerY() + text.textSize * 0.36f, text)
     }
 
     fun touch(e: MotionEvent) {
