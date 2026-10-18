@@ -573,6 +573,8 @@ class PadView(context: Context) : View(context) {
             knobRects[k].set(x, knobTop, x + kw, knobTop + kh)
         }
 
+        val zs = dp(22f)
+        if (zoomEnabled) zoomFx.set(knobRects[4].right - zs, knobRects[4].top, knobRects[4].right, knobRects[4].top + zs) else zoomFx.setEmpty()
         // Reihe: ALLE | Effekt-Knopf | CLEAR
         val rowTop = knobTop + kh + dp(4f)
         val rh = dp(46f)
@@ -615,7 +617,9 @@ class PadView(context: Context) : View(context) {
         val tabH = dp(26f)
         val w0 = (xyRect.width() - dp(6f)) * 0.36f
         modeRects[0].set(xyRect.left, contentTop, xyRect.left + w0, contentTop + tabH)
-        modeRects[1].set(modeRects[0].right + dp(6f), contentTop, xyRect.right, contentTop + tabH)
+        val zb = if (zoomEnabled) tabH + dp(4f) else 0f
+        modeRects[1].set(modeRects[0].right + dp(6f), contentTop, xyRect.right - zb, contentTop + tabH)
+        if (zoomEnabled) zoomXy.set(xyRect.right - tabH, contentTop, xyRect.right, contentTop + tabH) else zoomXy.setEmpty()
         xyRect.top = contentTop + tabH + dp(5f)
 
         val gridTop = xyRect.bottom + gap
@@ -686,6 +690,7 @@ class PadView(context: Context) : View(context) {
         undoBtn.set(stopBtn.right + dp(10f), bTop, stopBtn.right + dp(10f) + uW, bTop + bH)
         redoBtn.set(undoBtn.right + bg, bTop, undoBtn.right + bg + uW, bTop + bH)
         mixBtn.set(redoBtn.right + dp(10f), bTop, redoBtn.right + dp(10f) + uW * 1.1f, bTop + bH)
+        if (zoomEnabled) zoomPads.set(mixBtn.right + dp(6f), bTop, mixBtn.right + dp(6f) + uW * 0.8f, bTop + bH) else zoomPads.setEmpty()
         mixRect.set(left, gridTop, left + gridW, gridTop + 3 * (cell + mb + rowGap) - rowGap)
         buildHudLines(w, h)
         buildLightCaches()
@@ -809,6 +814,8 @@ class PadView(context: Context) : View(context) {
         } else {
             drawInstrument(canvas)
         }
+        if (!zoomXy.isEmpty) zoomBtn(canvas, zoomXy, overlayColors())
+        if (!zoomFx.isEmpty) zoomBtn(canvas, zoomFx, overlayColors())
         if (mixView) drawMixer(canvas) else for (i in 0 until VISIBLE_PADS) {
             drawPad(canvas, i, dt)
             if (!sceneView) drawStatus(canvas, i)
@@ -1307,6 +1314,7 @@ class PadView(context: Context) : View(context) {
         private set
     /** Doppeltipp auf den Rahmen öffnet die große Ansicht (Optionen). */
     var zoomEnabled = true
+        set(v) { field = v; layoutPads() }
     var onFocusChanged: ((Boolean) -> Unit)? = null
     private val focusSrc = RectF()
     private val focusDst = RectF()
@@ -1316,6 +1324,34 @@ class PadView(context: Context) : View(context) {
     private var focusTapSec = 0
     private var focusTapT = 0L
     private val FOCUS_NAMES = arrayOf("", "▦ PADS", "🎛 TOUCHPAD / INSTRUMENTE", "🎚 EFFEKTE & FUNKTIONEN")
+
+    private val zoomPads = RectF()
+    private val zoomXy = RectF()
+    private val zoomFx = RectF()
+
+    /** Kleiner Knopf „⤢“: Sektion groß öffnen. */
+    private fun zoomBtn(canvas: Canvas, r: RectF, cols: IntArray) {
+        val rr = min(r.width(), r.height()) * 0.3f
+        fillPaint.shader = null
+        fillPaint.color = alpha(blend(cols[0], cols[1], 0.1f), 0.92f)
+        canvas.drawRoundRect(r, rr, rr, fillPaint)
+        strokePaint.strokeWidth = dp(1.2f)
+        strokePaint.color = alpha(cols[2], 0.8f)
+        canvas.drawRoundRect(r, rr, rr, strokePaint)
+        // Pfeile nach außen
+        val c = cols[1]
+        strokePaint.color = c
+        strokePaint.strokeWidth = dp(1.6f)
+        strokePaint.strokeCap = Paint.Cap.ROUND
+        val m = min(r.width(), r.height()) * 0.24f
+        val x0 = r.centerX() - m; val x1 = r.centerX() + m
+        val y0 = r.centerY() - m; val y1 = r.centerY() + m
+        val a = m * 0.7f
+        canvas.drawLine(x0, y0, x0 + a, y0, strokePaint); canvas.drawLine(x0, y0, x0, y0 + a, strokePaint)
+        canvas.drawLine(x1, y1, x1 - a, y1, strokePaint); canvas.drawLine(x1, y1, x1, y1 - a, strokePaint)
+        canvas.drawLine(x0, y0, x1, y1, strokePaint)
+        strokePaint.strokeCap = Paint.Cap.BUTT
+    }
 
     private fun focusBlocked(): Boolean = kbPad >= 0 || edPad >= 0 || instEd.isOpen || masterPanel.isOpen
 
@@ -1802,7 +1838,8 @@ class PadView(context: Context) : View(context) {
             canvas.drawText(if (r === undoBtn) "UNDO" else "REDO", r.centerX(), r.bottom - dp(4f), textPaint)
         }
         drawMixButton(canvas, cols)
-        val ix = mixBtn.right + dp(8f)
+        if (!zoomPads.isEmpty) zoomBtn(canvas, zoomPads, cols)
+        val ix = (if (zoomPads.isEmpty) mixBtn.right else zoomPads.right) + dp(8f)
         val avail = seqRect.right - dp(6f) - ix
         if (avail < dp(28f)) return
         val cin = Engine.countInBeat()
@@ -2973,6 +3010,18 @@ class PadView(context: Context) : View(context) {
                 if (message != null) {
                     onMessageTap?.invoke()
                     return true
+                }
+                if (focus == 0 && zoomEnabled) {
+                    val zsec = when {
+                        zoomPads.contains(x, y) -> 1
+                        zoomXy.contains(x, y) -> 2
+                        RectF(zoomFx).apply { inset(-dp(4f), -dp(4f)) }.contains(x, y) -> 3
+                        else -> 0
+                    }
+                    if (zsec != 0) {
+                        openFocus(zsec)
+                        return true
+                    }
                 }
                 if (mixView && mixRect.contains(x, y)) {
                     mixDown(id, x, y)
@@ -6919,6 +6968,7 @@ class PadView(context: Context) : View(context) {
                 else -> Triple(kbRect, "🎹 Piano-Roll", "Klaviatur links, Matrix rechts – wie in Ableton. ✕ schließt.")
             }
         }
+        if (zoomPads.contains(x, y) || zoomXy.contains(x, y) || zoomFx.contains(x, y)) return Triple(if (zoomPads.contains(x, y)) zoomPads else if (zoomXy.contains(x, y)) zoomXy else zoomFx, "⤢ Groß", "Öffnet diese Sektion bildschirmfüllend (Pads, Touchpad bzw. Effekte) – besser lesbar und bedienbar. Alternativ: Doppeltipp auf den Rahmen. ✕ oben rechts = zurück. Abschaltbar in Einstellungen → Aussehen.")
         if (mixBtn.contains(x, y)) return Triple(mixBtn, "MIX – Mischpult", "Schaltet die Pads auf eine Mischpult-Ansicht um: pro Pad ein Fader (Finger hoch/runter = Lautstärke, doppelt tippen = 0 dB), M = stumm, S = solo, Nummer antippen = Pad auswählen. Nochmal MIX = zurück zu den Pads, das gewählte Pad ist dann aktiv.")
         if (mixView && mixRect.contains(x, y)) return Triple(mixRect, "Mischpult", "Fader: Finger hoch/runter ändert die Lautstärke des Pads (bis +3,5 dB), doppelt tippen setzt 0 dB. M = stumm, S = solo. Pad-Nummer antippen = auswählen, doppelt antippen = direkt in die Piano-Roll des Pads.")
         // ---- Kopfzeile
