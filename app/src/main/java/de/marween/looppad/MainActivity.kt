@@ -46,6 +46,7 @@ class MainActivity : Activity() {
     private fun switchMode(toDj: Boolean) {
         if (toDj == djMode && mainView().parent != null) return
         djMode = toDj
+        if (toDj) pads.closeFocus()
         getSharedPreferences("marvpad", MODE_PRIVATE).edit().putBoolean("djMode", toDj).apply()
         val v = mainView()
         v.alpha = 0f
@@ -122,6 +123,12 @@ class MainActivity : Activity() {
         Engine.playMode = prefs.getInt("playMode", 0).coerceIn(0, Engine.PLAY_NAMES.size - 1)
         Engine.autoBeatmatch = prefs.getBoolean("autoBeat", true)
         MenuStyle.load(this)
+        pads.zoomEnabled = prefs.getBoolean("zoomOn", true)
+        zoomLandscape = prefs.getBoolean("zoomLand", false)
+        pads.onFocusChanged = { open ->
+            if (zoomLandscape) requestedOrientation = if (open) android.content.pm.ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE else android.content.pm.ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+        }
+        if (Engine.savedSignature == 0L) Engine.markSaved()
         pads.onPlayModeChanged = {
             prefs.edit().putInt("playMode", Engine.playMode).apply()
             hint(when (Engine.playMode) {
@@ -168,8 +175,8 @@ class MainActivity : Activity() {
         dj.onEditSaveLib = { k -> saveDeckToLib(k) }
         dj.onSetRec = { toggleSetRec() }
         pads.onSetRec = { toggleSetRec() }
-        pads.onInfo = { showAbout() }
-        dj.onInfo = { showAbout() }
+        pads.onInfo = { showLogoMenu() }
+        dj.onInfo = { showLogoMenu() }
         djMode = prefs.getBoolean("djMode", false)
         // MIDI
         Midi.load(prefs)
@@ -826,6 +833,37 @@ class MainActivity : Activity() {
             }
             .setNegativeButton("Schließen", null)
             .show()
+    }
+
+    // ---------------------------------------------------------------- Logo: Info / Schließen
+
+    private var zoomLandscape = false
+
+    private fun showLogoMenu() {
+        ui().setTitle("Marv PAD")
+            .setItems(arrayOf("ℹ Info & alle Änderungen", "⏻ Programm schließen")) { _, w ->
+                if (w == 0) showAbout() else requestClose()
+            }
+            .setNegativeButton("Zurück", null)
+            .show()
+    }
+
+    /** Schließen: bei ungespeicherten Änderungen erst fragen, sonst sofort. */
+    private fun requestClose() {
+        if (!Engine.isDirty()) { closeApp(); return }
+        ui().setTitle("Projekt speichern?")
+            .setMessage("Seit dem letzten Speichern wurde etwas geändert. Vor dem Schließen speichern?")
+            .setPositiveButton("💾 Speichern") { _, _ -> askProjectName(null, 0) { closeApp() } }
+            .setNeutralButton("Nicht speichern") { _, _ -> closeApp() }
+            .setNegativeButton("Abbrechen", null)
+            .show()
+    }
+
+    private fun closeApp() {
+        try { if (SetRecorder.recording) SetRecorder.stop() } catch (ignored: Throwable) {}
+        try { Dj.decks.forEach { it.playing = false } } catch (ignored: Throwable) {}
+        try { Engine.stop() } catch (ignored: Throwable) {}
+        finishAndRemoveTask()
     }
 
     private fun showPadMenu(p: Int) {
@@ -2051,6 +2089,8 @@ class MainActivity : Activity() {
                 "📚 Bibliothek importieren / exportieren",
                 (if (Engine.autoBeatmatch) "☑" else "☐") + " 🎯 Auto-Beatmatch beim Laden (WAV/MP3 ins Tempo)",
                 "✨ Menü-Aussehen (Schrift, Hell/Dunkel, Farbe)",
+                (if (pads.zoomEnabled) "☑" else "☐") + " 🔍 Doppeltipp auf Rahmen = große Ansicht (Pads, Touchpad, Effekte)",
+                (if (zoomLandscape) "☑" else "☐") + " ↻ Große Ansicht automatisch im Querformat",
                 if (djMode) "▦ Zurück zum Pad-Modus" else "🎧 DJ-Modus (zwei Decks, Crossfader)"
             )) { _, which ->
                 when (which) {
@@ -2067,7 +2107,18 @@ class MainActivity : Activity() {
                               else "Auto-Beatmatch aus: Dateien laufen im Original-Tempo · pro Pad später „🎯 Jetzt beatmatchen“")
                     }
                     16 -> showMenuLook()
-                    17 -> switchMode(!djMode)
+                    17 -> {
+                        pads.zoomEnabled = !pads.zoomEnabled
+                        getSharedPreferences("marvpad", MODE_PRIVATE).edit().putBoolean("zoomOn", pads.zoomEnabled).apply()
+                        if (!pads.zoomEnabled) pads.closeFocus()
+                        toast(if (pads.zoomEnabled) "Doppeltipp auf den Rahmen der Pads, des Touchpads oder der Effekt-Sektion öffnet sie groß" else "Große Ansicht aus")
+                    }
+                    18 -> {
+                        zoomLandscape = !zoomLandscape
+                        getSharedPreferences("marvpad", MODE_PRIVATE).edit().putBoolean("zoomLand", zoomLandscape).apply()
+                        toast(if (zoomLandscape) "Große Ansicht dreht automatisch ins Querformat" else "Große Ansicht bleibt im Hochformat")
+                    }
+                    19 -> switchMode(!djMode)
                     8 -> {
                         Engine.tapOverdub = !Engine.tapOverdub
                         getSharedPreferences("marvpad", MODE_PRIVATE).edit().putBoolean("tapOverdub", Engine.tapOverdub).apply()
@@ -2225,7 +2276,7 @@ class MainActivity : Activity() {
             .show()
     }
 
-    private fun askProjectName(song: ShortArray?, songRate: Int) {
+    private fun askProjectName(song: ShortArray?, songRate: Int, after: (() -> Unit)? = null) {
         val input = EditText(this).apply {
             setText("Projekt " + SimpleDateFormat("dd.MM. HH:mm", Locale.GERMANY).format(Date()))
             setSelectAllOnFocus(true)
@@ -2245,7 +2296,10 @@ class MainActivity : Activity() {
                 Thread {
                     try {
                         Projects.save(applicationContext, name, song, songRate)
-                        runOnUiThread { toast("Projekt „$name“ gespeichert") }
+                        runOnUiThread {
+                            toast("Projekt „$name“ gespeichert")
+                            after?.invoke()
+                        }
                     } catch (e: Exception) {
                         runOnUiThread { toast("Speichern fehlgeschlagen: ${e.message ?: e}") }
                     }

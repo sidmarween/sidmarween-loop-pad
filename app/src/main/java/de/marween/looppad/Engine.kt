@@ -3158,7 +3158,40 @@ object Engine {
         s.inst.restore()
     }
 
+    /** Zähler für Änderungen (Undo-Einträge) – für „wurde etwas bearbeitet?“. */
+    @Volatile var editVersion = 0L
+        private set
+    @Volatile var savedSignature = 0L
+
+    /** Kurzer Fingerabdruck des Projekts: Pads, Muster, Noten, Instrumente, Tempo. */
+    fun stateSignature(): Long {
+        var h = 1125899906842597L
+        fun mix(v: Long) { h = 31 * h + v }
+        for (p in 0 until PADS) {
+            val l = loops.get(p)
+            mix(if (l == null) 0L else System.identityHashCode(l.data).toLong())
+            mix(if (l?.muted == true) 1L else 0L)
+            mix(java.util.Arrays.hashCode(seq[p]).toLong())
+            mix(noteCount(p).toLong())
+        }
+        mix(masterLen)
+        mix(editVersion)
+        mix(try { InstState.toJson().toString().hashCode().toLong() } catch (e: Exception) { 0L })
+        return h
+    }
+
+    fun markSaved() { savedSignature = stateSignature() }
+
+    /** Gibt es ungespeicherte Änderungen? (Leeres Projekt zählt nie als geändert.) */
+    fun isDirty(): Boolean {
+        val empty = (0 until PADS).none { loops.get(it) != null } && seq.all { r -> r.all { it <= 0f } } && (0 until PADS).all { noteCount(it) == 0 } &&
+            !InstState.acidHasNotes() && !InstState.drumHasNotes() && !InstState.synHasNotes()
+        if (empty) return false
+        return stateSignature() != savedSignature
+    }
+
     private fun pushEntry(e: UndoEntry) {
+        editVersion++
         synchronized(undoLock) {
             undoStack.add(e)
             redoStack.clear()

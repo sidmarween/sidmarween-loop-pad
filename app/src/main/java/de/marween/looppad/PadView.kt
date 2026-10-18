@@ -542,8 +542,10 @@ class PadView(context: Context) : View(context) {
     }
 
     private fun layoutPads() {
-        val w = width.toFloat()
-        val h = height.toFloat()
+        // Große Ansicht im Querformat: Raster wie im Hochformat berechnen und dann vergrößert zeigen
+        val land = focus != 0 && width > height
+        val w = if (land) height.toFloat() else width.toFloat()
+        val h = if (land) width.toFloat() else height.toFloat()
         if (w <= 0f || h <= 0f) return
         val margin = dp(16f)
         val gap = dp(10f)
@@ -783,6 +785,13 @@ class PadView(context: Context) : View(context) {
         lastFrameNanos = now
         time += dt
 
+        if (focus != 0) {
+            if (focusBlocked()) closeFocus() else {
+                drawFocus(canvas, dt)
+                postInvalidateOnAnimation()
+                return
+            }
+        }
         drawBackground(canvas)
         drawTopBar(canvas)
         drawKnobs(canvas)
@@ -1289,6 +1298,153 @@ class PadView(context: Context) : View(context) {
         }
         val d = dp(5f)
         for (k in -1..1) canvas.drawCircle(r.centerX() + k * d, r.centerY(), dp(1.6f), dotPaint)
+    }
+
+    // ---------------------------------------------------------------- Große Ansicht (Ebenen)
+
+    /** 0 = aus, 1 = Pads, 2 = Touchpad / Instrumente, 3 = Effekt-Sektion (Regler + Funktionen). */
+    var focus = 0
+        private set
+    /** Doppeltipp auf den Rahmen öffnet die große Ansicht (Optionen). */
+    var zoomEnabled = true
+    var onFocusChanged: ((Boolean) -> Unit)? = null
+    private val focusSrc = RectF()
+    private val focusDst = RectF()
+    private val focusClose = RectF()
+    private val focusM = android.graphics.Matrix()
+    private val focusInv = android.graphics.Matrix()
+    private var focusTapSec = 0
+    private var focusTapT = 0L
+    private val FOCUS_NAMES = arrayOf("", "▦ PADS", "🎛 TOUCHPAD / INSTRUMENTE", "🎚 EFFEKTE & FUNKTIONEN")
+
+    private fun focusBlocked(): Boolean = kbPad >= 0 || edPad >= 0 || instEd.isOpen || masterPanel.isOpen
+
+    private fun sectionRect(sec: Int, out: RectF) {
+        when (sec) {
+            1 -> out.set(mixRect)
+            2 -> {
+                out.set(xyRect)
+                out.union(modeRects[0]); out.union(modeRects[1])
+                if (!specL.isEmpty) out.union(specL)
+                if (!specR.isEmpty) out.union(specR)
+            }
+            else -> {
+                out.set(knobRects[0])
+                for (k in 1 until 5) out.union(knobRects[k])
+                for (k in 0 until 6) out.union(funcRects[k])
+                out.union(fxBtn)
+            }
+        }
+        out.inset(-dp(6f), -dp(6f))
+    }
+
+    private fun checkFocusTap(x: Float, y: Float) {
+        if (!zoomEnabled) return
+        val sec = when {
+            focus != 0 -> focus
+            RectF(mixRect).apply { inset(-dp(12f), -dp(12f)) }.contains(x, y) -> 1
+            RectF().also { sectionRect(2, it); it.inset(-dp(12f), -dp(12f)) }.contains(x, y) -> 2
+            RectF().also { sectionRect(3, it); it.inset(-dp(8f), -dp(8f)) }.contains(x, y) -> 3
+            else -> 0
+        }
+        if (sec == 0) return
+        val now = SystemClock.uptimeMillis()
+        if (sec == focusTapSec && now - focusTapT < 380L) {
+            focusTapT = 0L
+            if (focus == sec) closeFocus() else openFocus(sec)
+        } else {
+            focusTapSec = sec
+            focusTapT = now
+        }
+    }
+
+    fun openFocus(sec: Int) {
+        if (sec !in 1..3) return
+        focus = sec
+        performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+        layoutPads()
+        onFocusChanged?.invoke(true)
+        hint("${FOCUS_NAMES[sec]} groß · Doppeltipp auf den Rahmen oder ✕ = zurück")
+    }
+
+    fun closeFocus() {
+        if (focus == 0) return
+        focus = 0
+        layoutPads()
+        onFocusChanged?.invoke(false)
+    }
+
+    private fun updateFocusMatrix() {
+        sectionRect(focus, focusSrc)
+        val top = insetTop + dp(46f)
+        focusDst.set(dp(8f), top, width - dp(8f), height - insetBottom - dp(8f))
+        val sc = min(focusDst.width() / focusSrc.width(), focusDst.height() / focusSrc.height())
+        val tx = focusDst.centerX() - focusSrc.centerX() * sc
+        val ty = focusDst.centerY() - focusSrc.centerY() * sc
+        focusM.reset()
+        focusM.setScale(sc, sc)
+        focusM.postTranslate(tx, ty)
+        focusM.invert(focusInv)
+        val cs = dp(36f)
+        focusClose.set(width - dp(10f) - cs, insetTop + dp(5f), width - dp(10f), insetTop + dp(5f) + cs)
+    }
+
+    private fun drawFocus(canvas: Canvas, dt: Float) {
+        updateFocusMatrix()
+        drawBackground(canvas)
+        canvas.save()
+        canvas.concat(focusM)
+        when (focus) {
+            1 -> {
+                if (mixView) drawMixer(canvas) else for (i in 0 until VISIBLE_PADS) {
+                    drawPad(canvas, i, dt)
+                    if (!sceneView) drawStatus(canvas, i)
+                    drawMore(canvas, i)
+                    drawKeyButton(canvas, i)
+                    if (!sceneView) drawFxBadge(canvas, i)
+                    drawPadOverlay(canvas, i)
+                }
+            }
+            2 -> {
+                if (Engine.motionState == Engine.MOT_PLAY && xyPointer < 0) {
+                    xyDispX = Engine.motCurX
+                    xyDispY = Engine.motCurY
+                }
+                drawModeTabs(canvas)
+                if (xyMode == 0) {
+                    drawXy(canvas, dt)
+                    drawSlotChips(canvas)
+                    drawHoldButton(canvas)
+                    drawMotionButton(canvas)
+                } else drawInstrument(canvas)
+            }
+            else -> {
+                drawKnobs(canvas)
+                drawFxButton(canvas, dt)
+                drawFuncRow(canvas)
+            }
+        }
+        drawShocks(canvas, dt)
+        drawParticles(canvas, dt)
+        canvas.restore()
+        // Kopfzeile der großen Ansicht
+        val cols = overlayColors()
+        textPaint.textAlign = Paint.Align.LEFT
+        textPaint.color = cols[1]
+        val t = fitLabel(textPaint, FOCUS_NAMES[focus], focusClose.left - dp(24f), dp(15f), dp(10f))
+        canvas.drawText(t, dp(14f), focusClose.centerY() + textPaint.textSize * 0.36f, textPaint)
+        textPaint.textAlign = Paint.Align.CENTER
+        fillPaint.shader = null
+        fillPaint.color = blend(cols[0], cols[1], 0.12f)
+        canvas.drawRoundRect(focusClose, dp(10f), dp(10f), fillPaint)
+        strokePaint.strokeWidth = dp(1.4f)
+        strokePaint.color = cols[2]
+        canvas.drawRoundRect(focusClose, dp(10f), dp(10f), strokePaint)
+        textPaint.textSize = dp(18f)
+        textPaint.color = cols[1]
+        canvas.drawText("✕", focusClose.centerX(), focusClose.centerY() + dp(6f), textPaint)
+        drawInfo(canvas)
+        message?.let { drawMessage(canvas, it) }
     }
 
     // ---------------------------------------------------------------- Mischpult-Ansicht
@@ -2761,6 +2917,23 @@ class PadView(context: Context) : View(context) {
     override fun onTouchEvent(e: MotionEvent): Boolean {
         // Touch-Ereignisse sofort zustellen statt im Bildtakt gesammelt (spart bis zu 16 ms)
         if (e.actionMasked == MotionEvent.ACTION_DOWN) try { requestUnbufferedDispatch(e) } catch (ignored: Throwable) {}
+        if (focus != 0) {
+            if (focusBlocked()) { closeFocus(); return true }
+            if ((e.actionMasked == MotionEvent.ACTION_DOWN || e.actionMasked == MotionEvent.ACTION_POINTER_DOWN) &&
+                focusClose.contains(e.getX(e.actionIndex), e.getY(e.actionIndex))) {
+                performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+                closeFocus()
+                return true
+            }
+            val ev = MotionEvent.obtain(e)
+            ev.transform(focusInv)
+            try { touchInner(ev) } finally { ev.recycle() }
+            return true
+        }
+        return touchInner(e)
+    }
+
+    private fun touchInner(e: MotionEvent): Boolean {
         if (infoMode && message == null && (e.actionMasked == MotionEvent.ACTION_DOWN || e.actionMasked == MotionEvent.ACTION_POINTER_DOWN)) {
             val ix = e.getX(e.actionIndex)
             val iy = e.getY(e.actionIndex)
@@ -3008,7 +3181,10 @@ class PadView(context: Context) : View(context) {
                     }
                 }
                 val p = hitPad(x, y)
-                if (p < 0) return true
+                if (p < 0) {
+                    checkFocusTap(x, y)
+                    return true
+                }
                 if (sceneView) {
                     if (scenePointer < 0) sceneDown(p, id)
                     return true
@@ -6734,7 +6910,7 @@ class PadView(context: Context) : View(context) {
         if (mixBtn.contains(x, y)) return Triple(mixBtn, "MIX – Mischpult", "Schaltet die Pads auf eine Mischpult-Ansicht um: pro Pad ein Fader (Finger hoch/runter = Lautstärke, doppelt tippen = 0 dB), M = stumm, S = solo, Nummer antippen = Pad auswählen. Nochmal MIX = zurück zu den Pads, das gewählte Pad ist dann aktiv.")
         if (mixView && mixRect.contains(x, y)) return Triple(mixRect, "Mischpult", "Fader: Finger hoch/runter ändert die Lautstärke des Pads (bis +3,5 dB), doppelt tippen setzt 0 dB. M = stumm, S = solo. Pad-Nummer antippen = auswählen, doppelt antippen = direkt in die Piano-Roll des Pads.")
         // ---- Kopfzeile
-        if (logoDst.contains(x, y)) return Triple(logoDst, "Marv PAD", "Live-Looper mit 12 Pads, XY-Effektfläche, Effekt-Kette, Sequenzer und Tastatur. Antippen öffnet die Info-Seite mit Version und allen Änderungen. © marween")
+        if (logoDst.contains(x, y)) return Triple(logoDst, "Marv PAD", "Live-Looper mit 12 Pads, XY-Effektfläche, Effekt-Kette, Sequenzer und Tastatur. Antippen: Info-Seite (Version, alle Änderungen) oder Programm schließen. © marween")
         if (displayRect.contains(x, y)) {
             return if (x > displayRect.left + displayRect.width() * 0.62f)
                 Triple(displayRect, "Tempo", "Zeigt das Master-Tempo. Rechts im Display tippen: Tempo einstellen (Regler, ±, Tap-Tempo), Metronom an/aus oder Automatisch (erster Loop bestimmt das Tempo).")

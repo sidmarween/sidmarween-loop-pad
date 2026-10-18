@@ -104,6 +104,7 @@ object Projects {
         j.put("seq", sq)
         if (song != null) File(dir, "song.wav").outputStream().use { AudioFiles.writeWav(it, song, songRate) }
         File(dir, "project.json").writeText(j.toString())
+        Engine.markSaved()
         return dir
     }
 
@@ -178,6 +179,7 @@ object Projects {
         for (p in 0 until Engine.PADS) {
             Engine.padFx[p] = if (p < pa.length()) pa.getJSONObject(p).optBoolean("fx", oldTarget < 0 || oldTarget == p) else true
         }
+        Engine.markSaved()
     }
 
     fun delete(dir: File) {
