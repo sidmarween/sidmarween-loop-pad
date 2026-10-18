@@ -6466,6 +6466,29 @@ class PadView(context: Context) : View(context) {
             }
             textPaint.textAlign = Paint.Align.CENTER
         }
+        // Live-Marker: wo das Pad gerade im Mix abgespielt wird (Echtzeit)
+        val lp = if (edData.size == Engine.padDataLen(edPad)) Engine.padPlayPos(edPad) else -1.0
+        if (lp >= 0.0) {
+            val lc = Color.rgb(255, 176, 40)
+            val lx = frameToX(lp.toInt())
+            if (lx >= w.left && lx <= w.right) {
+                strokePaint.strokeWidth = dp(2f)
+                strokePaint.color = lc
+                canvas.drawLine(lx, w.top, lx, w.bottom, strokePaint)
+                fillPaint.color = lc
+                canvas.drawCircle(lx, w.bottom - dp(4f), dp(4f), fillPaint)
+                textPaint.textSize = dp(8f)
+                textPaint.color = lc
+                textPaint.textAlign = Paint.Align.LEFT
+                canvas.drawText("LIVE", lx + dp(3f), w.bottom - dp(10f), textPaint)
+                textPaint.textAlign = Paint.Align.CENTER
+            } else {
+                // außerhalb des Ausschnitts: Pfeil am Rand
+                textPaint.textSize = dp(12f)
+                textPaint.color = lc
+                canvas.drawText(if (lx < w.left) "◀ LIVE" else "LIVE ▶", if (lx < w.left) w.left + dp(24f) else w.right - dp(24f), w.bottom - dp(6f), textPaint)
+            }
+        }
         val hx = frameToX(edHead)
         if (hx >= w.left - dp(1f) && hx <= w.right + dp(1f)) {
             val hc = if (playingNow) Color.rgb(80, 230, 120) else Color.WHITE

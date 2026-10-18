@@ -2635,6 +2635,7 @@ object Engine {
 
     /** Kopie der Loop-Samples für den Export. */
     fun loopData(p: Int): FloatArray? = loops.get(p)?.data?.copyOf()
+    fun padDataLen(p: Int): Int = loops.get(p)?.data?.size ?: 0
 
     /** Setzt eine importierte Datei als Loop ein – synchron zum Takt, falls es schon einen gibt. */
     fun importLoop(p: Int, src: FloatArray) {
@@ -2786,6 +2787,37 @@ object Engine {
     private var countClickHigh = false
 
     private fun heardNow(): Long = outClock.frameAt(System.nanoTime(), sampleRate)
+
+    /** Hörbare Abspielstelle eines Pads in seinen Audiodaten (Frames), oder -1 wenn es gerade nicht klingt. */
+    fun padPlayPos(p: Int): Double {
+        val l = loops.get(p) ?: return -1.0
+        val len = l.data.size
+        if (len < 2) return -1.0
+        val heard = heardNow()
+        if (l.oneShot) {
+            val ss = l.shotStart
+            if (ss == Long.MIN_VALUE || ss == SHOT_NOW) return -1.0
+            val pos = (heard - ss) * l.rate
+            return if (pos >= 0.0 && pos < len - 1) pos else -1.0
+        }
+        if (!seqPlaying || l.muted) return -1.0
+        val rel = heard - l.start
+        if (rel < 0) return -1.0
+        val sl = l.slices
+        val m = masterLen
+        if (sl != null) {
+            if (l.sliceBufs != null && noteCount(p) > 0) return -1.0
+            if (m <= 0L) return -1.0
+            val n = sl.size - 1
+            val tl = max(1L, (m * l.bars).toLong())
+            val pos = Math.floorMod(rel, tl)
+            val k = ((pos * n) / tl).toInt().coerceIn(0, n - 1)
+            val off = pos - (k.toLong() * tl) / n
+            val sLen = (sl[k + 1] - sl[k]).toLong()
+            return if (off < sLen) (sl[k] + off).toDouble() else -1.0
+        }
+        return Math.floorMod(rel, len.toLong()).toDouble()
+    }
 
     /** Legt die Eins aller Loops und des Sequenzers auf [start] und lässt den Transport laufen. */
     private fun startTransportAt(start: Long) {
