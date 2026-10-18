@@ -1818,6 +1818,7 @@ class PadView(context: Context) : View(context) {
         onPadFxEditor?.invoke(fxBadgePad)
     }
     var onLaunchQuantChanged: (() -> Unit)? = null
+    var onPlayModeChanged: (() -> Unit)? = null
     private val quantPill = RectF()
 
     private fun gestVolActive(): Boolean = gest.values.any { it == 1 }
@@ -2177,16 +2178,19 @@ class PadView(context: Context) : View(context) {
 
     private val srcPill = RectF()
     private val modePill = RectF()
+    private val playPill = RectF()
 
     private fun drawFooter(canvas: Canvas) {
         val w = width.toFloat()
         val top = height - insetBottom - dp(33f)
         val ph = dp(22f)
-        val pw = min(dp(124f), (w - dp(40f)) / 3f)
-        val gp = dp(6f)
-        modePill.set(w / 2f - pw / 2f, top, w / 2f + pw / 2f, top + ph)
-        srcPill.set(modePill.left - gp - pw, top, modePill.left - gp, top + ph)
+        val gp = dp(5f)
+        val pw = min(dp(112f), (w - dp(16f) - 3 * gp) / 4f)
+        val x0 = w / 2f - (4 * pw + 3 * gp) / 2f
+        srcPill.set(x0, top, x0 + pw, top + ph)
+        modePill.set(srcPill.right + gp, top, srcPill.right + gp + pw, top + ph)
         quantPill.set(modePill.right + gp, top, modePill.right + gp + pw, top + ph)
+        playPill.set(quantPill.right + gp, top, quantPill.right + gp + pw, top + ph)
         val modeText = when {
             sceneView && func == F_ERASE -> "ERASE: Szene antippen = löschen / leeren"
             sceneView && func == F_DUPL -> if (sceneDupSrc < 0) "DUPL: Quell-Szene antippen" else "DUPL: Ziel-Szene antippen"
@@ -2213,6 +2217,7 @@ class PadView(context: Context) : View(context) {
             }
             footerPill(canvas, modePill, ml, live, cols)
             footerPill(canvas, quantPill, "⏱ " + Engine.LAUNCH_NAMES[Engine.launchIdx], Engine.launchIdx > 0, cols)
+            footerPill(canvas, playPill, Engine.PLAY_NAMES[Engine.playMode], Engine.playMode > 0, cols)
         }
         textPaint.textSize = dp(9f)
         textPaint.color = alpha(BRAND_ORANGE, 0.8f)
@@ -2319,9 +2324,9 @@ class PadView(context: Context) : View(context) {
         strokePaint.strokeWidth = dp(1.2f)
         strokePaint.color = if (on) Color.WHITE else alpha(cols[1], 0.5f)
         canvas.drawRoundRect(r, rr, rr, strokePaint)
-        textPaint.textSize = min(dp(10.5f), (r.width() - dp(10f)) / (label.length * 0.62f))
         textPaint.color = if (on) Color.WHITE else cols[1]
-        canvas.drawText(label, r.centerX(), r.centerY() + textPaint.textSize * 0.36f, textPaint)
+        val lb = fitLabel(textPaint, label, r.width() - dp(10f), dp(10.5f), dp(6.5f))
+        canvas.drawText(lb, r.centerX(), r.centerY() + textPaint.textSize * 0.36f, textPaint)
     }
 
     // ---------------------------------------------------------------- Regler, Effekt-Knopf, XY-Fläche
@@ -2800,6 +2805,13 @@ class PadView(context: Context) : View(context) {
                     performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
                     burst(x, y, overlayColors()[2], 12, 160f)
                     onLaunchQuantChanged?.invoke()
+                    return true
+                }
+                if (func == F_NONE && !sceneView && playPill.contains(x, y)) {
+                    Engine.playMode = (Engine.playMode + 1) % Engine.PLAY_NAMES.size
+                    performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+                    burst(x, y, overlayColors()[2], 12, 160f)
+                    onPlayModeChanged?.invoke()
                     return true
                 }
                 if (func == F_NONE && !sceneView && modePill.contains(x, y)) {
@@ -6829,7 +6841,8 @@ class PadView(context: Context) : View(context) {
         }
         // ---- Fußzeile
         if (srcPill.contains(x, y)) return Triple(srcPill, "Eingang aller Pads", "Stellt den Eingang aller Pads um: 🎙 Mikrofon oder 〰 Wave (nimmt auf, was die App ausgibt – inkl. Effekte). Pro Pad im •••-Menü einstellbar.")
-        if (quantPill.contains(x, y)) return Triple(quantPill, "⏱ Start-Raster", "Wann ein Loop startet oder stoppt, wenn du sein Pad antippst (wie Global Quantize in Ableton Live): AUS = sofort, 1/4, 1/2, 1, 2 oder 4 Takte. Das Pad blinkt grün (startet) bzw. rot (stoppt), bis es so weit ist.")
+        if (quantPill.contains(x, y)) return Triple(quantPill, "⏱ Start-Raster", "Wann ein Loop startet oder stoppt, wenn du sein Pad antippst (wie Global Quantize in Ableton Live): SOFORT, 1/4, 1/2, 1, 2, 4 oder 8 Takte. Das Pad blinkt grün (startet) bzw. rot (stoppt), bis es so weit ist.")
+        if (playPill.contains(x, y)) return Triple(playPill, "Abspiel-Modus", "⇉ ZUSAMMEN: angetippte Loops laufen gemeinsam. ⇄ WECHSELN: es läuft immer nur ein Loop – tippst du ein anderes Pad, hört der bisherige genau dann auf, wenn der neue im Start-Raster einsetzt. ⇄ JE REIHE: so pro Pad-Reihe (1–4, 5–8, 9–12), die Reihen laufen zusammen – ideal für Drums / Bass / Melodie. ⚡-Pads sind nie betroffen.")
         if (modePill.contains(x, y)) return Triple(modePill, "Aufnahme-Modus", "✋ HALTEN (Finger halten), 👆 TIPPEN (Start/Stopp per Tipp) oder ⚡ LIVE mit fester Länge. Loops rasten immer synchron auf 1–32 Takte ein.")
         return null
     }

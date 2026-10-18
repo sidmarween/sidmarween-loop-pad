@@ -119,6 +119,15 @@ class MainActivity : Activity() {
         pads.onSceneMenu = { showSceneMenu(it) }
         Engine.countIn = prefs.getBoolean("countIn", true)
         Engine.launchIdx = prefs.getInt("launchIdx", 3).coerceIn(0, Engine.LAUNCH_Q.size - 1)
+        Engine.playMode = prefs.getInt("playMode", 0).coerceIn(0, Engine.PLAY_NAMES.size - 1)
+        pads.onPlayModeChanged = {
+            prefs.edit().putInt("playMode", Engine.playMode).apply()
+            hint(when (Engine.playMode) {
+                1 -> "⇄ WECHSELN: immer nur ein Loop – der neue löst den alten genau im Start-Raster ab"
+                2 -> "⇄ JE REIHE: pro Pad-Reihe läuft ein Loop, die Reihen spielen zusammen"
+                else -> "⇉ ZUSAMMEN: angetippte Loops laufen gemeinsam"
+            })
+        }
         Engine.tapOverdub = prefs.getBoolean("tapOverdub", true)
         pads.statusColors = prefs.getBoolean("statusColors", true)
         pads.onImportMenu = { p -> showImportMenu(p) }
@@ -129,7 +138,7 @@ class MainActivity : Activity() {
         pads.onInstPresets = { k -> showInstPresets(k) }
         pads.onLaunchQuantChanged = {
             prefs.edit().putInt("launchIdx", Engine.launchIdx).apply()
-            hint(if (Engine.LAUNCH_Q[Engine.launchIdx] <= 0f) "Start-Raster AUS: Loops starten/stoppen sofort"
+            hint(if (Engine.LAUNCH_Q[Engine.launchIdx] <= 0f) "Start-Raster SOFORT: Loops starten/stoppen beim Antippen"
                  else "Start-Raster ${Engine.LAUNCH_NAMES[Engine.launchIdx]}: angetippte Loops starten/stoppen auf dem nächsten Rasterpunkt")
         }
         pads.onSongStopped = { finishSong() }

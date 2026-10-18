@@ -3578,8 +3578,36 @@ object Engine {
     // ================================================================ Clip-Launch & Warp (Ableton-Live-Prinzip)
 
     /** Start-Raster für Loops: aus, 1/4, 1/2, 1, 2, 4 Takte. */
-    val LAUNCH_Q = floatArrayOf(0f, 0.25f, 0.5f, 1f, 2f, 4f)
-    val LAUNCH_NAMES = arrayOf("AUS", "1/4", "1/2", "1 TAKT", "2 TAKTE", "4 TAKTE")
+    val LAUNCH_Q = floatArrayOf(0f, 0.25f, 0.5f, 1f, 2f, 4f, 8f)
+    val LAUNCH_NAMES = arrayOf("SOFORT", "1/4", "1/2", "1 TAKT", "2 TAKTE", "4 TAKTE", "8 TAKTE")
+
+    /** Abspiel-Modus: 0 = Pads spielen zusammen, 1 = Wechseln (ein Loop zur Zeit), 2 = Wechseln je Reihe. */
+    @Volatile var playMode = 0
+    val PLAY_NAMES = arrayOf("⇉ ZUSAMMEN", "⇄ WECHSELN", "⇄ JE REIHE")
+
+    /** Andere Loops, die beim Start von Pad [p] im Wechsel-Modus aufhören. */
+    private fun exclusiveOthers(p: Int): List<Int> {
+        if (playMode == 0) return emptyList()
+        return (0 until PADS).filter { q ->
+            q != p && (playMode == 1 || q / 4 == p / 4) && loops.get(q)?.let { !it.oneShot } == true
+        }
+    }
+
+    /** Wechsel-Modus: die anderen Loops der Gruppe sofort bzw. zum Zeitpunkt [at] stoppen. */
+    private fun stopOthers(p: Int, at: Long) {
+        for (q in exclusiveOthers(p)) {
+            val o = loops.get(q) ?: continue
+            if (at == Long.MIN_VALUE) {
+                o.pendAt = Long.MIN_VALUE
+                o.muted = true
+            } else if (o.pendAt != Long.MIN_VALUE && o.pendOn) {
+                o.pendAt = Long.MIN_VALUE      // vorgemerkter Start entfällt
+            } else if (!o.muted) {
+                o.pendOn = false
+                o.pendAt = at
+            }
+        }
+    }
     @Volatile var launchIdx = 3
     /** Tipp auf einen laufenden Loop: true = Overdub einrasten, false = stoppen. */
     @Volatile var tapOverdub = true
@@ -3615,6 +3643,7 @@ object Engine {
         val turnOn = l.muted
         if (!seqPlaying) {
             if (turnOn) {
+                stopOthers(p, Long.MIN_VALUE)
                 l.muted = false
                 transportPlay(false)
             } else {
@@ -3626,6 +3655,7 @@ object Engine {
         val q = if (padSyncStart[p] && turnOn && LAUNCH_Q[launchIdx] <= 0f) 0.25f else LAUNCH_Q[launchIdx]
         val m = masterLen
         if (q <= 0f || m <= 0L) {
+            if (turnOn) stopOthers(p, Long.MIN_VALUE)
             l.muted = !turnOn
             return 0
         }
@@ -3636,6 +3666,8 @@ object Engine {
         if (at < written + 64) at += unit
         l.pendOn = turnOn
         l.pendAt = at
+        // Wechsel-Modus: der bisher laufende Loop hört genau dann auf, wenn der neue einsetzt
+        if (turnOn) stopOthers(p, at)
         return 1
     }
 
