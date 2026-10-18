@@ -889,7 +889,7 @@ object Engine {
     }
 
     /** Länge der Drum-Spur für alle ⚡-Pads setzen. */
-    fun setDrumBars(bars: Int) {
+    fun changeDrumBars(bars: Int) {
         pushPatternUndo("Drum-Länge $bars Takte")
         drumBars = bars
         for (p in 0 until PADS) if (isOneShot(p) && (loops.get(p) != null || noteCount(p) > 0)) fitRollBars(p, bars)

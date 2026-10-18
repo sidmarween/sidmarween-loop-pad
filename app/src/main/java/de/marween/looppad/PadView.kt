@@ -2252,7 +2252,7 @@ class PadView(context: Context) : View(context) {
             }
             4 -> {
                 val k = (DBARS.indexOf(Engine.drumBars).coerceAtLeast(0) + 1) % DBARS.size
-                Engine.setDrumBars(DBARS[k])
+                Engine.changeDrumBars(DBARS[k])
                 hint("Drum-Spur: ${DBARS[k]} ${if (DBARS[k] == 1) "Takt" else "Takte"} (längere Spur wiederholt das bisherige Muster)")
             }
             5 -> { val l = Engine.undo(); hint(if (l == null) "Nichts rückgängig zu machen" else "↶ Rückgängig: $l") }
