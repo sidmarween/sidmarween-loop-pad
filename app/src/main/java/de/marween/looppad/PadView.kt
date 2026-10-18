@@ -2066,7 +2066,7 @@ class PadView(context: Context) : View(context) {
 
     private fun quantName(q: Int): String = if (q <= 0) "FREI" else "1/$q"
 
-    private fun layoutDrum() {
+    private fun layoutDrumPanel() {
         val r = drPanel
         val rowH = dp(32f)
         val gap = dp(5f)
@@ -2090,7 +2090,7 @@ class PadView(context: Context) : View(context) {
     private fun drawDrumPanel(canvas: Canvas) {
         val cols = overlayColors()
         val r = drPanel
-        layoutDrum()
+        layoutDrumPanel()
         fillPaint.shader = null
         fillPaint.color = alpha(blend(cols[0], cols[1], 0.04f), 0.96f)
         canvas.drawRoundRect(r, dp(12f), dp(12f), fillPaint)
@@ -2225,7 +2225,7 @@ class PadView(context: Context) : View(context) {
         val x = e.getX(idx)
         val y = e.getY(idx)
         if (!drPanel.contains(x, y)) return false
-        layoutDrum()
+        layoutDrumPanel()
         if (drLine.contains(x, y)) {
             val list = drumPads()
             if (list.isNotEmpty()) {
