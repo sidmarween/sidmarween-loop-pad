@@ -85,6 +85,9 @@ class MainActivity : Activity() {
         prefs.getString("padSource", null)?.split(",")?.forEachIndexed { i, v ->
             if (i < Engine.PADS) Engine.padSource[i] = v.toIntOrNull() ?: 0
         }
+        prefs.getString("padSrcMask", null)?.split(",")?.forEachIndexed { i, v ->
+            if (i < Engine.PADS) Engine.padSrcMask[i] = v.toIntOrNull() ?: 0
+        }
         Engine.liveBars = prefs.getInt("liveBars", 0)
         Engine.bounce = prefs.getBoolean("bounce", true)
         Engine.onBounced = { pad, muted ->
@@ -487,8 +490,88 @@ class MainActivity : Activity() {
     private fun saveRecPrefs() {
         getSharedPreferences("marvpad", MODE_PRIVATE).edit()
             .putString("padSource", Engine.padSource.joinToString(","))
+            .putString("padSrcMask", Engine.padSrcMask.joinToString(","))
             .putInt("liveBars", Engine.liveBars)
             .apply()
+    }
+
+    // ---------------------------------------------------------------- Eingang eines Pads
+
+    private fun srcLabel(p: Int): String = when (Engine.padSource[p]) {
+        2 -> "🎛 Pads " + Engine.maskPads(Engine.padSrcMask[p]).joinToString("+") { "${it + 1}" }
+        1 -> "〰 Wave (App-Audio)"
+        else -> "🎙 Mikrofon"
+    }
+
+    /** Eingang wählen: Mikrofon, gesamtes App-Audio oder einzelne Pads / Pad-Gruppen. */
+    private fun showSourceMenu(p: Int) {
+        val labels = arrayOf(
+            "🎙 Mikrofon",
+            "〰 Wave – alles, was die App ausgibt (inkl. Effekte)",
+            "🎛 Andere Pads als Eingang (einzeln oder als Gruppe) …"
+        )
+        val cur = Engine.padSource[p].coerceIn(0, 2)
+        AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
+            .setTitle("Eingang für Pad ${p + 1}")
+            .setSingleChoiceItems(labels, cur) { d, w ->
+                d.dismiss()
+                when (w) {
+                    0, 1 -> {
+                        Engine.padSource[p] = w
+                        saveRecPrefs()
+                        toast("Pad ${p + 1}: Eingang " + srcLabel(p))
+                    }
+                    else -> showPadGroupPicker(p)
+                }
+            }
+            .setNegativeButton("Abbrechen", null)
+            .show()
+    }
+
+    private fun showPadGroupPicker(p: Int) {
+        val others = (0 until PadView.VISIBLE_PADS).filter { it != p }
+        val names = others.map { q ->
+            val st = when {
+                !Engine.hasLoop(q) -> "leer"
+                Engine.isOneShot(q) -> "⚡ One-Shot"
+                Engine.isMuted(q) -> "∞ Loop · stumm"
+                else -> "∞ Loop"
+            }
+            "Pad ${q + 1} · $st"
+        }.toTypedArray()
+        val mask0 = if (Engine.padSource[p] == 2) Engine.padSrcMask[p] else 0
+        val checked = BooleanArray(others.size) { (mask0 shr others[it]) and 1 != 0 }
+        val dlg = AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
+            .setTitle("Pad ${p + 1} nimmt auf von …")
+            .setMultiChoiceItems(names, checked) { _, i, on -> checked[i] = on }
+            .setPositiveButton("Übernehmen") { _, _ ->
+                var m = 0
+                for (i in others.indices) if (checked[i]) m = m or (1 shl others[i])
+                if (m == 0) {
+                    toast("Keine Pads gewählt – Eingang bleibt " + srcLabel(p))
+                } else {
+                    Engine.padSrcMask[p] = m
+                    Engine.padSource[p] = 2
+                    saveRecPrefs()
+                    toast("Pad ${p + 1} nimmt auf: " + srcLabel(p) + " · halten/antippen zum Aufnehmen")
+                }
+            }
+            .setNeutralButton("Alle laufenden", null)
+            .setNegativeButton("Abbrechen", null)
+            .create()
+        dlg.setOnShowListener {
+            // Schnellwahl: alle gerade laufenden Loops/Pads (bleibt offen zum Anpassen)
+            dlg.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener {
+                val lv = dlg.listView
+                for (i in others.indices) {
+                    val q = others[i]
+                    val on = Engine.hasLoop(q) && !Engine.isMuted(q)
+                    checked[i] = on
+                    lv.setItemChecked(i, on)
+                }
+            }
+        }
+        dlg.show()
     }
 
     private fun showPadMenu(p: Int) {
@@ -497,13 +580,8 @@ class MainActivity : Activity() {
         val shot = Engine.isOneShot(p)
         val labels = ArrayList<String>()
         val actions = ArrayList<() -> Unit>()
-        val wave = Engine.padSource[p] == 1
-        labels.add(if (wave) "Eingang: 〰 Wave (App-Audio)  →  auf 🎙 Mikrofon" else "Eingang: 🎙 Mikrofon  →  auf 〰 Wave (App-Audio)")
-        actions.add {
-            Engine.padSource[p] = if (wave) 0 else 1
-            saveRecPrefs()
-            toast(if (wave) "Pad ${p + 1} nimmt vom Mikrofon auf" else "Pad ${p + 1} nimmt das App-Audio inkl. Effekte auf")
-        }
+        labels.add("Eingang: " + srcLabel(p) + "  →  ändern …")
+        actions.add { showSourceMenu(p) }
         labels.add(if (shot) "Modus: ⚡ ONE SHOT  →  auf ∞ LOOP umschalten" else "Modus: ∞ LOOP  →  auf ⚡ ONE SHOT umschalten")
         actions.add { Engine.setPadMode(p, !shot) }
         labels.add("Aus Bibliothek laden")

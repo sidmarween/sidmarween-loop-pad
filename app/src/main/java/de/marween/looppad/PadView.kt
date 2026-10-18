@@ -1250,7 +1250,7 @@ class PadView(context: Context) : View(context) {
             Engine.PadState.ONESHOT -> String.format(Locale.GERMANY, "⚡ %.1fs", Engine.loopSeconds(i))
             Engine.PadState.PLAYING -> String.format(Locale.GERMANY, "∞ %.1fs", Engine.loopSeconds(i))
             Engine.PadState.MUTED -> "AUS"
-            Engine.PadState.RECORDING -> if (Engine.isArmed(i)) "BEREIT" else String.format(Locale.GERMANY, "%s %.1f", if (Engine.padSource[i] == 1) "WAVE" else "REC", Engine.recordingSeconds(i))
+            Engine.PadState.RECORDING -> if (Engine.isArmed(i)) "BEREIT" else String.format(Locale.GERMANY, "%s %.1f", if (Engine.padSource[i] == 2) "PADS" else if (Engine.padSource[i] == 1) "WAVE" else "REC", Engine.recordingSeconds(i))
             Engine.PadState.OVERDUB -> "DUB"
         }
         if (label.isNotEmpty()) {
@@ -1760,7 +1760,7 @@ class PadView(context: Context) : View(context) {
     /** Leeres Pad: großes + mit der Quelle (🎙 Mikro / 〰 Wave) und 📂 für Datei/Bibliothek. */
     private fun drawEmptyPad(canvas: Canvas, i: Int) {
         val r = padRects[i]
-        val wave = Engine.padSource[i] == 1
+        val wave = Engine.padSource[i] >= 1
         val c = ink(0.5f)
         strokePaint.shader = null
         strokePaint.color = c
@@ -1774,7 +1774,14 @@ class PadView(context: Context) : View(context) {
         strokePaint.strokeCap = Paint.Cap.BUTT
         textPaint.textSize = r.width() * 0.12f
         textPaint.color = ink(0.6f)
-        canvas.drawText(if (wave) "〰 WAVE" else "🎙 MIC", cx, cy + a + r.width() * 0.16f, textPaint)
+        val srcTxt = when (Engine.padSource[i]) {
+            2 -> "🎛 " + Engine.maskPads(Engine.padSrcMask[i]).joinToString("+") { "${it + 1}" }.ifEmpty { "PADS" }
+            1 -> "〰 WAVE"
+            else -> "🎙 MIC"
+        }
+        val maxTw = r.width() * 0.9f
+        if (textPaint.measureText(srcTxt) > maxTw) textPaint.textSize *= maxTw / textPaint.measureText(srcTxt)
+        canvas.drawText(srcTxt, cx, cy + a + r.width() * 0.16f, textPaint)
         importRect(i, iconRect)
         val ir = iconRect
         fillPaint.shader = null
@@ -2268,7 +2275,7 @@ class PadView(context: Context) : View(context) {
     private fun drawInputBadge(canvas: Canvas, i: Int) {
         val r = padRects[i]
         if (r.width() <= 0f) return
-        val wave = Engine.padSource[i] == 1
+        val wave = Engine.padSource[i] >= 1
         val cols = overlayColors()
         val sz = min(dp(18f), r.width() * 0.2f)
         val cx = r.left + sz * 0.5f + dp(5f)
@@ -3549,7 +3556,7 @@ class PadView(context: Context) : View(context) {
             Engine.PadState.ONESHOT -> String.format(Locale.GERMANY, "%.1fs", Engine.loopSeconds(i))
             Engine.PadState.PLAYING -> String.format(Locale.GERMANY, "∞ %.1fs", Engine.loopSeconds(i))
             Engine.PadState.MUTED -> "AUS"
-            Engine.PadState.RECORDING -> if (Engine.isArmed(i)) "BEREIT" else String.format(Locale.GERMANY, "%s %.1f", if (Engine.padSource[i] == 1) "WAVE" else "REC", Engine.recordingSeconds(i))
+            Engine.PadState.RECORDING -> if (Engine.isArmed(i)) "BEREIT" else String.format(Locale.GERMANY, "%s %.1f", if (Engine.padSource[i] == 2) "PADS" else if (Engine.padSource[i] == 1) "WAVE" else "REC", Engine.recordingSeconds(i))
             Engine.PadState.OVERDUB -> "DUB"
         }
         if (label.isNotEmpty()) {
@@ -4563,7 +4570,7 @@ class PadView(context: Context) : View(context) {
             Engine.PadState.ONESHOT -> String.format(Locale.GERMANY, "%.1fs", Engine.loopSeconds(i))
             Engine.PadState.PLAYING -> String.format(Locale.GERMANY, "∞ %.1fs", Engine.loopSeconds(i))
             Engine.PadState.MUTED -> "AUS"
-            Engine.PadState.RECORDING -> if (Engine.isArmed(i)) "BEREIT" else String.format(Locale.GERMANY, "%s %.1f", if (Engine.padSource[i] == 1) "WAVE" else "REC", Engine.recordingSeconds(i))
+            Engine.PadState.RECORDING -> if (Engine.isArmed(i)) "BEREIT" else String.format(Locale.GERMANY, "%s %.1f", if (Engine.padSource[i] == 2) "PADS" else if (Engine.padSource[i] == 1) "WAVE" else "REC", Engine.recordingSeconds(i))
             Engine.PadState.OVERDUB -> "DUB"
         }
         if (label.isNotEmpty()) {
@@ -6574,7 +6581,11 @@ class PadView(context: Context) : View(context) {
         return true
     }
 
-    private fun srcName(i: Int) = if (Engine.padSource[i] == 1) "〰 Wave (App-Audio inkl. Effekte)" else "🎙 Mikrofon"
+    private fun srcName(i: Int) = when (Engine.padSource[i]) {
+        2 -> "🎛 Pads " + Engine.maskPads(Engine.padSrcMask[i]).joinToString(", ") { "${it + 1}" } + " (nach ihren eigenen Effekten)"
+        1 -> "〰 Wave (App-Audio inkl. Effekte)"
+        else -> "🎙 Mikrofon"
+    }
 
     private fun infoAt(x: Float, y: Float): Triple<RectF?, String, String>? {
         // ---- Wave-Editor

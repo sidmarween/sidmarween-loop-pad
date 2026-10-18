@@ -65,6 +65,8 @@ class Take(val overdub: Boolean, val fromIn: Long, val downNanos: Long, val oneS
     var live: Boolean = false
     /** Bounce: Pads, die während dieser Wave-Aufnahme mitspielten. */
     var bounceSrc: IntArray? = null
+    /** Bei src = 2: welche Pads aufgenommen werden (Bitmaske). */
+    var mask: Int = 0
     /** Bei Resample: Ausgabe-Frames der Aufnahme. */
     @Volatile var fromOut: Long = 0L
     @Volatile var toOut: Long = Long.MAX_VALUE
@@ -1428,6 +1430,7 @@ object Engine {
         if (ring.size != newSize) ring = FloatArray(newSize)
         ringSize = newSize
         if (outRing.size != newSize) outRing = FloatArray(newSize)
+        if (padRing.size != newSize) padRing = FloatArray(newSize)
 
         val t: AudioTrack = try {
             buildTrack(burst)
@@ -1630,7 +1633,7 @@ object Engine {
         val maxFrames = sampleRate.toLong() * MAX_SECONDS
         for (p in 0 until PADS) {
             val take = takes.get(p) ?: continue
-            if (take.src == 1) continue
+            if (take.src >= 1) continue
             if (!take.armed && now - take.downNanos >= MIN_HOLD_NANOS) {
                 // Transport steht? Aufnahme startet ihn – die Eins liegt auf dem Tastendruck
                 if (!seqPlaying && masterLen > 0L && !take.oneShot) startTransportAt(outClock.frameAt(take.downNanos, sampleRate))
@@ -1772,7 +1775,7 @@ object Engine {
         synchronized(take) {
             if (take.released) return
             take.upNanos = upNanos
-            if (take.src == 1) {
+            if (take.src >= 1) {
                 val rawOut = max(take.fromOut + 1, outClock.frameAt(upNanos, sampleRate))
                 val m1 = masterLen
                 if (m1 <= 0L || take.oneShot) {
@@ -1818,7 +1821,10 @@ object Engine {
         val micBuf = FloatArray(block)
         val instScratch = FloatArray(block)
         val padBufs = Array(PADS) { FloatArray(block) }
+        val capBuf = FloatArray(block)
+        val zeroBuf = FloatArray(block)
         val chainNow = BooleanArray(PADS)
+        val chainFx = BooleanArray(PADS)
         val monBuf = FloatArray(block)
         val djL = FloatArray(block)
         val djR = FloatArray(block)
@@ -1842,8 +1848,15 @@ object Engine {
             runRepeat(w, block)
             val mlen = masterLen
             val transport = seqPlaying
+            var cm = 0
             for (p in 0 until PADS) {
-                chainNow[p] = padChainActive(p)
+                val tk = takes.get(p) ?: continue
+                if (tk.src == 2) cm = cm or tk.mask
+            }
+            captureMask = cm
+            for (p in 0 until PADS) {
+                chainFx[p] = padChainActive(p)
+                chainNow[p] = chainFx[p] || (cm shr p) and 1 != 0
                 if (chainNow[p]) java.util.Arrays.fill(padBufs[p], 0f)
             }
             for (p in 0 until PADS) {
@@ -1986,10 +1999,12 @@ object Engine {
                 monCursor = -1L
                 monitorLevel *= 0.9f
             }
+            val capOn = captureMask != 0
+            if (capOn) java.util.Arrays.fill(capBuf, 0, block, 0f)
             for (p in 0 until PADS) {
                 if (!chainNow[p]) continue
                 val pb = padBufs[p]
-                for (sl in 0 until 3) {
+                if (chainFx[p]) for (sl in 0 until 3) {
                     val t = pfxType[p][sl]
                     val fx = pfxInst[p][sl] ?: continue
                     if (t < 0) continue
@@ -1998,7 +2013,9 @@ object Engine {
                 }
                 val dst = if (padFx[p]) bus else out
                 for (i in 0 until block) dst[i] += pb[i]
+                if (capOn && (captureMask shr p) and 1 != 0) for (i in 0 until block) capBuf[i] += pb[i]
             }
+            writePadRing(if (capOn) capBuf else zeroBuf, w, block)
             // SOLO auf einem Pad: Instrumente laufen weiter, sind aber nicht zu hören
             val soloed = soloAny
             if (soloed) java.util.Arrays.fill(instScratch, 0f)
@@ -2202,7 +2219,7 @@ object Engine {
             return true
         }
         val now = System.nanoTime()
-        if (loop == null && (liveBars != 0 || padSource[p] == 1)) {
+        if (loop == null && (liveBars != 0 || padSource[p] >= 1)) {
             startNewTake(p, now)
             return false
         }
@@ -2213,8 +2230,27 @@ object Engine {
 
     // ---------------------------------------------------------------- Resample & Live-Aufnahme
 
-    /** Eingang je Pad: 0 = Mikrofon, 1 = Wave (nimmt auf, was die App ausgibt – inkl. Effekte). */
+    /** Eingang je Pad: 0 = Mikrofon, 1 = Wave (nimmt auf, was die App ausgibt – inkl. Effekte),
+     *  2 = andere Pads (Gruppe in [padSrcMask], jeweils nach ihren eigenen Effekten). */
     val padSource = IntArray(PADS)
+    val padSrcMask = IntArray(PADS)
+
+    /** Pads, die gerade als Eingang mitgeschnitten werden (Vereinigung aller laufenden Pad-Aufnahmen). */
+    @Volatile private var captureMask = 0
+    private var padRing = FloatArray(0)
+
+    fun maskPads(m: Int): List<Int> = (0 until PADS).filter { (m shr it) and 1 != 0 }
+
+    private fun writePadRing(buf: FloatArray, w: Long, block: Int) {
+        val size = padRing.size
+        if (size == 0) return
+        var idx = (w % size).toInt()
+        for (i in 0 until block) {
+            padRing[idx] = buf[i]
+            idx++
+            if (idx == size) idx = 0
+        }
+    }
 
     /** Alle Pads auf einen Eingang stellen. */
     fun setAllSources(src: Int) {
@@ -2225,7 +2261,7 @@ object Engine {
     fun sourceSummary(n: Int): Int {
         var mic = false
         var wave = false
-        for (p in 0 until min(n, PADS)) if (padSource[p] == 1) wave = true else mic = true
+        for (p in 0 until min(n, PADS)) if (padSource[p] >= 1) wave = true else mic = true
         return if (mic && wave) 2 else if (wave) 1 else 0
     }
     /** 0 = Halten zum Aufnehmen, sonst Live-Modus mit fester Länge in Takten (1, 2, 4). */
@@ -2248,11 +2284,16 @@ object Engine {
     private fun startNewTake(p: Int, now: Long) {
         val t = Take(false, max(0L, inClock.frameAt(now, sampleRate)), now, padOneShot[p])
         t.src = padSource[p]
+        if (t.src == 2) {
+            t.mask = padSrcMask[p] and (1 shl p).inv()
+            if (t.mask == 0) t.src = 1
+        }
         t.live = liveBars != 0
-        if (t.src == 1) {
+        if (t.src >= 1) {
             val playing = ArrayList<Int>()
             for (q in 0 until PADS) {
                 val l = loops.get(q) ?: continue
+                if (t.src == 2 && (t.mask shr q) and 1 == 0) continue
                 if (q != p && !l.oneShot && !l.muted) playing.add(q)
             }
             t.bounceSrc = playing.toIntArray()
@@ -2260,7 +2301,7 @@ object Engine {
         val heard = outClock.frameAt(now, sampleRate)
         val m = masterLen
         // Transport steht: Wave- und Live-Aufnahmen starten ihn sofort (Eins = jetzt)
-        if (!seqPlaying && m > 0L && !t.oneShot && (t.src == 1 || liveBars > 0)) startTransportAt(heard)
+        if (!seqPlaying && m > 0L && !t.oneShot && (t.src >= 1 || liveBars > 0)) startTransportAt(heard)
         if (liveBars > 0 && m > 0L) {
             var len = m * liveBars
             val maxF = sampleRate.toLong() * MAX_SECONDS
@@ -2270,7 +2311,7 @@ object Engine {
             val prev = masterStart + Math.floorDiv(heard - masterStart, m) * m
             val start = if (heard - prev < m / 16) prev else prev + m
             t.qOut = start
-            if (t.src == 1) {
+            if (t.src >= 1) {
                 t.fromOut = start
                 t.toOut = start + len
             } else {
@@ -2281,7 +2322,7 @@ object Engine {
             }
             t.armed = true
             t.released = true
-        } else if (t.src == 1) {
+        } else if (t.src >= 1) {
             t.fromOut = heard
         }
         takes.set(p, t)
@@ -2292,7 +2333,7 @@ object Engine {
         val maxF = sampleRate.toLong() * MAX_SECONDS
         for (p in 0 until PADS) {
             val take = takes.get(p) ?: continue
-            if (take.src != 1) continue
+            if (take.src < 1) continue
             if (!take.released && end - take.fromOut >= maxF) {
                 synchronized(take) {
                     if (!take.released) {
@@ -2312,7 +2353,8 @@ object Engine {
     }
 
     private fun finishResample(p: Int, take: Take, endWritten: Long) {
-        val size = outRing.size
+        val ringSrc = if (take.src == 2) padRing else outRing
+        val size = ringSrc.size
         if (size == 0) return
         var from = take.fromOut
         if (from < endWritten - size + 1) from = endWritten - size + 1
@@ -2320,7 +2362,7 @@ object Engine {
         val minFrames = (sampleRate * (MIN_HOLD_NANOS / 1_000_000L) / 1000L).toInt()
         if (len < minFrames) return
         val data = FloatArray(len)
-        for (i in 0 until len) data[i] = outRing[Math.floorMod(from + i, size.toLong()).toInt()]
+        for (i in 0 until len) data[i] = ringSrc[Math.floorMod(from + i, size.toLong()).toInt()]
         val fade = min(len / 4, sampleRate * FADE_MS / 1000)
         for (i in 0 until fade) {
             val g = i.toFloat() / fade
@@ -3022,6 +3064,7 @@ object Engine {
         setNotes(dst, getNotes(src))
         padFx[dst] = padFx[src]
         padSource[dst] = padSource[src]
+        padSrcMask[dst] = padSrcMask[src]
         padChainOn[dst] = padChainOn[src]
         for (k in 0 until 3) {
             setPadFxType(dst, k, pfxType[src][k])
