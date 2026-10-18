@@ -5900,7 +5900,20 @@ class PadView(context: Context) : View(context) {
     // Lupe / Zoom: sichtbarer Bereich (Frames) und Werkzeuge
     private var edV0 = 0
     private var edV1 = 0
-    private var edSnap = true
+    /** 0 = frei, 1 = Nulldurchgang, 2 = Beat (nahe Schläge, sonst Nulldurchgang) */
+    private var edSnapMode = 1
+    private val edSnap: Boolean get() = edSnapMode != 0
+
+    private fun edBeatsOn(): Boolean = Engine.beatLen() > 0.0 && edPad >= 0 && !Engine.isOneShot(edPad)
+
+    private fun snapF(f0: Int): Int {
+        if (edSnapMode == 2 && edBeatsOn()) {
+            val bl = Engine.beatLen()
+            val bf = (Math.round(f0 / bl) * bl).toInt().coerceIn(0, edData.size)
+            if (abs(frameToX(bf) - frameToX(f0)) < dp(18f)) return bf
+        }
+        return if (edSnapMode != 0) zeroCross(f0) else f0
+    }
     private val edZoomOut = RectF()
     private val edZoomIn = RectF()
     private val edToS = RectF()
@@ -6000,6 +6013,7 @@ class PadView(context: Context) : View(context) {
         edSlices = max(1, Engine.padSlices(p))
         edBars = if (Engine.padSlices(p) > 1) Engine.padBars(p) else Engine.suggestBars(d.size)
         edMsg = ""
+        edSnapMode = if (Engine.beatLen() > 0.0 && !Engine.isOneShot(p)) 2 else 1
         layoutEditor()
         computePeaks()
     }
@@ -6184,8 +6198,12 @@ class PadView(context: Context) : View(context) {
                     edToS.contains(x, y) -> edSetView(edStart, min(edV1 - edV0, max(Engine.sampleRate / 10, (edEnd - edStart) / 8)))
                     edToE.contains(x, y) -> edSetView(edEnd, min(edV1 - edV0, max(Engine.sampleRate / 10, (edEnd - edStart) / 8)))
                     edSnapBtn.contains(x, y) -> {
-                        edSnap = !edSnap
-                        edToast(if (edSnap) "Marker rasten auf Nulldurchgänge (kein Knacksen)" else "Marker frei")
+                        edSnapMode = when (edSnapMode) { 2 -> 0; 0 -> 1; else -> if (edBeatsOn()) 2 else 0 }
+                        edToast(when (edSnapMode) {
+                            2 -> "Marker rasten auf Schläge (Taktraster), sonst auf Nulldurchgänge"
+                            1 -> "Marker rasten auf Nulldurchgänge (kein Knacksen)"
+                            else -> "Marker frei"
+                        })
                     }
                     edKnobSlices.contains(x, y) -> { edDrag = 3; edDragY = y; edDragVal = edSlices.toFloat() }
                     edKnobBars.contains(x, y) -> { edDrag = 4; edDragY = y; edDragVal = barOptions.indexOfFirst { it == edBars }.coerceAtLeast(0).toFloat() }
@@ -6203,7 +6221,8 @@ class PadView(context: Context) : View(context) {
                     }
                     edBtnCut.contains(x, y) -> {
                         Engine.applyEdit(edPad, edStart, edEnd, 1, edBars)
-                        reloadEditor("Zugeschnitten")
+                        val bl = when (edBars) { 0.25f -> "¼"; 0.5f -> "½"; else -> edBars.toInt().toString() }
+                        reloadEditor(if (Engine.isOneShot(edPad) || Engine.beatLen() <= 0.0) "Zugeschnitten" else "Zugeschnitten – exakt $bl Takt" + (if (edBars > 1f) "e" else "") + ", läuft im Raster")
                     }
                     edBtnSlice.contains(x, y) -> {
                         if (Engine.isOneShot(edPad)) {
@@ -6292,7 +6311,7 @@ class PadView(context: Context) : View(context) {
                     if (slot < 0) edToast("Alle 4 Cue-Punkte belegt – einen antippen zum Entfernen")
                     else {
                         var f = xToFrame(x)
-                        if (edSnap) f = zeroCross(f)
+                        f = snapF(f)
                         edCues[slot] = f
                         edToast("Cue ${slot + 1} gesetzt")
                     }
@@ -6301,7 +6320,7 @@ class PadView(context: Context) : View(context) {
 
     private fun moveMarker(x: Float) {
         var f = xToFrame(x)
-        if (edSnap) f = zeroCross(f)
+        f = snapF(f)
         val minLen = Engine.sampleRate / 50
         if (edDrag == 1) edStart = f.coerceIn(0, max(0, edEnd - minLen))
         else if (edDrag == 2) edEnd = f.coerceIn(min(edData.size, edStart + minLen), edData.size)
@@ -6355,7 +6374,7 @@ class PadView(context: Context) : View(context) {
         smallBtn(canvas, edZoomIn, "⌖ S…E", false, cols)
         smallBtn(canvas, edToS, "⌖ S", false, cols)
         smallBtn(canvas, edToE, "⌖ E", false, cols)
-        smallBtn(canvas, edSnapBtn, "0-SNAP", edSnap, cols)
+        smallBtn(canvas, edSnapBtn, when (edSnapMode) { 2 -> "♩ BEAT"; 1 -> "0-SNAP"; else -> "FREI" }, edSnap, cols)
         smallBtn(canvas, edCueBtn, "📍 CUE", edCueMode, cols)
         canvas.save()
         canvas.clipRect(w.left, w.top, w.right, w.bottom + dp(24f))
@@ -6465,6 +6484,28 @@ class PadView(context: Context) : View(context) {
                 t += step
             }
             textPaint.textAlign = Paint.Align.CENTER
+        }
+        // Taktraster: Schläge dünn, Taktanfänge hell (Pad-Daten beginnen auf der Eins)
+        if (edBeatsOn()) {
+            val bl = Engine.beatLen()
+            val k0 = kotlin.math.ceil(edV0 / bl).toLong()
+            val k1 = kotlin.math.floor(edV1 / bl).toLong()
+            if (k1 - k0 in 0..400) {
+                for (k in k0..k1) {
+                    val bx = frameToX((k * bl).toInt())
+                    val bar = k % 4 == 0L
+                    strokePaint.strokeWidth = dp(if (bar) 1.4f else 0.8f)
+                    strokePaint.color = Color.argb(if (bar) 120 else 45, 255, 255, 255)
+                    canvas.drawLine(bx, w.top, bx, w.bottom, strokePaint)
+                    if (bar && k1 - k0 < 120) {
+                        textPaint.textSize = dp(8f)
+                        textPaint.color = Color.argb(150, 255, 255, 255)
+                        textPaint.textAlign = Paint.Align.LEFT
+                        canvas.drawText("${k / 4 + 1}", bx + dp(2f), w.top + dp(9f), textPaint)
+                        textPaint.textAlign = Paint.Align.CENTER
+                    }
+                }
+            }
         }
         // Live-Marker: wo das Pad gerade im Mix abgespielt wird (Echtzeit)
         val lp = if (edData.size == Engine.padDataLen(edPad)) Engine.padPlayPos(edPad) else -1.0
@@ -6623,7 +6664,7 @@ class PadView(context: Context) : View(context) {
                 edZoomIn.contains(x, y) || edZoomOut.contains(x, y) -> Triple(RectF(edZoomOut.left, edZoomOut.top, edZoomIn.right, edZoomIn.bottom), "Zoom", "Mit Daumen und Zeigefinger in der Wellenform: auseinander = hineinzoomen (bis auf einzelne Samples), zusammen = heraus, gemeinsam ziehen = verschieben. ⤢ GANZ zeigt alles, ⌖ S…E die Auswahl. Vergrößert: mit einem Finger abseits der Marker verschieben.")
                 edToS.contains(x, y) || edToE.contains(x, y) -> Triple(RectF(edToS.left, edToS.top, edToE.right, edToE.bottom), "Zum Marker", "Springt mit der Lupe direkt an den Start- (S) bzw. Endpunkt (E) – zum genauen Schneiden.")
                 edCueBtn.contains(x, y) -> Triple(edCueBtn, "Cue-Punkte", "Cue-Modus: in die Wellenform tippen setzt Hot Cues 1–4, einen antippen entfernt ihn. Beim Speichern in die DJ-Bibliothek werden sie mitgespeichert – der Startpunkt (Cue) ist der Marker S.")
-                edSnapBtn.contains(x, y) -> Triple(edSnapBtn, "0-SNAP", "Marker rasten auf den nächsten Nulldurchgang der Welle ein – so knackt der Schnitt nicht.")
+                edSnapBtn.contains(x, y) -> Triple(edSnapBtn, "SNAP", "♩ BEAT: Marker rasten auf die Schläge des Taktrasters (dünne Linien, Taktanfänge hell) – liegt kein Schlag in der Nähe, auf den nächsten Nulldurchgang. 0-SNAP: nur Nulldurchgänge (kein Knacksen). FREI: ohne Raster. Antippen schaltet um.")
                 edWave.contains(x, y) || (y > edWave.bottom && y < edWave.bottom + dp(30f)) -> Triple(edWave, "Wellenform", "Zeigt das Audio des Pads. Die Marker S (Start) und E (Ende) an der Wellenform ziehen, um den Ausschnitt zu wählen. Weiße Linien zeigen die Slices.")
                 edKnobSlices.contains(x, y) -> Triple(edKnobSlices, "SLICES", "Hoch/runter ziehen: teilt den Ausschnitt in 2–32 gleich lange Stücke. AUS = nicht slicen.")
                 edKnobBars.contains(x, y) -> Triple(edKnobBars, "TAKTE", "Wie viele Takte der gesliceten Loop lang ist (¼ bis 8). Die Slices verteilen sich darauf und folgen jedem Tempo.")

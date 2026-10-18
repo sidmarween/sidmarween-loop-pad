@@ -1038,6 +1038,28 @@ object Engine {
         if (l.oneShot || slices <= 1) {
             padOneShot[p] = l.oneShot
             val semi = l.semi
+            val m = masterLen
+            if (!l.oneShot && m > 0L && bars > 0f) {
+                // Loop zuschneiden: Auswahl exakt auf [bars] Takte bringen (minimal dehnen statt
+                // Stille anhängen oder abschneiden) – so läuft der Loop sauber im Raster
+                val target = max(64L, (bars * m).toLong()).toInt()
+                val fit = if (abs(data.size - target) <= 2) data.copyOf(target) else Warp.stretch(data, target, sampleRate)
+                val fade = min(fit.size / 4, sampleRate * FADE_MS / 1000)
+                for (i in 0 until fade) {
+                    val g = i.toFloat() / fade
+                    fit[i] *= g
+                    fit[fit.size - 1 - i] *= g
+                }
+                val loop = Loop(fit)
+                val heard = outClock.frameAt(System.nanoTime(), sampleRate)
+                loop.start = masterStart + Math.floorDiv(heard - masterStart, fit.size.toLong()) * fit.size
+                loop.muted = l.muted
+                loop.gain = l.gain
+                takes.set(p, null)
+                setWarpSource(loop)
+                loops.set(p, loop)
+                return
+            }
             importLoopRaw(p, data)
             if (l.oneShot) setPadPitch(p, semi)
             return
@@ -1248,6 +1270,8 @@ object Engine {
 
     /** Taktraster: der erste Loop legt Länge und Phase fest, alle anderen rasten darauf ein. */
     @Volatile private var masterLen = 0L
+    /** Länge eines Schlags in Frames (0 = kein Tempo). */
+    fun beatLen(): Double = if (masterLen > 0L) masterLen / 4.0 else 0.0
 
     // ---------------------------------------------------------------- Master-Tempo
     /** Fest eingestelltes Tempo in BPM (4/4, ein Takt = Raster), 0 = automatisch durch den ersten Loop. */
@@ -3660,7 +3684,14 @@ object Engine {
         }
         val m = masterLen
         val target = max(64L, (info.bars * m).toLong()).toInt()
-        val data = Warp.stretch(src, target, sampleRate)
+        // Song-Ausschnitt: ab dem ersten Schlag genau [bars] Takte im erkannten Tempo – danach exakt aufs Master-Tempo dehnen
+        val body = if (info.cut) {
+            val o = info.offset.coerceIn(0, max(0, src.size - 2))
+            val want = (info.bars * 240.0 / info.bpm * sampleRate).toLong().toInt()
+            val e = min(src.size, o + max(2, want))
+            src.copyOfRange(o, e).let { if (it.size < want) it.copyOf(want) else it }
+        } else src
+        val data = Warp.stretch(body, target, sampleRate)
         val fade = min(data.size / 4, sampleRate * FADE_MS / 1000)
         for (i in 0 until fade) {
             val g = i.toFloat() / fade
@@ -3668,7 +3699,7 @@ object Engine {
             data[data.size - 1 - i] *= g
         }
         val loop = Loop(data)
-        loop.src = src
+        loop.src = body
         loop.srcBpm = info.bpm
         loop.warpBars = info.bars
         loop.start = masterStart

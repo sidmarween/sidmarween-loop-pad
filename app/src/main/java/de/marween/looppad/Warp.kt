@@ -15,7 +15,8 @@ import kotlin.math.roundToInt
  */
 object Warp {
 
-    class Info(val bpm: Float, val bars: Float, val source: String)
+    /** [offset] = Frames bis zum ersten Schlag (werden abgeschnitten), [cut] = nur bars Takte ab dort verwenden. */
+    class Info(val bpm: Float, val bars: Float, val source: String, val offset: Int = 0, val cut: Boolean = false)
 
     private val POW2 = floatArrayOf(1f, 2f, 4f, 8f, 16f, 32f)
     private val OTHER = floatArrayOf(0.25f, 0.5f, 3f, 6f, 12f, 24f)
@@ -101,7 +102,8 @@ object Warp {
             for (c in POW2 + OTHER) if (abs(raw / c - 1f) < 0.03f) bars = c
             return Info(nameBpm, max(0.25f, bars), "Dateiname")
         }
-        val auto = analyzeBpm(x, sr)
+        val clip = try { Dj.analyzeClip(x, sr) } catch (e: Throwable) { null }
+        val auto = clip?.first ?: analyzeBpm(x, sr)
         // Loop-Länge: ganze Takte ergeben ein plausibles Tempo
         var best: Pair<Float, Float>? = null
         var bestErr = Double.MAX_VALUE
@@ -117,13 +119,28 @@ object Warp {
             }
         }
         val fit = best
-        if (fit != null && (auto == null || octErr(fit.first, auto) < 0.12)) {
+        // sauberer Loop: Länge ergibt ganze Takte und passt (±1,5 %) zum gehörten Tempo, Schlag 1 am Anfang
+        val first = clip?.second ?: 0
+        val startsOnBeat = first < sr * 0.03 || (clip != null && first > x.size - sr * 0.03)
+        if (fit != null && (auto == null || octErr(fit.first, auto) < 0.015) && startsOnBeat) {
             return Info(fit.first, fit.second, if (auto != null) "Länge + Rhythmus" else "Länge")
         }
-        // kein sauberer Loop: Tempo aus der Analyse, Länge auf ganze Takte runden
-        val bpm = auto ?: 120f
-        val bars = max(1f, (dur * bpm / 240f).roundToInt().toFloat())
-        return Info(bpm, bars, "Rhythmus-Analyse")
+        if (auto == null) {
+            if (fit != null) return Info(fit.first, fit.second, "Länge")
+            return Info(120f, max(1f, (dur * 120f / 240f).roundToInt().toFloat()), "Standard")
+        }
+        // Ausschnitt aus einem Song (z. B. MP3): exaktes Tempo, ab dem ersten Schlag ganze Takte schneiden
+        var bpm = auto
+        // Tempo auf die Oktave des Längen-Treffers bringen (falls vorhanden)
+        if (fit != null) for (k in floatArrayOf(0.5f, 2f)) if (abs(ln((bpm * k / fit.first).toDouble())) < abs(ln((bpm / fit.first).toDouble()))) bpm *= k
+        val usable = (x.size - first).toFloat() / sr
+        var bars = kotlin.math.floor(usable * bpm / 240f)
+        if (bars < 1f) bars = max(0.25f, kotlin.math.floor(usable * bpm / 60f) / 4f)
+        // längste sinnvolle Loop-Länge: Zweierpotenz an Takten
+        var pb = 1f
+        while (pb * 2 <= bars && pb < 32f) pb *= 2
+        if (bars >= 1f) bars = pb
+        return Info(bpm, bars, "Schlag-Analyse ab ${String.format(java.util.Locale.GERMANY, "%.2f", first.toFloat() / sr)} s", first, true)
     }
 
     private data class Quad(val set: FloatArray, val lo: Float, val hi: Float, val pen: Double)

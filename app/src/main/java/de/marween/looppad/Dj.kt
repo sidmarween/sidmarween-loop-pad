@@ -837,11 +837,11 @@ object Dj {
             ft += 0.01
         }
         val conf = (bestS / 3.15).toFloat().coerceIn(0f, 1f)
-        return (Math.round(fineT * 10).toFloat() / 10f) to conf
+        return (Math.round(fineT * 100).toFloat() / 100f) to conf
     }
 
     /** Beat-Raster: Phase mit der meisten Onset-Energie (in Hüllkurven-Schritten). */
-    private fun findGrid(env: FloatArray, fps: Double, bpm: Float): Double {
+    fun findGrid(env: FloatArray, fps: Double, bpm: Float): Double {
         val n = env.size
         if (n < 8 || bpm <= 0f) return 0.0
         val period = fps * 60.0 / bpm
@@ -865,6 +865,76 @@ object Dj {
             }
         }
         return bestPh
+    }
+
+    /**
+     * Tempo und erster Schlag eines Mono-Clips (Pads, MP3-Ausschnitte):
+     * Onset-Kamm wie im DJ-Modus, danach Feinabgleich über den ganzen Clip –
+     * je länger der Clip, desto genauer (bis ~0,01 BPM). Liefert BPM und den Frame des ersten Schlags.
+     */
+    fun analyzeClip(x: FloatArray, sr: Int): Pair<Float, Int> {
+        val hop = max(1, sr / 200)
+        val n = x.size / hop + 1
+        val lo = FloatArray(n)
+        val hi = FloatArray(n)
+        val aL = (1.0 - exp(-2 * PI * 180.0 / sr)).toFloat()
+        val aH = (1.0 - exp(-2 * PI * 4000.0 / sr)).toFloat()
+        var l = 0f
+        var h = 0f
+        for (i in x.indices) {
+            val v = x[i]
+            l += aL * (v - l)
+            h += aH * (v - h)
+            val hv = v - h
+            lo[i / hop] += l * l
+            hi[i / hop] += hv * hv
+        }
+        val fps = sr.toDouble() / hop
+        val on = onsetEnv(lo, hi, fps)
+        var bpm = detectBpm(on, fps).first.toDouble()
+        // Feinabgleich: Schlag-Kamm mit bester Phase über den ganzen Clip
+        if (on.size > fps * 6) {
+            var best = bpm
+            var bestS = Double.NEGATIVE_INFINITY
+            var b = bpm - 0.6
+            while (b <= bpm + 0.6) {
+                val period = fps * 60.0 / b
+                val steps = max(8, (period / 2).toInt())
+                var bs = 0.0
+                for (si in 0 until steps) {
+                    var t = period * si / steps
+                    var sum = 0.0
+                    while (t < on.size - 1) {
+                        val k = t.toInt()
+                        val f = t - k
+                        sum += on[k] * (1 - f) + on[k + 1] * f
+                        t += period
+                    }
+                    if (sum > bs) bs = sum
+                }
+                if (bs > bestS) { bestS = bs; best = b }
+                b += 0.01
+            }
+            bpm = best
+        }
+        val bp = (Math.round(bpm * 100).toFloat() / 100f)
+        // erster Schlag, auf dem wirklich etwas passiert (Stille/Intro davor überspringen)
+        val period = fps * 60.0 / bp
+        var t = findGrid(on, fps, bp)
+        fun hit(tt: Double): Float {
+            val k = tt.toInt()
+            var m = 0f
+            for (j in max(0, k - 2)..min(on.size - 1, k + 2)) m = max(m, on[j])
+            return m
+        }
+        var sum = 0.0
+        var cnt = 0
+        var tt = t
+        while (tt < on.size - 2) { val v = hit(tt); if (v > 0f) { sum += v; cnt++ }; tt += period }
+        val thr = if (cnt > 0) (sum / cnt * 0.35).toFloat() else 0f
+        while (t + period < on.size - 2 && hit(t) < thr) t += period
+        val first = (t * hop).toInt().coerceIn(0, max(0, x.size - 1))
+        return bp to first
     }
 
     /** Zeit als m:ss. */
