@@ -129,7 +129,7 @@ Unter jedem Pad sitzt ein kleiner **•••**-Knopf:
 
 ## Resample & Live-Aufnahme
 
-**Eingang je Pad** (Pad-Menü → Eingang): 🎙 Mikrofon, 〰 Wave (alles, was die App ausgibt) oder **🎛 andere Pads** – einzeln oder als Gruppe (z. B. Pad 1 + 2 → Pad 3). Aufgenommen wird das Signal dieser Pads nach ihren eigenen Effekten, synchron im Takt; mit Bounce werden die Quell-Pads danach stumm geschaltet.
+**Eingang je Pad** (Pad-Menü → Eingang): 🎙 Mikrofon, 〰 Wave (alles, was die App ausgibt) oder **🎛 andere Pads** – einzeln oder als Gruppe – oder **🎹 Instrumente** (ACID 303, DRUM 909, SYNTH, einzeln oder zusammen) (z. B. Pad 1 + 2 → Pad 3). Aufgenommen wird das Signal dieser Pads nach ihren eigenen Effekten, synchron im Takt; mit Bounce werden die Quell-Pads danach stumm geschaltet.
 
 **🔁 Bounce** (wie beim alten Mehrspurrekorder, im Menü ☰ an/aus, Standard: an): Nach einer Aufnahme auf ein Wave-Pad werden alle Pads, die dabei mitgespielt haben, automatisch stummgeschaltet – es spielt nur noch die gebouncte Spur, nichts klingt doppelt oder übersteuert. Antippen holt ein Quell-Pad zurück.
 
@@ -215,3 +215,7 @@ In Piano-Roll, ACID- und DRUM-Editor liegt unter der Matrix die **VEL**-Spur: je
 Im ACID/DRUM-Editor **▦ PRESETS** (bei DRUM auch auf der Fläche): 37 Drum-Beats in 7 Gruppen (House, Techno, Trance & Hard, Electro & Bass, Breaks & DnB, Hip-Hop & Trap, Band & World, Fills) und 21 Acid-Linien (Klassisch, Dunkel, Hypnotisch, Funky, Hart, 2 Takte) mit passenden Klang-Einstellungen. Tempo und Swing werden übernommen, solange noch keine Loops laufen. Dazu ein **🎲 Zufalls-Generator** und der Import eigener MIDI-Dateien.
 
 Quellen & Lizenzen: Die Beats sind genretypische Grundmuster, die Acid-Linien eigene Kompositionen – beide für Marv PAD neu notiert. Der Zufalls-Generator folgt dem Algorithmus von **„Acid Banger“ von David Whiting** (https://github.com/vitling/acid-banger), lizenziert unter **Creative Commons Attribution 4.0** (https://creativecommons.org/licenses/by/4.0/) – nach Kotlin übertragen und an die App angepasst.
+
+## 🎹 Instrumente (Reiter über der XY-Fläche)
+Der Reiter **🎹 INSTRUMENTE** fasst alle Instrumente zusammen: **303** (Acid-Bass), **909** (Drumcomputer) und **SYNTH**.
+**SYNTH**: polyfoner Synth mit 5 Klängen (Sägezahn, Rechteck, Supersaw, Pluck, FM-Glocke) und Akkorden (Einzelton, Dur, Moll, Sus4, Dur7, Moll7, Oktave). 16 Schritte (antippen = an/aus, ziehen = Tonhöhe), Reihe **H** = Halten für lange Töne, Spielfläche X = Ton / Y = Filter, 🎲 Zufallsmelodie. Regler oben: CUTOFF, RESO, ATTACK, RELEASE, LEVEL.

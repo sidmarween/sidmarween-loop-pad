@@ -133,6 +133,8 @@ object Engine {
         private set
     @Volatile var drum: DrumMachine? = null
         private set
+    @Volatile var synth: PolySynth? = null
+        private set
     private var instRate = 0
 
     /** Ein Sequenzer-Schritt für die Instrumente (sample-genau). */
@@ -152,6 +154,19 @@ object Engine {
             // Ton endet nach halbem Schritt – außer Slide oder der nächste Schritt hält ihn (Tie)
             val holds = st.acidGate[next] && (st.acidSlide[step] || st.acidTie[next])
             if (!holds) a.queue(f + stepLen / 2, false, 0, false, false)
+        }
+        val sy = synth
+        if (sy != null && st.synOn) {
+            val sl = st.synLen.coerceIn(1, InstState.MAX)
+            val k = Math.floorMod(n, sl.toLong()).toInt()
+            if (st.synGate[k] && !(st.synTie[k] && st.synGate[Math.floorMod(k - 1, sl)])) {
+                // Länge: so viele Schritte, wie danach gehalten werden
+                var len = 1
+                while (len < sl && st.synGate[(k + len) % sl] && st.synTie[(k + len) % sl]) len++
+                val tag = 1000 + k
+                sy.queue(f, true, st.synSemi[k], st.synVel[k], tag)
+                sy.queue(f + stepLen * len - stepLen / 8, false, 0, 0f, tag)
+            }
         }
         val d = drum
         if (d != null && st.drumOn) {
@@ -196,6 +211,23 @@ object Engine {
 
     fun acidLiveOff() {
         acid?.queue(-1, false, 0, false, false)
+    }
+
+    /** Touchpad: SYNTH-Ton an/aus (tag = Finger). */
+    fun synthLiveOn(semi: Int, tag: Int) {
+        if (recLive()) {
+            val (step, ahead) = liveStep(InstState.synLen)
+            InstState.synGate[step] = true
+            InstState.synTie[step] = false
+            InstState.synSemi[step] = semi
+            InstState.synVel[step] = 1f
+            if (ahead) return
+        }
+        synth?.queue(-1, true, semi, 1f, tag)
+    }
+
+    fun synthLiveOff(tag: Int) {
+        synth?.queue(-1, false, 0, 0f, tag)
     }
 
     /** Touchpad/Pads: DRUM-Instrument anschlagen. */
@@ -1459,6 +1491,7 @@ object Engine {
         if (acid == null || instRate != sampleRate) {
             acid = AcidSynth(sampleRate)
             drum = DrumMachine(sampleRate)
+            synth = PolySynth(sampleRate)
             instRate = sampleRate
         }
         if (fxs == null || fxRate != sampleRate) {
@@ -1822,6 +1855,7 @@ object Engine {
         val instScratch = FloatArray(block)
         val padBufs = Array(PADS) { FloatArray(block) }
         val capBuf = FloatArray(block)
+        val instTmp = FloatArray(block)
         val zeroBuf = FloatArray(block)
         val chainNow = BooleanArray(PADS)
         val chainFx = BooleanArray(PADS)
@@ -1849,11 +1883,14 @@ object Engine {
             val mlen = masterLen
             val transport = seqPlaying
             var cm = 0
+            var cim = 0
             for (p in 0 until PADS) {
                 val tk = takes.get(p) ?: continue
                 if (tk.src == 2) cm = cm or tk.mask
+                if (tk.src == 3) cim = cim or tk.mask
             }
             captureMask = cm
+            captureInst = cim
             for (p in 0 until PADS) {
                 chainFx[p] = padChainActive(p)
                 chainNow[p] = chainFx[p] || (cm shr p) and 1 != 0
@@ -2000,7 +2037,7 @@ object Engine {
                 monitorLevel *= 0.9f
             }
             val capOn = captureMask != 0
-            if (capOn) java.util.Arrays.fill(capBuf, 0, block, 0f)
+            if (capOn || captureInst != 0) java.util.Arrays.fill(capBuf, 0, block, 0f)
             for (p in 0 until PADS) {
                 if (!chainNow[p]) continue
                 val pb = padBufs[p]
@@ -2015,12 +2052,28 @@ object Engine {
                 for (i in 0 until block) dst[i] += pb[i]
                 if (capOn && (captureMask shr p) and 1 != 0) for (i in 0 until block) capBuf[i] += pb[i]
             }
-            writePadRing(if (capOn) capBuf else zeroBuf, w, block)
+
             // SOLO auf einem Pad: Instrumente laufen weiter, sind aber nicht zu hören
             val soloed = soloAny
             if (soloed) java.util.Arrays.fill(instScratch, 0f)
-            acid?.render(if (soloed) instScratch else if (InstState.acidFx) bus else out, block, w)
-            drum?.render(if (soloed) instScratch else if (InstState.drumFx) bus else out, block)
+            val ci = captureInst
+            for (kind in 0..2) {
+                val dst = if (soloed) instScratch else when (kind) {
+                    0 -> if (InstState.acidFx) bus else out
+                    1 -> if (InstState.drumFx) bus else out
+                    else -> if (InstState.synFx) bus else out
+                }
+                val cap = (ci shr kind) and 1 != 0
+                val tgt = if (cap) instTmp else dst
+                if (cap) java.util.Arrays.fill(instTmp, 0f)
+                when (kind) {
+                    0 -> acid?.render(tgt, block, w)
+                    1 -> drum?.render(tgt, block)
+                    else -> synth?.render(tgt, block, w)
+                }
+                if (cap) for (i in 0 until block) { dst[i] += instTmp[i]; capBuf[i] += instTmp[i] }
+            }
+            writePadRing(if (capOn || ci != 0) capBuf else zeroBuf, w, block)
             if (songRecording && songDry) {
                 for (i in 0 until block) dryBuf[i] = out[i] + bus[i]
             }
@@ -2237,6 +2290,10 @@ object Engine {
 
     /** Pads, die gerade als Eingang mitgeschnitten werden (Vereinigung aller laufenden Pad-Aufnahmen). */
     @Volatile private var captureMask = 0
+    @Volatile private var captureInst = 0
+    /** Bei Eingang 3: welche Instrumente (Bit 0 ACID 303, Bit 1 DRUM 909, Bit 2 SYNTH). */
+    val padInstMask = IntArray(PADS) { 7 }
+    val INST_NAMES = arrayOf("ACID 303", "DRUM 909", "SYNTH")
     private var padRing = FloatArray(0)
 
     fun maskPads(m: Int): List<Int> = (0 until PADS).filter { (m shr it) and 1 != 0 }
@@ -2287,12 +2344,16 @@ object Engine {
         if (t.src == 2) {
             t.mask = padSrcMask[p] and (1 shl p).inv()
             if (t.mask == 0) t.src = 1
+        } else if (t.src == 3) {
+            t.mask = padInstMask[p] and 7
+            if (t.mask == 0) t.src = 1
         }
         t.live = liveBars != 0
         if (t.src >= 1) {
             val playing = ArrayList<Int>()
             for (q in 0 until PADS) {
                 val l = loops.get(q) ?: continue
+                if (t.src == 3) continue
                 if (t.src == 2 && (t.mask shr q) and 1 == 0) continue
                 if (q != p && !l.oneShot && !l.muted) playing.add(q)
             }
@@ -2353,7 +2414,7 @@ object Engine {
     }
 
     private fun finishResample(p: Int, take: Take, endWritten: Long) {
-        val ringSrc = if (take.src == 2) padRing else outRing
+        val ringSrc = if (take.src >= 2) padRing else outRing
         val size = ringSrc.size
         if (size == 0) return
         var from = take.fromOut
@@ -3065,6 +3126,7 @@ object Engine {
         padFx[dst] = padFx[src]
         padSource[dst] = padSource[src]
         padSrcMask[dst] = padSrcMask[src]
+        padInstMask[dst] = padInstMask[src]
         padChainOn[dst] = padChainOn[src]
         for (k in 0 until 3) {
             setPadFxType(dst, k, pfxType[src][k])
@@ -3576,7 +3638,9 @@ object Engine {
 class InstSnap(
     val semi: IntArray, val gate: BooleanArray, val acc: BooleanArray, val slide: BooleanArray, val drums: Array<IntArray>,
     val tie: BooleanArray = BooleanArray(InstState.MAX), val acidLen: Int = 16, val drumLen: Int = 16,
-    val acidVel: FloatArray = FloatArray(InstState.MAX) { 1f }, val drumVel: Array<FloatArray> = Array(InstState.DV) { FloatArray(InstState.MAX) { 1f } }
+    val acidVel: FloatArray = FloatArray(InstState.MAX) { 1f }, val drumVel: Array<FloatArray> = Array(InstState.DV) { FloatArray(InstState.MAX) { 1f } },
+    val synSemi: IntArray = IntArray(InstState.MAX), val synGate: BooleanArray = BooleanArray(InstState.MAX),
+    val synTie: BooleanArray = BooleanArray(InstState.MAX), val synVel: FloatArray = FloatArray(InstState.MAX) { 1f }, val synLen: Int = 16
 ) {
     fun restore() {
         val st = InstState
@@ -3595,9 +3659,15 @@ class InstSnap(
         System.arraycopy(acc, 0, st.acidAcc, 0, min(acc.size, st.acidAcc.size))
         System.arraycopy(slide, 0, st.acidSlide, 0, min(slide.size, st.acidSlide.size))
         for (v in 0 until min(drums.size, InstState.DV)) System.arraycopy(drums[v], 0, st.drumSteps[v], 0, min(drums[v].size, InstState.MAX))
+        System.arraycopy(synSemi, 0, st.synSemi, 0, min(synSemi.size, InstState.MAX))
+        System.arraycopy(synGate, 0, st.synGate, 0, min(synGate.size, InstState.MAX))
+        System.arraycopy(synTie, 0, st.synTie, 0, min(synTie.size, InstState.MAX))
+        System.arraycopy(synVel, 0, st.synVel, 0, min(synVel.size, InstState.MAX))
+        st.synLen = synLen.coerceIn(16, InstState.MAX)
     }
 
-    fun copy() = InstSnap(semi.copyOf(), gate.copyOf(), acc.copyOf(), slide.copyOf(), Array(drums.size) { drums[it].copyOf() }, tie.copyOf(), acidLen, drumLen, acidVel.copyOf(), Array(drumVel.size) { drumVel[it].copyOf() })
+    fun copy() = InstSnap(semi.copyOf(), gate.copyOf(), acc.copyOf(), slide.copyOf(), Array(drums.size) { drums[it].copyOf() }, tie.copyOf(), acidLen, drumLen, acidVel.copyOf(), Array(drumVel.size) { drumVel[it].copyOf() },
+        synSemi.copyOf(), synGate.copyOf(), synTie.copyOf(), synVel.copyOf(), synLen)
 
     fun toJson(): org.json.JSONObject {
         val j = org.json.JSONObject()
@@ -3609,6 +3679,11 @@ class InstSnap(
         j.put("tie", org.json.JSONArray().apply { tie.forEach { put(it) } })
         j.put("acidLen", acidLen)
         j.put("drumLen", drumLen)
+        j.put("synSemi", org.json.JSONArray().apply { synSemi.forEach { put(it) } })
+        j.put("synGate", org.json.JSONArray().apply { synGate.forEach { put(it) } })
+        j.put("synTie", org.json.JSONArray().apply { synTie.forEach { put(it) } })
+        j.put("synVel", org.json.JSONArray().apply { synVel.forEach { put(it.toDouble()) } })
+        j.put("synLen", synLen)
         return j
     }
 
@@ -3618,7 +3693,8 @@ class InstSnap(
             return InstSnap(
                 st.acidSemi.copyOf(), st.acidGate.copyOf(), st.acidAcc.copyOf(), st.acidSlide.copyOf(),
                 Array(InstState.DV) { st.drumSteps[it].copyOf() }, st.acidTie.copyOf(), st.acidLen, st.drumLen,
-                st.acidVel.copyOf(), Array(InstState.DV) { st.drumVel[it].copyOf() }
+                st.acidVel.copyOf(), Array(InstState.DV) { st.drumVel[it].copyOf() },
+                st.synSemi.copyOf(), st.synGate.copyOf(), st.synTie.copyOf(), st.synVel.copyOf(), st.synLen
             )
         }
 
@@ -3630,7 +3706,9 @@ class InstSnap(
             j.optJSONArray("drums")?.let { d ->
                 for (v in 0 until min(InstState.DV, d.length())) d.optJSONArray(v)?.let { r -> for (i in 0 until min(n, r.length())) dr[v][i] = r.optInt(i) }
             }
-            return InstSnap(ia("semi"), ba("gate"), ba("acc"), ba("slide"), dr, ba("tie"), j.optInt("acidLen", 16), j.optInt("drumLen", 16))
+            val sv = FloatArray(n) { 1f }.also { a -> j.optJSONArray("synVel")?.let { for (i in 0 until min(n, it.length())) a[i] = it.optDouble(i, 1.0).toFloat() } }
+            return InstSnap(ia("semi"), ba("gate"), ba("acc"), ba("slide"), dr, ba("tie"), j.optInt("acidLen", 16), j.optInt("drumLen", 16),
+                synSemi = ia("synSemi"), synGate = ba("synGate"), synTie = ba("synTie"), synVel = sv, synLen = j.optInt("synLen", 16))
         }
     }
 }

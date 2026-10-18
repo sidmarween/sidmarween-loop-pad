@@ -113,6 +113,60 @@ object InstState {
 
     fun drumHasNotes() = drumSteps.any { row -> (0 until drumLen).any { row[it] > 0 } }
 
+    // ---------------------------------------------------------------- SYNTH (polyfoner Lead-/Pad-Synth)
+    val synSemi = IntArray(MAX)
+    val synGate = BooleanArray(MAX)
+    /** Halten: der Schritt verlängert die Note des vorigen Schritts. */
+    val synTie = BooleanArray(MAX)
+    val synVel = FloatArray(MAX) { 1f }
+    @Volatile var synLen = 16
+    @Volatile var synOn = true
+    @Volatile var synFx = true
+    @Volatile var synOct = 0
+    /** 0 SAW, 1 SQUARE, 2 SUPERSAW, 3 PLUCK, 4 GLOCKE (FM) */
+    @Volatile var synWave = 2
+    /** 0 einzeln, 1 Dur, 2 Moll, 3 Sus4, 4 Dur7, 5 Moll7, 6 Oktave */
+    @Volatile var synChord = 0
+    @Volatile var synCut = 0.55f
+    @Volatile var synRes = 0.25f
+    @Volatile var synAtk = 0.05f
+    @Volatile var synRel = 0.35f
+    @Volatile var synVol = 0.6f
+    @Volatile var synDetune = 0.35f
+    @Volatile var synEnv = 0.4f
+    @Volatile var synCutMod = 0f
+    val synWaveNames = arrayOf("SAW", "SQR", "SUPER", "PLUCK", "GLOCKE")
+    val synChordNames = arrayOf("EINZELN", "DUR", "MOLL", "SUS4", "DUR7", "MOLL7", "OKTAVE")
+    val synChordIv = arrayOf(intArrayOf(0), intArrayOf(0, 4, 7), intArrayOf(0, 3, 7), intArrayOf(0, 5, 7), intArrayOf(0, 4, 7, 10), intArrayOf(0, 3, 7, 10), intArrayOf(0, 12))
+
+    fun synClear() {
+        java.util.Arrays.fill(synGate, false)
+        java.util.Arrays.fill(synTie, false)
+        java.util.Arrays.fill(synSemi, 0)
+        java.util.Arrays.fill(synVel, 1f)
+    }
+
+    fun synHasNotes() = (0 until synLen).any { synGate[it] }
+
+    /** Zufällige Melodie in Moll-Pentatonik mit gehaltenen Tönen. */
+    fun synRandom() {
+        synClear()
+        val scale = intArrayOf(0, 3, 5, 7, 10, 12, 15)
+        val r = java.util.Random()
+        var k = 0
+        while (k < STEPS) {
+            if (r.nextFloat() < 0.6f) {
+                synGate[k] = true
+                synSemi[k] = scale[r.nextInt(scale.size)]
+                synVel[k] = 0.7f + r.nextFloat() * 0.3f
+                val hold = if (r.nextFloat() < 0.4f) 1 + r.nextInt(3) else 0
+                for (h in 1..hold) if (k + h < STEPS) { synGate[k + h] = true; synTie[k + h] = true; synSemi[k + h] = synSemi[k] }
+                k += 1 + hold
+            } else k++
+        }
+        for (i in STEPS until MAX) { synGate[i] = synGate[i % STEPS]; synTie[i] = synTie[i % STEPS]; synSemi[i] = synSemi[i % STEPS]; synVel[i] = synVel[i % STEPS] }
+    }
+
     // ---------------------------------------------------------------- Projekte
 
     fun toJson(): JSONObject {
@@ -134,12 +188,16 @@ object InstState {
         j.put("drumMute", ba(drumMute))
         j.put("acidVel", fa(acidVel))
         j.put("drumVel", JSONArray().apply { for (v in 0 until DV) put(fa(drumVel[v])) })
+        j.put("synSemi", ia(synSemi)); j.put("synGate", ba(synGate)); j.put("synTie", ba(synTie)); j.put("synVel", fa(synVel))
+        j.put("synLen", synLen); j.put("synOn", synOn); j.put("synFx", synFx); j.put("synOct", synOct); j.put("synWave", synWave); j.put("synChord", synChord)
+        j.put("synCut", synCut.toDouble()); j.put("synRes", synRes.toDouble()); j.put("synAtk", synAtk.toDouble()); j.put("synRel", synRel.toDouble())
+        j.put("synVol", synVol.toDouble()); j.put("synDetune", synDetune.toDouble()); j.put("synEnv", synEnv.toDouble())
         return j
     }
 
     fun fromJson(j: JSONObject?) {
         if (j == null) {
-            acidClear(); drumClear(); return
+            acidClear(); drumClear(); synClear(); return
         }
         fun ri(n: String, a: IntArray) { j.optJSONArray(n)?.let { for (k in 0 until min(a.size, it.length())) a[k] = it.optInt(k) } }
         fun rb(n: String, a: BooleanArray) { j.optJSONArray(n)?.let { for (k in 0 until min(a.size, it.length())) a[k] = it.optBoolean(k) } }
@@ -166,6 +224,13 @@ object InstState {
         // alte Projekte (16 Schritte): Rest leeren
         if (!j.has("acidLen")) for (k in STEPS until MAX) { acidGate[k] = false; acidTie[k] = false }
         if (!j.has("drumLen")) for (v in 0 until DV) for (k in STEPS until MAX) drumSteps[v][k] = 0
+        synClear()
+        ri("synSemi", synSemi); rb("synGate", synGate); rb("synTie", synTie); rf("synVel", synVel)
+        synLen = j.optInt("synLen", 16).coerceIn(16, MAX); synOn = j.optBoolean("synOn", true); synFx = j.optBoolean("synFx", true)
+        synOct = j.optInt("synOct", 0); synWave = j.optInt("synWave", 2); synChord = j.optInt("synChord", 0)
+        synCut = j.optDouble("synCut", 0.55).toFloat(); synRes = j.optDouble("synRes", 0.25).toFloat()
+        synAtk = j.optDouble("synAtk", 0.05).toFloat(); synRel = j.optDouble("synRel", 0.35).toFloat()
+        synVol = j.optDouble("synVol", 0.6).toFloat(); synDetune = j.optDouble("synDetune", 0.35).toFloat(); synEnv = j.optDouble("synEnv", 0.4).toFloat()
     }
 }
 
@@ -412,5 +477,168 @@ class DrumMachine(private val sr: Int) {
                 }
             }
         }
+    }
+}
+
+/**
+ * Polyfoner Synth (bis 10 Stimmen): Sägezahn, Rechteck, Supersaw (5 verstimmte Sägezähne),
+ * Pluck und FM-Glocke; je Stimme ADSR und resonantes 2-Pol-Filter mit Hüllkurve.
+ * Spielt Einzeltöne oder Akkorde.
+ */
+class PolySynth(private val sr: Int) {
+    private class Ev(val frame: Long, val on: Boolean, val semi: Int, val vel: Float, val tag: Int)
+
+    private class Voice {
+        var active = false
+        var tag = 0
+        var semi = 0
+        var freq = 220.0
+        var vel = 1f
+        var gate = false
+        var env = 0f
+        var stage = 0      // 0 Attack, 1 Decay/Sustain, 2 Release
+        var fenv = 0f
+        val ph = DoubleArray(5)
+        var mph = 0.0
+        var lp = 0f
+        var bp = 0f
+        var age = 0L
+    }
+
+    private val queue = ArrayList<Ev>()
+    private val lock = Any()
+    private val voices = Array(10) { Voice() }
+    private var ageCtr = 0L
+    private val det = doubleArrayOf(0.0, -0.11, 0.11, -0.05, 0.05)
+
+    private fun hz(semi: Int): Double = 440.0 * 2.0.pow((60 + 12 * InstState.synOct + semi - 69) / 12.0)
+
+    /** frame < 0 = sofort. [tag] verbindet An und Aus (z. B. Schritt oder Finger). */
+    fun queue(frame: Long, on: Boolean, semi: Int, vel: Float, tag: Int) {
+        synchronized(lock) { queue.add(Ev(frame, on, semi, vel, tag)) }
+    }
+
+    fun allOff() {
+        synchronized(lock) { queue.clear() }
+        for (v in voices) if (v.active) { v.gate = false; v.stage = 2 }
+    }
+
+    private fun apply(e: Ev) {
+        val iv = InstState.synChordIv[InstState.synChord.coerceIn(0, InstState.synChordIv.size - 1)]
+        if (!e.on) {
+            for (v in voices) if (v.active && v.tag == e.tag && v.gate) { v.gate = false; v.stage = 2 }
+            return
+        }
+        for (o in iv) {
+            var v = voices.firstOrNull { !it.active }
+            if (v == null) v = voices.minByOrNull { if (it.gate) it.age + 1_000_000_000L else it.age }!!
+            v.active = true
+            v.tag = e.tag
+            v.semi = e.semi + o
+            v.freq = hz(v.semi)
+            v.vel = e.vel
+            v.gate = true
+            v.stage = 0
+            v.fenv = 1f
+            v.age = ++ageCtr
+            if (v.env < 0.001f) {
+                for (k in v.ph.indices) v.ph[k] = Math.random()
+                v.mph = 0.0
+                v.lp = 0f; v.bp = 0f
+            }
+        }
+    }
+
+    private fun blep(t: Double, dt: Double): Double = when {
+        t < dt -> { val x = t / dt; x + x - x * x - 1.0 }
+        t > 1.0 - dt -> { val x = (t - 1.0) / dt; x * x + x + x + 1.0 }
+        else -> 0.0
+    }
+
+    fun render(out: FloatArray, n: Int, w: Long) {
+        val evs: List<Ev>
+        synchronized(lock) {
+            if (queue.isEmpty()) evs = emptyList() else {
+                evs = queue.filter { it.frame < w + n }.sortedBy { it.frame }
+                queue.removeAll(evs.toSet())
+            }
+        }
+        val st = InstState
+        val wave = st.synWave
+        val atk = (1.0 / ((0.002 + st.synAtk * st.synAtk * 2.5) * sr)).toFloat()
+        val relC = exp(-1.0 / ((0.02 + st.synRel * st.synRel * 3.0) * sr)).toFloat()
+        val decC = exp(-1.0 / ((if (wave == 3) 0.25 else 0.6) * sr)).toFloat()
+        val sus = if (wave == 3) 0f else if (wave == 4) 0.0f else 0.8f
+        val fDec = exp(-1.0 / ((if (wave == 3) 0.12 else 0.35) * sr)).toFloat()
+        val q = 1f - st.synRes * 0.92f
+        val vol = st.synVol * 0.32f
+        val spread = st.synDetune
+        var ei = 0
+        for (i in 0 until n) {
+            while (ei < evs.size && (evs[ei].frame < 0 || evs[ei].frame <= w + i)) { apply(evs[ei]); ei++ }
+            var mix = 0f
+            for (v in voices) {
+                if (!v.active) continue
+                when (v.stage) {
+                    0 -> { v.env += atk; if (v.env >= 1f) { v.env = 1f; v.stage = 1 } }
+                    1 -> v.env = sus + (v.env - sus) * decC
+                    else -> { v.env *= relC; if (v.env < 1e-4f) { v.active = false; continue } }
+                }
+                v.fenv *= fDec
+                val f = v.freq
+                var o: Double
+                when (wave) {
+                    1 -> {
+                        val dt = f / sr
+                        v.ph[0] += dt; if (v.ph[0] >= 1.0) v.ph[0] -= 1.0
+                        var sq = if (v.ph[0] < 0.5) 1.0 else -1.0
+                        sq += blep(v.ph[0], dt); sq -= blep((v.ph[0] + 0.5) % 1.0, dt)
+                        o = sq * 0.8
+                    }
+                    2 -> {
+                        o = 0.0
+                        for (k in 0 until 5) {
+                            val fk = f * (1.0 + det[k] * spread * 0.12)
+                            val dt = fk / sr
+                            v.ph[k] += dt; if (v.ph[k] >= 1.0) v.ph[k] -= 1.0
+                            o += 2.0 * v.ph[k] - 1.0 - blep(v.ph[k], dt)
+                        }
+                        o *= 0.32
+                    }
+                    4 -> {
+                        // FM-Glocke: Modulator 3,5 : 1, Index fällt mit der Hüllkurve
+                        v.mph += f * 3.5 / sr; if (v.mph >= 1.0) v.mph -= 1.0
+                        val idx = 0.4 + 3.2 * v.fenv
+                        v.ph[0] += f / sr; if (v.ph[0] >= 1.0) v.ph[0] -= 1.0
+                        o = kotlin.math.sin(2 * PI * v.ph[0] + idx * kotlin.math.sin(2 * PI * v.mph))
+                    }
+                    else -> {
+                        // SAW / PLUCK: zwei leicht verstimmte Sägezähne
+                        o = 0.0
+                        for (k in 0 until 2) {
+                            val fk = f * (1.0 + (if (k == 0) -1 else 1) * spread * 0.006)
+                            val dt = fk / sr
+                            v.ph[k] += dt; if (v.ph[k] >= 1.0) v.ph[k] -= 1.0
+                            o += 2.0 * v.ph[k] - 1.0 - blep(v.ph[k], dt)
+                        }
+                        o *= 0.5
+                    }
+                }
+                var s = o.toFloat()
+                if (wave != 4) {
+                    val oct = st.synCut * 7.5f + st.synEnv * 4.5f * v.fenv + st.synCutMod * 2.5f
+                    val fc = min(0.42f * sr, 60f * 2f.pow(oct))
+                    val g = (2.0 * kotlin.math.sin(PI * fc / sr)).toFloat().coerceAtMost(1.1f)
+                    // Chamberlin-SVF (Tiefpass)
+                    v.lp += g * v.bp
+                    val hp = s - v.lp - q * v.bp
+                    v.bp += g * hp
+                    s = v.lp
+                }
+                mix += s * v.env * v.vel
+            }
+            out[i] += tanh(mix * vol * 1.2f)
+        }
+        if (ei < evs.size) synchronized(lock) { queue.addAll(evs.subList(ei, evs.size)) }
     }
 }

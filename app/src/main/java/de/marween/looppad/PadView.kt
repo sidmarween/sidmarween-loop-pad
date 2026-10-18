@@ -609,13 +609,11 @@ class PadView(context: Context) : View(context) {
             xyH = minXy
         }
         xyRect.set(margin, contentTop, w - margin, contentTop + xyH)
-        // Umschalter Effekte / ACID / DRUM über der XY-Fläche
+        // Reiter über der XY-Fläche: Effekte | Instrumente (303 · 909 · SYNTH)
         val tabH = dp(26f)
-        val tabW = (xyRect.width() - 2 * dp(6f)) / 3f
-        for (t in 0 until 3) {
-            val tx = xyRect.left + t * (tabW + dp(6f))
-            modeRects[t].set(tx, contentTop, tx + tabW, contentTop + tabH)
-        }
+        val w0 = (xyRect.width() - dp(6f)) * 0.36f
+        modeRects[0].set(xyRect.left, contentTop, xyRect.left + w0, contentTop + tabH)
+        modeRects[1].set(modeRects[0].right + dp(6f), contentTop, xyRect.right, contentTop + tabH)
         xyRect.top = contentTop + tabH + dp(5f)
 
         val gridTop = xyRect.bottom + gap
@@ -1250,7 +1248,7 @@ class PadView(context: Context) : View(context) {
             Engine.PadState.ONESHOT -> String.format(Locale.GERMANY, "⚡ %.1fs", Engine.loopSeconds(i))
             Engine.PadState.PLAYING -> String.format(Locale.GERMANY, "∞ %.1fs", Engine.loopSeconds(i))
             Engine.PadState.MUTED -> "AUS"
-            Engine.PadState.RECORDING -> if (Engine.isArmed(i)) "BEREIT" else String.format(Locale.GERMANY, "%s %.1f", if (Engine.padSource[i] == 2) "PADS" else if (Engine.padSource[i] == 1) "WAVE" else "REC", Engine.recordingSeconds(i))
+            Engine.PadState.RECORDING -> if (Engine.isArmed(i)) "BEREIT" else String.format(Locale.GERMANY, "%s %.1f", if (Engine.padSource[i] == 3) "INST" else if (Engine.padSource[i] == 2) "PADS" else if (Engine.padSource[i] == 1) "WAVE" else "REC", Engine.recordingSeconds(i))
             Engine.PadState.OVERDUB -> "DUB"
         }
         if (label.isNotEmpty()) {
@@ -1775,6 +1773,7 @@ class PadView(context: Context) : View(context) {
         textPaint.textSize = r.width() * 0.12f
         textPaint.color = ink(0.6f)
         val srcTxt = when (Engine.padSource[i]) {
+            3 -> "🎹 " + instMaskShort(Engine.padInstMask[i])
             2 -> "🎛 " + Engine.maskPads(Engine.padSrcMask[i]).joinToString("+") { "${it + 1}" }.ifEmpty { "PADS" }
             1 -> "〰 WAVE"
             else -> "🎙 MIC"
@@ -2327,7 +2326,7 @@ class PadView(context: Context) : View(context) {
 
     // ---------------------------------------------------------------- Regler, Effekt-Knopf, XY-Fläche
 
-    private fun knobLabel(k: Int): String = if (xyMode == 1) ACID_KNOBS[k] else if (xyMode == 2) {
+    private fun knobLabel(k: Int): String = if (xyMode == 1) ACID_KNOBS[k] else if (xyMode == 3) SYN_KNOBS[k] else if (xyMode == 2) {
         if (k < 3) "${DRUM_KNOBS[k]} ${InstState.drumNames[InstState.drumSel]}" else DRUM_KNOBS[k]
     } else when (k) {
         0 -> "MIX"
@@ -2342,6 +2341,7 @@ class PadView(context: Context) : View(context) {
         return when (xyMode) {
             1 -> when (k) { 0 -> st.acidCut; 1 -> st.acidRes; 2 -> st.acidEnv; 3 -> st.acidDec; else -> st.acidVol }
             2 -> when (k) { 0 -> st.drumTune[st.drumSel]; 1 -> st.drumDecay[st.drumSel]; 2 -> st.drumLevel[st.drumSel]; 3 -> st.drumDrive; else -> st.drumVol }
+            3 -> when (k) { 0 -> st.synCut; 1 -> st.synRes; 2 -> st.synAtk; 3 -> st.synRel; else -> st.synVol }
             else -> if (k == 4) Engine.swing else Engine.knobs[k]
         }
     }
@@ -2351,6 +2351,7 @@ class PadView(context: Context) : View(context) {
         when (xyMode) {
             1 -> when (k) { 0 -> st.acidCut = v; 1 -> st.acidRes = v; 2 -> st.acidEnv = v; 3 -> st.acidDec = v; else -> st.acidVol = v }
             2 -> when (k) { 0 -> st.drumTune[st.drumSel] = v; 1 -> st.drumDecay[st.drumSel] = v; 2 -> st.drumLevel[st.drumSel] = v; 3 -> st.drumDrive = v; else -> st.drumVol = v }
+            3 -> when (k) { 0 -> st.synCut = v; 1 -> st.synRes = v; 2 -> st.synAtk = v; 3 -> st.synRel = v; else -> st.synVol = v }
             else -> if (k == 4) Engine.swing = v else Engine.knobs[k] = v
         }
     }
@@ -2920,11 +2921,13 @@ class PadView(context: Context) : View(context) {
                     performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
                     return true
                 }
-                for (t in 0 until 3) {
+                for (t in 0 until 2) {
                     if (modeRects[t].contains(x, y)) {
-                        if (xyMode != t) {
+                        val nm = if (t == 0) 0 else if (xyMode == 0) instSel else 1 + instSegAt(x)
+                        if (xyMode != nm) {
                             instRelease()
-                            xyMode = t
+                            xyMode = nm
+                            if (nm > 0) instSel = nm
                         }
                         performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
                         burst(x, y, overlayColors()[2], 14, 180f)
@@ -3556,7 +3559,7 @@ class PadView(context: Context) : View(context) {
             Engine.PadState.ONESHOT -> String.format(Locale.GERMANY, "%.1fs", Engine.loopSeconds(i))
             Engine.PadState.PLAYING -> String.format(Locale.GERMANY, "∞ %.1fs", Engine.loopSeconds(i))
             Engine.PadState.MUTED -> "AUS"
-            Engine.PadState.RECORDING -> if (Engine.isArmed(i)) "BEREIT" else String.format(Locale.GERMANY, "%s %.1f", if (Engine.padSource[i] == 2) "PADS" else if (Engine.padSource[i] == 1) "WAVE" else "REC", Engine.recordingSeconds(i))
+            Engine.PadState.RECORDING -> if (Engine.isArmed(i)) "BEREIT" else String.format(Locale.GERMANY, "%s %.1f", if (Engine.padSource[i] == 3) "INST" else if (Engine.padSource[i] == 2) "PADS" else if (Engine.padSource[i] == 1) "WAVE" else "REC", Engine.recordingSeconds(i))
             Engine.PadState.OVERDUB -> "DUB"
         }
         if (label.isNotEmpty()) {
@@ -4570,7 +4573,7 @@ class PadView(context: Context) : View(context) {
             Engine.PadState.ONESHOT -> String.format(Locale.GERMANY, "%.1fs", Engine.loopSeconds(i))
             Engine.PadState.PLAYING -> String.format(Locale.GERMANY, "∞ %.1fs", Engine.loopSeconds(i))
             Engine.PadState.MUTED -> "AUS"
-            Engine.PadState.RECORDING -> if (Engine.isArmed(i)) "BEREIT" else String.format(Locale.GERMANY, "%s %.1f", if (Engine.padSource[i] == 2) "PADS" else if (Engine.padSource[i] == 1) "WAVE" else "REC", Engine.recordingSeconds(i))
+            Engine.PadState.RECORDING -> if (Engine.isArmed(i)) "BEREIT" else String.format(Locale.GERMANY, "%s %.1f", if (Engine.padSource[i] == 3) "INST" else if (Engine.padSource[i] == 2) "PADS" else if (Engine.padSource[i] == 1) "WAVE" else "REC", Engine.recordingSeconds(i))
             Engine.PadState.OVERDUB -> "DUB"
         }
         if (label.isNotEmpty()) {
@@ -6581,7 +6584,10 @@ class PadView(context: Context) : View(context) {
         return true
     }
 
+    private fun instMaskShort(m: Int): String = listOf("303", "909", "SYN").filterIndexed { k, _ -> (m shr k) and 1 != 0 }.joinToString("+").ifEmpty { "INST" }
+
     private fun srcName(i: Int) = when (Engine.padSource[i]) {
+        3 -> "🎹 Instrumente " + instMaskShort(Engine.padInstMask[i])
         2 -> "🎛 Pads " + Engine.maskPads(Engine.padSrcMask[i]).joinToString(", ") { "${it + 1}" } + " (nach ihren eigenen Effekten)"
         1 -> "〰 Wave (App-Audio inkl. Effekte)"
         else -> "🎙 Mikrofon"
@@ -6682,13 +6688,17 @@ class PadView(context: Context) : View(context) {
         for (b in 0 until 6) if (funcRects[b].contains(x, y)) return Triple(funcRects[b], funcInfo[b].first, funcInfo[b].second)
         if (fxBtn.contains(x, y)) return Triple(fxBtn, "Effekt-Knopf", "Links tippen = vorheriger, rechts = nächster Effekt für den gewählten Kettenplatz. Lange drücken öffnet die Liste aller 37 Effekte.")
         // ---- Umschalter & Instrumente
-        for (t in 0 until 3) if (modeRects[t].contains(x, y)) {
-            val txt = when (t) {
-                0 -> "Die Fläche darunter ist die XY-Effektfläche mit Effekt-Kette, HOLD und Bewegungs-Aufnahme."
-                1 -> "Virtueller 303-artiger Bass: 16-Schritt-Sequenzer mit Ton, Accent (A) und Slide (S), resonantes Filter. Auf dem Touchpad spielen: X = Ton, Y = Filter. Die Regler oben werden zu CUTOFF, RESO, ENV MOD, DECAY, LEVEL."
-                else -> "Virtueller 909-artiger Drumcomputer: 11 synthetisierte Instrumente, 16 Schritte je Instrument (antippen: aus → an → Accent), Presets und Finger-Drum-Pads. Die Regler oben: TUNE/DECAY/LEVEL des gewählten Instruments, DRIVE und VOL."
-            }
-            return Triple(modeRects[t], modeNames[t], txt + " Beide Instrumente laufen synchron mit dem Sequenzer (▶) und lassen sich mit FX durch die Effekt-Kette schicken.")
+        for (t in 0 until 2) if (modeRects[t].contains(x, y)) {
+            if (t == 0) return Triple(modeRects[0], "🎛 EFFEKTE", "Die Fläche darunter ist die XY-Effektfläche mit Effekt-Kette, HOLD und Bewegungs-Aufnahme.")
+            return Triple(modeRects[1], "🎹 INSTRUMENTE", "Drei Instrumente in einem Reiter – antippen wählt: 303 (Acid-Bass mit Accent und Slide), 909 (Drumcomputer mit 11 Klängen, Presets und Finger-Pads) und SYNTH (polyfoner Synth mit Akkorden, 5 Klangarten). Alle laufen synchron mit dem Sequenzer (▶), lassen sich mit FX durch die Effekt-Kette schicken und können als Eingang eines Pads aufgenommen werden (Pad-Menü → Eingang → Instrumente).")
+        }
+        if (xyMode == 3 && xyRect.contains(x, y)) {
+            layoutSynth()
+            val hdrTxt = arrayOf("AN/AUS: ob der Synth im Sequenzer mitspielt.", "Klang: Sägezahn, Rechteck, Supersaw, Pluck oder FM-Glocke.", "Akkord: Einzelton oder Dur/Moll/Sus4/Dur7/Moll7/Oktave – jede Note wird zum Akkord.", "FX: Synth durch die Effekt-Kette schicken.", "Oktave tiefer.", "Oktave höher.", "Zufällige Melodie (Moll-Pentatonik).", "Alle Schritte löschen.")
+            for (i in 0 until 8) if (instHdr[i].contains(x, y)) return Triple(instHdr[i], "SYNTH", hdrTxt[i])
+            if (laneRect.contains(x, y)) return Triple(laneRect, "Schritte", "Schritt antippen = an/aus, hoch/runter ziehen = Tonhöhe.")
+            if (accRow.contains(x, y)) return Triple(accRow, "Halten (H)", "Verlängert die Note des vorigen Schritts – so entstehen lange Töne und Flächen.")
+            return Triple(playRect, "Spielfläche", "Live spielen: X = Ton (2 Oktaven), Y = Filter. Bei laufender Pattern-Aufnahme werden die Töne in die Schritte geschrieben. Die Regler oben: CUTOFF, RESO, ATTACK, RELEASE, LEVEL.")
         }
         if (xyMode == 1 && xyRect.contains(x, y)) {
             layoutAcid()
@@ -6818,15 +6828,32 @@ class PadView(context: Context) : View(context) {
     var onInstMidi: ((Int) -> Unit)? = null
     /** Preset-Bibliothek für ACID (1) / DRUM (2). */
     var onInstPresets: ((Int) -> Unit)? = null
-    private val modeRects = Array(3) { RectF() }
-    private val modeNames = arrayOf("🎛 EFFEKTE", "🔊 ACID 303", "🥁 DRUM 909")
+    private val modeRects = Array(2) { RectF() }
+    /** Zuletzt gewähltes Instrument (1 = ACID, 2 = DRUM, 3 = SYNTH). */
+    private var instSel = 1
+    private val instSegNames = arrayOf("303", "909", "SYNTH")
+
+    private fun instSegAt(x: Float): Int {
+        val r = modeRects[1]
+        return (((x - r.left) / r.width()) * 3).toInt().coerceIn(0, 2)
+    }
+
+    private fun instRunning(k: Int): Boolean {
+        val st = InstState
+        return Engine.seqPlaying && when (k) {
+            1 -> st.acidOn && st.acidHasNotes()
+            2 -> st.drumOn && st.drumHasNotes()
+            else -> st.synOn && st.synHasNotes()
+        }
+    }
 
     private fun drawModeTabs(canvas: Canvas) {
         val cols = overlayColors()
-        for (t in 0 until 3) {
-            val r = modeRects[t]
-            if (r.width() <= 0f) continue
-            val on = xyMode == t
+        // Reiter EFFEKTE
+        run {
+            val r = modeRects[0]
+            if (r.width() <= 0f) return
+            val on = xyMode == 0
             val rr = r.height() / 2f
             fillPaint.shader = null
             fillPaint.color = if (on) cols[2] else alpha(cols[0], 0.85f)
@@ -6834,16 +6861,52 @@ class PadView(context: Context) : View(context) {
             strokePaint.strokeWidth = dp(1.2f)
             strokePaint.color = if (on) Color.WHITE else alpha(cols[1], 0.4f)
             canvas.drawRoundRect(r, rr, rr, strokePaint)
-            textPaint.textSize = dp(11f)
             textPaint.color = if (on) Color.WHITE else alpha(cols[1], 0.8f)
-            canvas.drawText(modeNames[t], r.centerX(), r.centerY() + dp(4f), textPaint)
-            // laufendes Instrument markieren
-            val running = Engine.seqPlaying && ((t == 1 && InstState.acidOn && InstState.acidHasNotes()) || (t == 2 && InstState.drumOn && InstState.drumHasNotes()))
-            if (running) {
+            val lb = fitLabel(textPaint, "🎛 EFFEKTE", r.width() - dp(10f), dp(11f), dp(7f))
+            canvas.drawText(lb, r.centerX(), r.centerY() + textPaint.textSize * 0.36f, textPaint)
+        }
+        // Reiter INSTRUMENTE: zu = ein Knopf, offen = 303 | 909 | SYNTH
+        val r = modeRects[1]
+        val rr = r.height() / 2f
+        val open = xyMode != 0
+        fillPaint.color = if (open) alpha(cols[0], 0.9f) else alpha(cols[0], 0.85f)
+        canvas.drawRoundRect(r, rr, rr, fillPaint)
+        if (!open) {
+            strokePaint.strokeWidth = dp(1.2f)
+            strokePaint.color = alpha(cols[1], 0.4f)
+            canvas.drawRoundRect(r, rr, rr, strokePaint)
+            textPaint.color = alpha(cols[1], 0.8f)
+            val lb = fitLabel(textPaint, "🎹 INSTRUMENTE", r.width() - dp(30f), dp(11f), dp(7f))
+            canvas.drawText(lb, r.centerX() - dp(8f), r.centerY() + textPaint.textSize * 0.36f, textPaint)
+            // laufende Instrumente als Punkte
+            var dx = r.right - dp(10f)
+            for (k in 3 downTo 1) if (instRunning(k)) {
+                dotPaint.color = cols[2]
+                canvas.drawCircle(dx, r.centerY(), dp(2.6f), dotPaint)
+                dx -= dp(7f)
+            }
+            return
+        }
+        val sw = r.width() / 3f
+        for (k in 0 until 3) {
+            val on = xyMode == k + 1
+            tmpRect.set(r.left + k * sw + dp(1.5f), r.top + dp(1.5f), r.left + (k + 1) * sw - dp(1.5f), r.bottom - dp(1.5f))
+            val rr2 = tmpRect.height() / 2f
+            if (on) {
+                fillPaint.color = cols[2]
+                canvas.drawRoundRect(tmpRect, rr2, rr2, fillPaint)
+            }
+            textPaint.color = if (on) Color.WHITE else alpha(cols[1], 0.8f)
+            val lb = fitLabel(textPaint, instSegNames[k], tmpRect.width() - dp(14f), dp(11f), dp(7f))
+            canvas.drawText(lb, tmpRect.centerX() - dp(3f), tmpRect.centerY() + textPaint.textSize * 0.36f, textPaint)
+            if (instRunning(k + 1)) {
                 dotPaint.color = if (on) Color.WHITE else cols[2]
-                canvas.drawCircle(r.right - dp(10f), r.centerY(), dp(3f), dotPaint)
+                canvas.drawCircle(tmpRect.right - dp(8f), tmpRect.centerY(), dp(2.6f), dotPaint)
             }
         }
+        strokePaint.strokeWidth = dp(1.2f)
+        strokePaint.color = Color.WHITE
+        canvas.drawRoundRect(r, rr, rr, strokePaint)
     }
 
     // ---- gemeinsame Bausteine
@@ -6905,7 +6968,11 @@ class PadView(context: Context) : View(context) {
     private fun drawInstrument(canvas: Canvas) {
         val cols = overlayColors()
         instPanel(canvas, cols)
-        if (xyMode == 1) drawAcid(canvas, cols) else drawDrum(canvas, cols)
+        when (xyMode) {
+            1 -> drawAcid(canvas, cols)
+            3 -> drawSynth(canvas, cols)
+            else -> drawDrum(canvas, cols)
+        }
     }
 
     // ---- ACID
@@ -7000,6 +7067,144 @@ class PadView(context: Context) : View(context) {
             textPaint.textAlign = Paint.Align.RIGHT
             canvas.drawText("● REC → Schritte", pr.right - dp(5f), pr.top + dp(11f), textPaint)
             textPaint.textAlign = Paint.Align.CENTER
+        }
+    }
+
+    // ---- SYNTH
+    private fun layoutSynth() {
+        layoutHeader(8)
+        val r = xyRect
+        val top = instHdr[0].bottom + dp(6f)
+        val rest = r.bottom - dp(6f) - top
+        val rowH = dp(14f)
+        val laneH = max(dp(34f), (rest - rowH - dp(8f)) * 0.5f)
+        laneRect.set(r.left + dp(6f), top, r.right - dp(6f), top + laneH)
+        accRow.set(laneRect.left, laneRect.bottom + dp(3f), laneRect.right, laneRect.bottom + dp(3f) + rowH)
+        sliRow.setEmpty()
+        playRect.set(laneRect.left, accRow.bottom + dp(6f), laneRect.right, r.bottom - dp(6f))
+    }
+
+    private fun drawSynth(canvas: Canvas, cols: IntArray) {
+        layoutSynth()
+        val st = InstState
+        val labels = arrayOf(
+            if (st.synOn) "● AN" else "○ AUS", st.synWaveNames[st.synWave], if (st.synChord == 0) "♪ EINZEL" else "♫ " + st.synChordNames[st.synChord],
+            "FX", "OKT−", "OKT+", "🎲 RND", "LEEREN"
+        )
+        val ons = booleanArrayOf(st.synOn, false, st.synChord != 0, st.synFx, false, false, false, false)
+        for (i in 0 until 8) chip(canvas, instHdr[i], labels[i], ons[i], cols)
+        val cur = Engine.instCurrentStep(st.synLen)
+        val cw = laneRect.width() / InstState.STEPS
+        val synCol = Color.rgb(150, 120, 255)
+        for (k in 0 until InstState.STEPS) {
+            val x0 = laneRect.left + k * cw
+            tmpRect.set(x0 + dp(1f), laneRect.top, x0 + cw - dp(1f), laneRect.bottom)
+            fillPaint.color = if (k == cur % InstState.STEPS) Color.rgb(48, 48, 58) else if (k % 4 == 0) Color.rgb(30, 31, 38) else Color.rgb(24, 25, 31)
+            canvas.drawRoundRect(tmpRect, dp(3f), dp(3f), fillPaint)
+            if (st.synGate[k]) {
+                val v = ((st.synSemi[k] + 12) / 36f).coerceIn(0.05f, 1f)
+                val bar = RectF(tmpRect.left, tmpRect.bottom - tmpRect.height() * v, tmpRect.right, tmpRect.bottom)
+                fillPaint.color = if (st.synTie[k]) alpha(synCol, 0.55f) else synCol
+                canvas.drawRoundRect(bar, dp(3f), dp(3f), fillPaint)
+                if (cw > dp(17f) && !st.synTie[k]) {
+                    textPaint.textSize = dp(8.5f)
+                    textPaint.color = Color.WHITE
+                    val sm = st.synSemi[k]
+                    canvas.drawText(noteNm[Math.floorMod(sm, 12)] + (4 + st.synOct + Math.floorDiv(sm, 12)), tmpRect.centerX(), tmpRect.top + dp(10f), textPaint)
+                }
+            }
+            if (k == cur % InstState.STEPS && cur >= 0) {
+                strokePaint.strokeWidth = dp(1.5f)
+                strokePaint.color = Color.WHITE
+                canvas.drawRoundRect(tmpRect, dp(3f), dp(3f), strokePaint)
+            }
+            tmpRect.set(x0 + dp(1f), accRow.top, x0 + cw - dp(1f), accRow.bottom)
+            fillPaint.color = if (st.synTie[k]) Color.rgb(120, 220, 170) else Color.rgb(28, 29, 36)
+            canvas.drawRoundRect(tmpRect, dp(2f), dp(2f), fillPaint)
+            if (k == 0) {
+                textPaint.textSize = dp(8f)
+                textPaint.color = if (st.synTie[k]) Color.BLACK else alpha(Color.WHITE, 0.5f)
+                canvas.drawText("H", tmpRect.centerX(), tmpRect.centerY() + dp(3f), textPaint)
+            }
+        }
+        val pr = playRect
+        val notes = 25
+        val nw = pr.width() / notes
+        for (k in 0 until notes) {
+            val n = k % 12
+            val black = n == 1 || n == 3 || n == 6 || n == 8 || n == 10
+            tmpRect.set(pr.left + k * nw, pr.top, pr.left + (k + 1) * nw, pr.bottom)
+            fillPaint.color = if (synLiveSemi == k) synCol else if (black) Color.rgb(20, 20, 26) else Color.rgb(36, 37, 46)
+            canvas.drawRect(tmpRect, fillPaint)
+            if (n == 0) {
+                textPaint.textSize = dp(9f)
+                textPaint.color = alpha(Color.WHITE, 0.6f)
+                canvas.drawText("C${4 + st.synOct + k / 12}", tmpRect.centerX(), pr.bottom - dp(5f), textPaint)
+            }
+        }
+        strokePaint.strokeWidth = dp(1f)
+        strokePaint.color = alpha(synCol, 0.7f)
+        canvas.drawRect(pr, strokePaint)
+        textPaint.textSize = dp(9f)
+        textPaint.color = alpha(Color.WHITE, 0.55f)
+        textPaint.textAlign = Paint.Align.LEFT
+        canvas.drawText("↑ FILTER  · X = TON" + if (st.synChord != 0) " · Akkord ${st.synChordNames[st.synChord]}" else "", pr.left + dp(5f), pr.top + dp(11f), textPaint)
+        textPaint.textAlign = Paint.Align.CENTER
+    }
+
+    private var synLiveSemi = Int.MIN_VALUE
+
+    private fun synthDown(id: Int, x: Float, y: Float) {
+        val st = InstState
+        layoutSynth()
+        for (i in 0 until 8) if (instHdr[i].contains(x, y)) {
+            when (i) {
+                0 -> st.synOn = !st.synOn
+                1 -> st.synWave = (st.synWave + 1) % st.synWaveNames.size
+                2 -> st.synChord = (st.synChord + 1) % st.synChordNames.size
+                3 -> st.synFx = !st.synFx
+                4 -> st.synOct = (st.synOct - 1).coerceAtLeast(-3)
+                5 -> st.synOct = (st.synOct + 1).coerceAtMost(2)
+                6 -> { Engine.pushPatternUndo("SYNTH Zufall"); st.synRandom() }
+                7 -> { Engine.pushPatternUndo("SYNTH leeren"); st.synClear() }
+            }
+            if (i == 1) hint("SYNTH-Klang: ${st.synWaveNames[st.synWave]}")
+            if (i == 2) hint("Akkord: ${st.synChordNames[st.synChord]}")
+            return
+        }
+        val cw = laneRect.width() / InstState.STEPS
+        if (laneRect.contains(x, y)) {
+            val k = ((x - laneRect.left) / cw).toInt().coerceIn(0, InstState.STEPS - 1)
+            Engine.pushPatternUndo("SYNTH Schritt ${k + 1}")
+            instPointer = id
+            instKind = 5
+            laneStep = k
+            laneWasOn = st.synGate[k]
+            laneDragged = false
+            laneDownY = y
+            if (!laneWasOn) { st.synGate[k] = true; st.synTie[k] = false; st.synVel[k] = 1f }
+            for (r in 1 until InstState.MAX / InstState.STEPS) { val q = k + r * InstState.STEPS; st.synGate[q] = st.synGate[k]; st.synTie[q] = st.synTie[k]; st.synSemi[q] = st.synSemi[k] }
+            return
+        }
+        if (accRow.contains(x, y)) {
+            val k = ((x - laneRect.left) / cw).toInt().coerceIn(0, InstState.STEPS - 1)
+            Engine.pushPatternUndo("SYNTH Halten")
+            st.synTie[k] = !st.synTie[k]
+            if (st.synTie[k]) {
+                st.synGate[k] = true
+                st.synSemi[k] = st.synSemi[Math.floorMod(k - 1, InstState.STEPS)]
+            }
+            for (r in 1 until InstState.MAX / InstState.STEPS) { val q = k + r * InstState.STEPS; st.synGate[q] = st.synGate[k]; st.synTie[q] = st.synTie[k]; st.synSemi[q] = st.synSemi[k] }
+            return
+        }
+        if (playRect.contains(x, y)) {
+            instPointer = id
+            instKind = 4
+            val sm = acidSemiAt(x)
+            synLiveSemi = sm
+            st.synCutMod = (1f - (y - playRect.top) / playRect.height()) * 2f - 1f
+            Engine.synthLiveOn(sm, SYN_LIVE_TAG)
+            burst(x, y, Color.rgb(150, 120, 255), 8, 140f)
         }
     }
 
@@ -7100,6 +7305,10 @@ class PadView(context: Context) : View(context) {
     private fun instDown(id: Int, x: Float, y: Float) {
         val st = InstState
         performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+        if (xyMode == 3) {
+            synthDown(id, x, y)
+            return
+        }
         if (xyMode == 1) {
             layoutAcid()
             for (i in 0 until 8) if (instHdr[i].contains(x, y)) {
@@ -7191,6 +7400,31 @@ class PadView(context: Context) : View(context) {
 
     private fun instMove(x: Float, y: Float) {
         val st = InstState
+        if (instKind == 4) {
+            val sm = acidSemiAt(x)
+            st.synCutMod = ((1f - (y - playRect.top) / playRect.height()) * 2f - 1f).coerceIn(-1f, 1f)
+            if (sm != synLiveSemi) {
+                Engine.synthLiveOff(SYN_LIVE_TAG)
+                synLiveSemi = sm
+                Engine.synthLiveOn(sm, SYN_LIVE_TAG)
+            }
+            return
+        }
+        if (instKind == 5 && laneStep >= 0) {
+            if (laneDragged || abs(y - laneDownY) > dp(6f)) {
+                laneDragged = true
+                val v = (1f - (y - laneRect.top) / laneRect.height()).coerceIn(0f, 1f)
+                val sm = (v * 36f).toInt() - 12
+                if (sm != st.synSemi[laneStep] || laneVoice < 0) {
+                    st.synSemi[laneStep] = sm
+                    for (r in 1 until InstState.MAX / InstState.STEPS) st.synSemi[laneStep + r * InstState.STEPS] = sm
+                    if (laneVoice >= 0) Engine.synthLiveOff(SYN_LANE_TAG)
+                    Engine.synthLiveOn(sm, SYN_LANE_TAG)
+                    laneVoice = 1
+                }
+            }
+            return
+        }
         if (instKind == 1) {
             val sm = acidSemiAt(x)
             st.acidCutMod = ((1f - (y - playRect.top) / playRect.height()) * 2f - 1f).coerceIn(-1f, 1f)
@@ -7216,7 +7450,20 @@ class PadView(context: Context) : View(context) {
 
     private fun instUp() {
         val st = InstState
-        if (instKind == 3) {
+        if (instKind == 4) {
+            Engine.synthLiveOff(SYN_LIVE_TAG)
+            synLiveSemi = Int.MIN_VALUE
+            st.synCutMod = 0f
+        } else if (instKind == 5 && laneStep >= 0) {
+            if (!laneDragged && laneWasOn) {
+                st.synGate[laneStep] = false
+                st.synTie[laneStep] = false
+                for (r in 1 until InstState.MAX / InstState.STEPS) { val q = laneStep + r * InstState.STEPS; st.synGate[q] = false; st.synTie[q] = false }
+            }
+            if (laneVoice >= 0) Engine.synthLiveOff(SYN_LANE_TAG)
+            laneVoice = -1
+            laneStep = -1
+        } else if (instKind == 3) {
             Engine.repeatDrumUp(repDrumVoice)
             repDrumVoice = -1
         } else if (instKind == 1) {
@@ -7241,6 +7488,8 @@ class PadView(context: Context) : View(context) {
         private val BRAND_ORANGE = Color.rgb(255, 95, 0)
 
         const val VISIBLE_PADS = 12
+        private const val SYN_LIVE_TAG = 1
+        private const val SYN_LANE_TAG = 2
         const val F_NONE = 0
         const val F_MUTE = 1
         const val F_SOLO = 2
@@ -7249,6 +7498,7 @@ class PadView(context: Context) : View(context) {
         private val FUNC_NAMES = arrayOf("SZENE", "MUTE", "SOLO", "ERASE", "DUPL", "REPEAT")
         private val ACID_KNOBS = arrayOf("CUTOFF", "RESO", "ENV MOD", "DECAY", "LEVEL")
         private val DRUM_KNOBS = arrayOf("TUNE", "DECAY", "LEVEL", "DRIVE", "VOL")
+        private val SYN_KNOBS = arrayOf("CUTOFF", "RESO", "ATTACK", "RELEASE", "LEVEL")
         const val RETRO = 4
         const val COMIC = 5
         const val GLASS = 6

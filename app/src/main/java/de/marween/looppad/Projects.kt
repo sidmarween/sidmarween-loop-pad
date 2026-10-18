@@ -75,6 +75,7 @@ object Projects {
             o.put("gain", sv.gain.toDouble())
             o.put("src", Engine.padSource[p])
             o.put("srcMask", Engine.padSrcMask[p])
+            o.put("instMask", Engine.padInstMask[p])
             o.put("fx", Engine.padFx[p])
             val na = JSONArray()
             for (ev in Engine.getNotes(p)) {
@@ -141,6 +142,7 @@ object Projects {
         for (p in 0 until min(Engine.PADS, pa.length())) {
             Engine.padSource[p] = pa.getJSONObject(p).optInt("src", Engine.padSource[p])
             Engine.padSrcMask[p] = pa.getJSONObject(p).optInt("srcMask", Engine.padSrcMask[p])
+            Engine.padInstMask[p] = pa.getJSONObject(p).optInt("instMask", Engine.padInstMask[p])
             Engine.rollBars[p] = pa.getJSONObject(p).optInt("rollBars", 1)
             val na = pa.getJSONObject(p).optJSONArray("notes") ?: continue
             val list = ArrayList<FloatArray>()

@@ -88,6 +88,9 @@ class MainActivity : Activity() {
         prefs.getString("padSrcMask", null)?.split(",")?.forEachIndexed { i, v ->
             if (i < Engine.PADS) Engine.padSrcMask[i] = v.toIntOrNull() ?: 0
         }
+        prefs.getString("padInstMask", null)?.split(",")?.forEachIndexed { i, v ->
+            if (i < Engine.PADS) Engine.padInstMask[i] = v.toIntOrNull() ?: 7
+        }
         Engine.liveBars = prefs.getInt("liveBars", 0)
         Engine.bounce = prefs.getBoolean("bounce", true)
         Engine.onBounced = { pad, muted ->
@@ -491,6 +494,7 @@ class MainActivity : Activity() {
         getSharedPreferences("marvpad", MODE_PRIVATE).edit()
             .putString("padSource", Engine.padSource.joinToString(","))
             .putString("padSrcMask", Engine.padSrcMask.joinToString(","))
+            .putString("padInstMask", Engine.padInstMask.joinToString(","))
             .putInt("liveBars", Engine.liveBars)
             .apply()
     }
@@ -498,6 +502,7 @@ class MainActivity : Activity() {
     // ---------------------------------------------------------------- Eingang eines Pads
 
     private fun srcLabel(p: Int): String = when (Engine.padSource[p]) {
+        3 -> "🎹 " + Engine.INST_NAMES.filterIndexed { k, _ -> (Engine.padInstMask[p] shr k) and 1 != 0 }.joinToString(" + ")
         2 -> "🎛 Pads " + Engine.maskPads(Engine.padSrcMask[p]).joinToString("+") { "${it + 1}" }
         1 -> "〰 Wave (App-Audio)"
         else -> "🎙 Mikrofon"
@@ -508,9 +513,10 @@ class MainActivity : Activity() {
         val labels = arrayOf(
             "🎙 Mikrofon",
             "〰 Wave – alles, was die App ausgibt (inkl. Effekte)",
-            "🎛 Andere Pads als Eingang (einzeln oder als Gruppe) …"
+            "🎛 Andere Pads als Eingang (einzeln oder als Gruppe) …",
+            "🎹 Instrumente: 303, Drumcomputer, Synth …"
         )
-        val cur = Engine.padSource[p].coerceIn(0, 2)
+        val cur = Engine.padSource[p].coerceIn(0, 3)
         AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
             .setTitle("Eingang für Pad ${p + 1}")
             .setSingleChoiceItems(labels, cur) { d, w ->
@@ -521,7 +527,32 @@ class MainActivity : Activity() {
                         saveRecPrefs()
                         toast("Pad ${p + 1}: Eingang " + srcLabel(p))
                     }
-                    else -> showPadGroupPicker(p)
+                    2 -> showPadGroupPicker(p)
+                    else -> showInstSourcePicker(p)
+                }
+            }
+            .setNegativeButton("Abbrechen", null)
+            .show()
+    }
+
+    /** Reiter „Instrumente“: ACID 303, DRUM 909 und SYNTH einzeln oder zusammen als Eingang. */
+    private fun showInstSourcePicker(p: Int) {
+        val names = arrayOf("🔊 ACID 303 (Bass)", "🥁 DRUM 909 (Drumcomputer)", "🎹 SYNTH (polyfon, Akkorde)")
+        val m0 = if (Engine.padSource[p] == 3) Engine.padInstMask[p] else 7
+        val checked = BooleanArray(3) { (m0 shr it) and 1 != 0 }
+        AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
+            .setTitle("🎹 Instrumente → Pad ${p + 1}")
+            .setMultiChoiceItems(names, checked) { _, i, on -> checked[i] = on }
+            .setPositiveButton("Übernehmen") { _, _ ->
+                var m = 0
+                for (i in 0 until 3) if (checked[i]) m = m or (1 shl i)
+                if (m == 0) {
+                    toast("Kein Instrument gewählt – Eingang bleibt " + srcLabel(p))
+                } else {
+                    Engine.padInstMask[p] = m
+                    Engine.padSource[p] = 3
+                    saveRecPrefs()
+                    toast("Pad ${p + 1} nimmt auf: " + srcLabel(p) + " · Instrumente laufen mit ▶")
                 }
             }
             .setNegativeButton("Abbrechen", null)
