@@ -587,7 +587,7 @@ class InstEditor(private val host: View) {
             Slider("RESONANZ", { st.acidRes }, { st.acidRes = it }, ::pct),
             Slider("ENV MOD", { st.acidEnv }, { st.acidEnv = it }, ::pct),
             Slider("DECAY", { st.acidDec }, { st.acidDec = it }, ::pct),
-            Slider("ACCENT", { aAccent }, { aAccent = it }, ::pct),
+            Slider("ACCENT", { st.acidAccent }, { st.acidAccent = it }, ::pct),
             Slider("GLIDE-ZEIT", { st.acidGlide }, { st.acidGlide = it }, { v -> "${(10 + v * 240).toInt()} ms" }),
             Slider("DRIVE", { st.acidDrive }, { st.acidDrive = it }, ::pct),
             Slider("TUNE", { (st.acidTune + 12) / 24f }, { st.acidTune = Math.round(it * 24) - 12 }, { v -> val t = Math.round(v * 24) - 12; (if (t > 0) "+" else "") + "$t HT" }),
