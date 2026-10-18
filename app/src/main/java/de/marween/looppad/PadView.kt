@@ -2927,7 +2927,19 @@ class PadView(context: Context) : View(context) {
             }
             val ev = MotionEvent.obtain(e)
             ev.transform(focusInv)
-            try { touchInner(ev) } finally { ev.recycle() }
+            try {
+                val am = ev.actionMasked
+                if (am == MotionEvent.ACTION_DOWN || am == MotionEvent.ACTION_POINTER_DOWN) {
+                    val ix = ev.getX(ev.actionIndex)
+                    val iy = ev.getY(ev.actionIndex)
+                    // außerhalb der vergrößerten Sektion: nichts Verstecktes auslösen, Doppeltipp schließt
+                    if (!focusSrc.contains(ix, iy)) {
+                        checkFocusTap(ix, iy)
+                        return true
+                    }
+                }
+                touchInner(ev)
+            } finally { ev.recycle() }
             return true
         }
         return touchInner(e)
