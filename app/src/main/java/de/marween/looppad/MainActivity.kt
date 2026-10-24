@@ -97,6 +97,9 @@ class MainActivity : Activity() {
         Engine.onBouncedInst = { pad, names ->
             runOnUiThread { toast("Bounce → Pad ${pad + 1} · ausgeschaltet: $names (im Reiter Instrumente wieder AN)") }
         }
+        Engine.onFxBaked = { pad ->
+            runOnUiThread { toast("Pad ${pad + 1}: XY-Effekt ist schon mit aufgenommen – das Pad läuft jetzt am Effekt vorbei, damit er nicht doppelt wirkt (Pad-Menü ⋯ → 🎛 XY-Effekt schaltet es zurück)") }
+        }
         Engine.onBounced = { pad, muted ->
             runOnUiThread {
                 toast("Bounce → Pad ${pad + 1} · stumm: " + muted.joinToString(", ") { "Pad ${it + 1}" } + " (antippen holt sie zurück)")
@@ -545,7 +548,7 @@ class MainActivity : Activity() {
                 d.dismiss()
                 when (w) {
                     0, 1 -> {
-                        Engine.padSource[p] = w
+                        Engine.padSource[p] = w; Engine.capOwner = p
                         saveRecPrefs()
                         toast("Pad ${p + 1}: Eingang " + srcLabel(p))
                     }
@@ -572,7 +575,7 @@ class MainActivity : Activity() {
                     toast("Kein Instrument gewählt – Eingang bleibt " + srcLabel(p))
                 } else {
                     Engine.padInstMask[p] = m
-                    Engine.padSource[p] = 3
+                    Engine.padSource[p] = 3; Engine.capOwner = p
                     saveRecPrefs()
                     toast("Pad ${p + 1} nimmt auf: " + srcLabel(p) + " · Instrumente laufen mit ▶")
                 }
@@ -604,7 +607,7 @@ class MainActivity : Activity() {
                     toast("Keine Pads gewählt – Eingang bleibt " + srcLabel(p))
                 } else {
                     Engine.padSrcMask[p] = m
-                    Engine.padSource[p] = 2
+                    Engine.padSource[p] = 2; Engine.capOwner = p
                     saveRecPrefs()
                     toast("Pad ${p + 1} nimmt auf: " + srcLabel(p) + " · halten/antippen zum Aufnehmen")
                 }

@@ -82,6 +82,8 @@ class Take(val overdub: Boolean, val fromIn: Long, val downNanos: Long, val oneS
     @Volatile var latched: Boolean = false
     /** Overdub: Loop-Inhalt vor der Aufnahme (zum Abbrechen per Geste). */
     var before: FloatArray? = null
+    /** Wave-Eingang: während der Aufnahme war ein XY-Effekt aktiv (steckt im Ergebnis). */
+    @Volatile var fxBaked: Boolean = false
 
     companion object {
         const val NO_GRID = Long.MIN_VALUE
@@ -2028,18 +2030,32 @@ object Engine {
             runRepeat(w, block)
             val mlen = masterLen
             val transport = seqPlaying
+            // Pad-/Instrument-Eingang: der Mitschnitt gehört genau EINEM Ziel-Pad – sonst landen
+            // Quellen anderer bereitstehender Pads mit im Loop (doppelt, übersteuert, kratzt)
             var cm = 0
             var cim = 0
+            var owner = -1
             for (p in 0 until PADS) {
-                val tk = takes.get(p)
+                val tk = takes.get(p) ?: continue
+                if (tk.src >= 2) { owner = p; break }
+            }
+            if (owner >= 0) {
+                val tk = takes.get(owner)
                 if (tk != null) {
-                    if (tk.src == 2) cm = cm or tk.mask
-                    if (tk.src == 3) cim = cim or tk.mask
-                } else if (loops.get(p) == null) {
-                    // bereitstehende Pads mit Pad-/Instrument-Eingang: schon vorher mitschneiden,
-                    // damit eine Aufnahme auch vor dem Tastendruck (Raster, Übergang) Material hat
-                    if (padSource[p] == 2) cm = cm or (padSrcMask[p] and (1 shl p).inv())
-                    if (padSource[p] == 3) cim = cim or (padInstMask[p] and 7)
+                    if (tk.src == 2) cm = tk.mask
+                    if (tk.src == 3) cim = tk.mask
+                }
+            } else {
+                // bereitstehendes Pad: schon vorher mitschneiden, damit eine Aufnahme auch vor dem
+                // Tastendruck (Raster, Übergang) Material hat – das zuletzt eingestellte Pad zuerst
+                var sb = capOwner
+                if (sb !in 0 until PADS || loops.get(sb) != null || takes.get(sb) != null || padSource[sb] < 2) {
+                    sb = -1
+                    for (p in 0 until PADS) if (loops.get(p) == null && takes.get(p) == null && padSource[p] >= 2) { sb = p; break }
+                }
+                if (sb >= 0) {
+                    if (padSource[sb] == 2) cm = padSrcMask[sb] and (1 shl sb).inv()
+                    if (padSource[sb] == 3) cim = padInstMask[sb] and 7
                 }
             }
             captureMask = cm
@@ -2235,7 +2251,9 @@ object Engine {
             }
             motionTick(w, block)
             val chain = fxs
+            var fxEngaged = false
             if (chain != null) {
+                if (effTouch) for (s in 0 until SLOTS) if (slotOn[s]) fxEngaged = true
                 val mic = micP
                 val es = editSlot
                 for (s in 0 until SLOTS) {
@@ -2256,7 +2274,7 @@ object Engine {
             } else {
                 writeOutRing(out, w, block)
             }
-            processResampleTakes(w, block)
+            processResampleTakes(w, block, fxEngaged)
             val vol = knobs[3] * 1.25f
             var mpeak = 0f
             // Master-Kette (Stereo): Pads mono + DJ-Decks, dann EQ/Kompressor/Multiband/Sättigung/Breite/Limiter
@@ -2497,6 +2515,7 @@ object Engine {
     private fun startNewTake(p: Int, now: Long) {
         val t = Take(false, max(0L, inClock.frameAt(now, sampleRate)), now, padOneShot[p])
         t.src = padSource[p]
+        if (t.src >= 2) capOwner = p
         if (t.src == 2) {
             t.mask = padSrcMask[p] and (1 shl p).inv()
             if (t.mask == 0) t.src = 1
@@ -2511,8 +2530,10 @@ object Engine {
                 val l = loops.get(q) ?: continue
                 if (t.src == 3) continue
                 if (t.src == 2 && (t.mask shr q) and 1 == 0) continue
-                // bei Pad-Eingang auch ⚡-Pads (vom Sequenzer gespielt), sonst klänge es doppelt
-                if (q != p && (!l.oneShot || t.src == 2) && !l.muted) playing.add(q)
+                // ⚡-Pads mit Sequenzer-/Noten-Muster stecken mit im Ergebnis – auch sie stumm schalten,
+                // sonst klingen sie danach doppelt (lauter, übersteuert, kratzt)
+                val auto = l.oneShot && (seq[q].any { it > 0f } || noteCount(q) > 0)
+                if (q != p && (!l.oneShot || t.src == 2 || auto) && !l.muted) playing.add(q)
             }
             t.bounceSrc = playing.toIntArray()
         }
@@ -2552,12 +2573,14 @@ object Engine {
         takes.set(p, t)
     }
 
-    private fun processResampleTakes(w: Long, block: Int) {
+    private fun processResampleTakes(w: Long, block: Int, fxEngaged: Boolean) {
         val end = w + block
         val maxF = sampleRate.toLong() * MAX_SECONDS
         for (p in 0 until PADS) {
             val take = takes.get(p) ?: continue
             if (take.src < 1) continue
+            // Wave-Eingang: lief ein XY-Effekt mit, steckt er schon im Loop
+            if (fxEngaged && take.src == 1 && end > take.fromOut && w < take.toOut) take.fxBaked = true
             if (!take.released && end - take.fromOut >= maxF) {
                 synchronized(take) {
                     if (!take.released) {
@@ -2636,6 +2659,12 @@ object Engine {
             if (!take.oneShot && !seqPlaying && masterLen > 0L) seqPlaying = true
             setWarpSource(loop)
             loops.set(p, loop)
+            // Effekt schon eingerechnet: Ergebnis am XY-Effekt vorbei, sonst wirkt er doppelt
+            // (Stutter/Gate = Aussetzer im Takt, Verzerrer/Bitcrusher = Kratzen)
+            if (take.src == 1 && take.fxBaked && padFx[p]) {
+                padFx[p] = false
+                onFxBaked?.invoke(p)
+            }
             // Bounce: Quellen stummschalten, damit nichts doppelt klingt (in der Raster-Phase, mit Blende)
             if (bounce && src != null && src.isNotEmpty() && !take.oneShot) {
                 val muted = ArrayList<Int>()
@@ -2649,11 +2678,12 @@ object Engine {
                 if (muted.isNotEmpty()) onBounced?.invoke(p, muted)
             }
             // Instrument-Eingang: aufgenommene Instrumente ausschalten (sonst doppelt)
-            if (bounce && take.src == 3 && !take.oneShot) {
+            if (bounce && (take.src == 3 || take.src == 1) && !take.oneShot) {
                 val off = ArrayList<String>()
-                if ((take.mask and 1) != 0 && InstState.acidOn) { InstState.acidOn = false; off.add("303") }
-                if ((take.mask and 2) != 0 && InstState.drumOn) { InstState.drumOn = false; off.add("909") }
-                if ((take.mask and 4) != 0 && InstState.synOn) { InstState.synOn = false; off.add("SYNTH") }
+                val im = if (take.src == 1) 7 else take.mask
+                if ((im and 1) != 0 && InstState.acidOn) { InstState.acidOn = false; off.add("303") }
+                if ((im and 2) != 0 && InstState.drumOn) { InstState.drumOn = false; off.add("909") }
+                if ((im and 4) != 0 && InstState.synOn) { InstState.synOn = false; off.add("SYNTH") }
                 if (off.isNotEmpty()) onBouncedInst?.invoke(p, off.joinToString(", "))
             }
             onRecorded?.invoke(p, data.copyOf(), sampleRate)
@@ -2663,6 +2693,10 @@ object Engine {
     /** Bounce-Funktion (wie beim Mehrspurrekorder): nach einer Wave-Aufnahme die Quell-Pads stumm schalten. */
     @Volatile var bounce = true
     var onBounced: ((Int, List<Int>) -> Unit)? = null
+    /** Wave-Aufnahme mit eingerechnetem XY-Effekt: Pad läuft jetzt am Effekt vorbei. */
+    var onFxBaked: ((Int) -> Unit)? = null
+    /** Pad, dessen Pad-/Instrument-Eingang gerade bereitsteht (zuletzt eingestellt). */
+    @Volatile var capOwner = -1
     var onBouncedInst: ((Int, String) -> Unit)? = null
 
     /** Pad wartet im Live-Modus auf den nächsten Takt. */
