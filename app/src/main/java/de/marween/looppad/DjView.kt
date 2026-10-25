@@ -449,7 +449,7 @@ class DjView(context: Context) : View(context) {
         val fxName = Fx.NAMES[dk.fxType.coerceIn(0, Fx.COUNT - 1)]
         drawTop(c, tops[0], 0, "DECK " + "AB"[focus], true, focusCol)
         drawTop(c, tops[1], 1, fxName, dk.fxAmt > 0.02f, s.accent)
-        drawTop(c, tops[2], 2, if (padMode == 0) "CUES" else "SAMPLER", padMode == 1, s.accent)
+        drawTop(c, tops[2], 2, when (padMode) { 0 -> "CUES"; 2 -> "PERFORM"; else -> "SAMPLER" }, padMode != 0, s.accent)
         for (k in 0..1) {
             val dd = Dj.decks[k]
             val col = if (k == 0) s.colA else s.colB
@@ -710,12 +710,33 @@ class DjView(context: Context) : View(context) {
                     val f = dd.grid + kk * bf
                     val bx = (cx + (f - pos) / fpp).toFloat()
                     if (bx < wave.left || bx > wave.right) continue
-                    val bar = Math.floorMod(kk, 4L) == 0L
+                    val bi = kk - dd.barOffset
+                    val bar = Math.floorMod(bi, 4L) == 0L
+                    val barNo = Math.floorDiv(bi, 4L) - dd.phraseOff
+                    val phrase = bar && Math.floorMod(barNo, 16L) == 0L
+                    val half = bar && Math.floorMod(barNo, 8L) == 0L
+                    if (phrase || half) {
+                        // Phrasengrenze (16 Takte) bzw. halbe Phrase (8 Takte): durchgehende Linie
+                        stroke.strokeWidth = dp(if (phrase) 2.2f else 1.2f)
+                        stroke.color = if (phrase) alpha(Color.rgb(255, 210, 60), 0.85f) else alpha(ink, 0.45f)
+                        c.drawLine(bx, wave.top, bx, wave.bottom, stroke)
+                        continue
+                    }
                     stroke.strokeWidth = dp(if (bar) 1.4f else 0.8f)
                     stroke.color = alpha(ink, if (bar) 0.55f else 0.22f)
                     c.drawLine(bx, wave.top, bx, wave.top + dp(if (bar) 6f else 3f), stroke)
                     c.drawLine(bx, wave.bottom, bx, wave.bottom - dp(if (bar) 6f else 3f), stroke)
                 }
+                // Phrasen-Countdown: Takt in der Phrase und Takte bis zur nächsten
+                val (inP, toNext) = Dj.phraseInfo(dd, pos)
+                val barsLeft = Math.ceil(toNext / 4.0 - 1e-6).toInt()
+                val soon = barsLeft <= 4 && dd.playing
+                val blink = soon && (SystemClock.uptimeMillis() / 250) % 2 == 0L
+                mono.textSize = dp(9f)
+                mono.textAlign = Paint.Align.LEFT
+                mono.color = if (soon) (if (blink) Color.rgb(255, 210, 60) else alpha(Color.rgb(255, 210, 60), 0.6f)) else alpha(ink, 0.7f)
+                val beatInBar = Math.floorMod(floor(Dj.beatIndex(dd, pos)).toLong() - dd.barOffset, 4L) + 1
+                c.drawText("PHRASE ${inP + 1}.$beatInBar/16 · noch $barsLeft T", wave.left + dp(6f), wave.bottom - dp(3f), mono)
             }
             // Cue und Hot Cues
             marker(c, cx + ((dd.cuePoint - pos) / fpp).toFloat(), wave, Color.rgb(255, 170, 0))
@@ -1546,6 +1567,24 @@ class DjView(context: Context) : View(context) {
                 else -> "TAP" to false
             }
         }
+        if (padMode == 2) {
+            return when (row) {
+                0 -> when (j) {
+                    0 -> "◀ ${barsLabel(dd.jumpBars)}" to false
+                    1 -> "JUMP ${barsLabel(dd.jumpBars)}" to false
+                    else -> "${barsLabel(dd.jumpBars)} ▶" to false
+                }
+                1 -> {
+                    val b = floatArrayOf(0.25f, 0.5f, 1f)[j]
+                    "ROLL ${rollLabel(b)}" to (dd.rollBeats == b)
+                }
+                else -> when (j) {
+                    0 -> "ROLL 2" to (dd.rollBeats == 2f)
+                    1 -> "ROLL 4" to (dd.rollBeats == 4f)
+                    else -> (if (dd.slipOn) "SLIP AN" else "SLIP") to dd.slipOn
+                }
+            }
+        }
         return when (row) {
             0 -> "CUE ${j + 1}" to (dd.hot[j] >= 0)
             1 -> when (j) {
@@ -1560,6 +1599,9 @@ class DjView(context: Context) : View(context) {
             }
         }
     }
+
+    private fun barsLabel(b: Float): String = if (b >= 1f) "${b.toInt()} T" else if (b == 0.5f) "½ T" else "¼ T"
+    private fun rollLabel(b: Float): String = when (b) { 0.25f -> "1/16"; 0.5f -> "1/8"; 1f -> "1/4"; 2f -> "1/2"; 4f -> "1 T"; else -> b.toString() }
 
     private fun drawPads(c: Canvas) {
         val s = skin
@@ -1712,7 +1754,7 @@ class DjView(context: Context) : View(context) {
             c.drawText(pl, rr.centerX(), rr.centerY() + text.textSize * 0.36f, text)
         }
         // Deck-Kennung über den Pad-Hälften
-        if (padMode == 0) {
+        if (padMode != 1) {
             text.textSize = dp(9f)
             text.color = s.colA
             c.drawText("DECK A", (pads[0].left + pads[2].right) / 2, pads[0].top - dp(3f), text)
@@ -1828,8 +1870,7 @@ class DjView(context: Context) : View(context) {
                     return
                 }
                 ptrs[id] = Ptr(K.WAVE, k, 0, x, y, now)
-                dd.scratchTarget = dd.pos
-                dd.scratching = true
+                Dj.scratchStart(dd)
                 return
             }
         }
@@ -1913,7 +1954,7 @@ class DjView(context: Context) : View(context) {
             K.SIDE -> {
                 if (p.sub == 4 && SystemClock.uptimeMillis() - p.downAt > 500) fxLong(p.idx) else sidePress(p.idx, p.sub, false)
             }
-            K.WAVE -> Dj.decks[p.idx].scratching = false
+            K.WAVE -> Dj.scratchEnd(Dj.decks[p.idx])
             K.XY -> {
                 xyActive = false
                 val dd = Dj.decks[focus]
@@ -1963,8 +2004,9 @@ class DjView(context: Context) : View(context) {
                 onHint?.invoke("Effekt Deck ${"AB"[focus]}: ${Fx.NAMES[dd.fxType]} – auf der XY-Fläche spielen")
             }
             2 -> {
-                padMode = 1 - padMode
-                onHint?.invoke(if (padMode == 0) "Pads: Hot Cues, Beat-Jump und Loops je Deck" else "Pads: Sampler – die 12 Pads der App (leeres Pad antippen = Audio laden, spielt synchron ab dem Startpunkt), darunter Transport, ACID, DRUM, Laden, Mikro, Tap")
+                padMode = when (padMode) { 0 -> 2; 2 -> 1; else -> 0 }
+                if (padMode == 2) onHint?.invoke("Pads: PERFORM – Beat Jump (Weite in der Mitte), Loop Rolls 1/16 … 1 Takt (halten), SLIP")
+                else onHint?.invoke(if (padMode == 0) "Pads: Hot Cues, Beat-Jump und Loops je Deck" else "Pads: Sampler – die 12 Pads der App (leeres Pad antippen = Audio laden, spielt synchron ab dem Startpunkt), darunter Transport, ACID, DRUM, Laden, Mikro, Tap")
             }
         }
     }
@@ -2063,6 +2105,41 @@ class DjView(context: Context) : View(context) {
         val dd = Dj.decks[k]
         if (!dd.loaded()) {
             if (down) onLoad?.invoke(k)
+            return
+        }
+        if (padMode == 2) {
+            val rollB = when {
+                row == 1 -> floatArrayOf(0.25f, 0.5f, 1f)[j]
+                row == 2 && j < 2 -> if (j == 0) 2f else 4f
+                else -> 0f
+            }
+            if (rollB > 0f) {
+                // Loop Roll: halten = stottern, loslassen = Track läuft weiter, als wäre nichts gewesen
+                if (down) Dj.rollStart(dd, rollB) else if (dd.rollBeats == rollB) {
+                    // anderer Roll noch gedrückt? dann zu dem wechseln
+                    val other = (0 until 18).firstOrNull { it != i && padDown[it] && it % 6 / 3 == k && it / 6 >= 1 && !(it / 6 == 2 && it % 3 == 2) }
+                    if (other != null) {
+                        val r2 = other / 6
+                        val j2 = other % 3
+                        Dj.rollStart(dd, if (r2 == 1) floatArrayOf(0.25f, 0.5f, 1f)[j2] else if (j2 == 0) 2f else 4f)
+                    } else Dj.rollEnd(dd)
+                }
+                return
+            }
+            if (!down) return
+            when {
+                row == 0 && j == 0 -> Dj.beatJump(dd, -dd.jumpBars)
+                row == 0 && j == 2 -> Dj.beatJump(dd, dd.jumpBars)
+                row == 0 -> {
+                    val opts = floatArrayOf(0.25f, 0.5f, 1f, 2f, 4f, 8f, 16f, 32f)
+                    dd.jumpBars = opts[(opts.indexOf(dd.jumpBars) + 1).coerceAtLeast(0) % opts.size]
+                    onHint?.invoke("Beat Jump Deck ${"AB"[k]}: ${barsLabel(dd.jumpBars)}")
+                }
+                else -> {
+                    dd.slipOn = !dd.slipOn
+                    onHint?.invoke(if (dd.slipOn) "SLIP ${"AB"[k]}: Scratchen und Rolls – danach geht es dort weiter, wo der Track ohne sie wäre" else "SLIP ${"AB"[k]} aus")
+                }
+            }
             return
         }
         if (!down) {

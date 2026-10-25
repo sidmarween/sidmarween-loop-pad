@@ -134,6 +134,21 @@ object Dj {
         @Volatile internal var gReset = true
         internal var gWin = FloatArray(0)
 
+        /** Takt-Eins: Schlag-Versatz (0..3) gegenüber [grid]; Phrasen-Anfang: Takt-Versatz (0..15). */
+        @Volatile var barOffset = 0
+        @Volatile var phraseOff = 0
+        /** Beat Jump: Weite in Takten. */
+        @Volatile var jumpBars = 4f
+        /** SLIP: Loops, Rolls und Scratchen laufen „im Hintergrund“ weiter – loslassen = dort weiter. */
+        @Volatile var slipOn = false
+        @Volatile var slipTrack = false
+        @Volatile var slipPos = 0.0
+        /** Loop Roll (solange gedrückt) – vorheriger Loop wird danach wiederhergestellt. */
+        @Volatile var rollBeats = 0f
+        internal var rollSaveOn = false
+        internal var rollSaveIn = 0.0
+        internal var rollSaveOut = 0.0
+
         /** Hörbare Tonart: mit Key-Shift und (ohne Keylock) der Tonhöhenänderung durchs Tempo. */
         fun effKey(): Int {
             if (key < 0) return -1
@@ -313,6 +328,8 @@ object Dj {
             java.util.Arrays.fill(br, 0, n, 0f)
             return
         }
+        // SLIP: unsichtbarer Abspielkopf läuft im normalen Tempo weiter
+        if (d.slipTrack && playing) d.slipPos = min((len - 2).toDouble(), d.slipPos + base * ratio * n)
         val rate = if (d.scratching) d.scratchVel else base * ratio * (1.0 + d.bend)
         // Keylock / Key-Shift: Tempo und Tonhöhe getrennt (Körner-Verfahren mit Phasen-Suche)
         if (!d.scratching && (d.keylock || d.keyShift != 0)) {
@@ -475,6 +492,134 @@ object Dj {
             p = last.toDouble()
         }
         d.pos = p
+    }
+
+    // ---------------------------------------------------------------- Phrasen, Beat Jump, Loop Roll, Slip
+
+    /** Schlag-Index einer Position (0 = erster Schlag des Rasters). */
+    fun beatIndex(d: Deck, pos: Double): Double = (pos - d.grid) / d.beatFrames()
+
+    /**
+     * Takt-Eins und Phrasen-Anfänge (16 Takte) aus der Wellenform schätzen: Musik ändert sich
+     * meist an Takt- und Phrasengrenzen (Drop, Break, neue Spur) – dort, wo die Energie im Mittel
+     * am stärksten springt, liegt die Eins bzw. der Phrasenanfang.
+     */
+    fun analyzePhrase(d: Deck) {
+        val pk = d.peaks
+        val lw = d.lows
+        if (d.bpm <= 0f || pk.size < 64) { d.barOffset = 0; d.phraseOff = 0; return }
+        val bf = d.beatFrames()
+        val beats = ((d.len - d.grid) / bf).toInt()
+        if (beats < 16) { d.barOffset = 0; d.phraseOff = 0; return }
+        // Energie (Pegel + Bass) je Schlag
+        val e = DoubleArray(beats)
+        for (b in 0 until beats) {
+            val f0 = ((d.grid + b * bf) / BIN).toInt()
+            val f1 = ((d.grid + (b + 1) * bf) / BIN).toInt().coerceAtMost(pk.size)
+            var s = 0.0
+            var c = 0
+            for (i in max(0, f0) until f1) { s += (pk[i].toInt() and 0xFF) + 0.7 * (lw[i].toInt() and 0xFF) * (pk[i].toInt() and 0xFF) / 255.0; c++ }
+            e[b] = if (c > 0) s / c else 0.0
+        }
+        fun mean(a: DoubleArray, from: Int, n: Int): Double { var s = 0.0; var c = 0; for (i in from until from + n) if (i in a.indices) { s += a[i]; c++ }; return if (c > 0) s / c else 0.0 }
+        // Takt-Eins: Schlag-Versatz mit der größten Änderung zwischen aufeinanderfolgenden Takten
+        var bestOff = 0
+        var bs = -1.0
+        for (o in 0..3) {
+            var sc = 0.0
+            var b = o + 4
+            while (b + 4 <= beats) { sc += abs(mean(e, b, 4) - mean(e, b - 4, 4)); b += 4 }
+            // der erste Schlag zählt etwas mehr (Kick auf der Eins)
+            b = o
+            while (b < beats) { sc += 0.15 * e[b]; b += 4 }
+            if (sc > bs) { bs = sc; bestOff = o }
+        }
+        d.barOffset = bestOff
+        // Phrasen: Takt-Energie, dann Versatz (0..15) mit den stärksten 16-Takt-Wechseln (8 halb gewichtet)
+        val bars = (beats - bestOff) / 4
+        if (bars < 16) { d.phraseOff = 0; return }
+        val be = DoubleArray(bars) { mean(e, bestOff + it * 4, 4) }
+        var po = 0
+        var ps = -1.0
+        for (o in 0 until 16) {
+            var sc = 0.0
+            var j = o
+            while (j < bars) {
+                if (j >= 4) sc += abs(mean(be, j, 4) - mean(be, j - 4, 4))
+                val h = j + 8
+                if (h in 4 until bars) sc += 0.5 * abs(mean(be, h, 4) - mean(be, h - 4, 4))
+                j += 16
+            }
+            if (sc > ps) { ps = sc; po = o }
+        }
+        d.phraseOff = po
+    }
+
+    /** Takt im Track (0 = erster ganzer Takt) an einer Position. */
+    fun barAt(d: Deck, pos: Double): Double = (beatIndex(d, pos) - d.barOffset) / 4.0
+
+    /** Phrase: Takt innerhalb der 16er-Phrase (0..15) und Schläge bis zur nächsten Phrase. */
+    fun phraseInfo(d: Deck, pos: Double): Pair<Int, Double> {
+        val bar = barAt(d, pos) - d.phraseOff
+        val inP = Math.floorMod(floor(bar).toLong(), 16L).toInt()
+        val toNext = (16.0 - (bar - floor(bar / 16.0) * 16.0)) * 4.0
+        return inP to toNext
+    }
+
+    /** Beat Jump um [bars] Takte (negativ = zurück), phasengenau; ein laufender Loop springt mit. */
+    fun beatJump(d: Deck, bars: Float) {
+        if (!d.loaded()) return
+        val bf = d.beatFrames() * 4.0 * bars
+        val np = (d.pos + bf).coerceIn(0.0, (d.len - 2).toDouble())
+        val moved = np - d.pos
+        d.seekTo = np
+        if (d.loopOn) { d.loopIn += moved; d.loopOut += moved }
+        if (d.slipTrack) d.slipPos = (d.slipPos + moved).coerceIn(0.0, (d.len - 2).toDouble())
+    }
+
+    /** Loop Roll starten (solange gedrückt): Loop über [beats] Schläge ab dem letzten Rasterpunkt, Slip läuft mit. */
+    fun rollStart(d: Deck, beats: Float) {
+        if (!d.loaded() || d.bpm <= 0f) return
+        if (d.rollBeats <= 0f) {
+            d.rollSaveOn = d.loopOn
+            d.rollSaveIn = d.loopIn
+            d.rollSaveOut = d.loopOut
+            if (!d.slipTrack) { d.slipPos = d.pos; d.slipTrack = true }
+        }
+        d.rollBeats = beats
+        val len = d.beatFrames() * beats
+        val start = d.grid + floor((d.pos - d.grid) / len) * len
+        d.loopIn = max(0.0, start)
+        d.loopOut = d.loopIn + len
+        d.loopOn = true
+    }
+
+    /** Loop Roll loslassen: weiter dort, wo der Track ohne Roll jetzt wäre. */
+    fun rollEnd(d: Deck) {
+        if (d.rollBeats <= 0f) return
+        d.rollBeats = 0f
+        d.loopOn = d.rollSaveOn
+        d.loopIn = d.rollSaveIn
+        d.loopOut = d.rollSaveOut
+        if (d.slipTrack && !d.scratching) {
+            d.slipTrack = false
+            d.seekTo = d.slipPos
+        }
+    }
+
+    /** Scratchen beginnt: mit SLIP läuft der Track im Hintergrund weiter. */
+    fun scratchStart(d: Deck) {
+        if (d.slipOn && d.playing && !d.slipTrack) { d.slipPos = d.pos; d.slipTrack = true }
+        d.scratchTarget = d.pos
+        d.scratching = true
+    }
+
+    fun scratchEnd(d: Deck) {
+        d.scratching = false
+        if (d.slipOn && d.slipTrack && d.rollBeats <= 0f) {
+            d.slipTrack = false
+            d.seekTo = d.slipPos
+        }
     }
 
     /** Tonart eines geladenen Decks im Hintergrund erkennen. */
@@ -761,7 +906,10 @@ object Dj {
         d.keyConf = 0f
         d.keyShift = 0
         d.gReset = true
+        d.rollBeats = 0f
+        d.slipTrack = false
         d.data = t.data
+        analyzePhrase(d)
         detectKeyAsync(d)
     }
 
@@ -821,6 +969,7 @@ object Dj {
         val bpm = if (keepBpm && d.bpm > 0f) d.bpm else detectBpm(w.onset, w.fps).first
         d.bpm = bpm
         d.grid = findGrid(w.onset, w.fps, bpm) * hop
+        analyzePhrase(d)
     }
 
     /**
@@ -907,6 +1056,7 @@ object Dj {
         }
         d.seekTo = newPos
         d.pitch = 0f
+        analyzePhrase(d)
         progress(1f)
     }
 

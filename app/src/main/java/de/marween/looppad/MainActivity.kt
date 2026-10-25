@@ -2763,18 +2763,31 @@ class MainActivity : Activity() {
         val dd = Dj.decks[k]
         ui()
             .setTitle(String.format(Locale.GERMANY, "Deck %s · %.1f BPM", "AB"[k], dd.bpm))
-            .setItems(arrayOf("× 2 (doppelt)", "÷ 2 (halb)", "Tempo eingeben …", "Schlag 1 = aktuelle Position (Raster setzen)")) { _, w ->
+            .setItems(arrayOf("× 2 (doppelt)", "÷ 2 (halb)", "Tempo eingeben …", "Schlag 1 = aktuelle Position (Raster setzen)",
+                "Takt-Eins = der Schlag hier (Taktlinien verschieben)", "Phrase (16 Takte) beginnt in diesem Takt", "Takte und Phrasen neu erkennen")) { _, w ->
                 when (w) {
-                    0 -> dd.bpm = dd.bpm * 2f
-                    1 -> dd.bpm = dd.bpm / 2f
+                    0 -> { dd.bpm = dd.bpm * 2f; Dj.analyzePhrase(dd) }
+                    1 -> { dd.bpm = dd.bpm / 2f; Dj.analyzePhrase(dd) }
                     2 -> askName(String.format(Locale.US, "%.1f", dd.bpm), "Tempo (BPM)") { t ->
-                        t.replace(',', '.').toFloatOrNull()?.let { v -> if (v in 40f..240f) dd.bpm = v }
+                        t.replace(',', '.').toFloatOrNull()?.let { v -> if (v in 40f..240f) { dd.bpm = v; Dj.analyzePhrase(dd) } }
                     }
-                    else -> {
+                    3 -> {
                         dd.grid = dd.pos
                         dd.cuePoint = dd.pos
+                        Dj.analyzePhrase(dd)
                         hint("Raster gesetzt: Schlag 1 liegt jetzt hier")
                     }
+                    4 -> {
+                        val b = Math.round(Dj.beatIndex(dd, dd.pos)).toLong()
+                        dd.barOffset = Math.floorMod(b, 4L).toInt()
+                        hint("Takt-Eins liegt jetzt auf diesem Schlag")
+                    }
+                    5 -> {
+                        val bar = Math.floor(Dj.barAt(dd, dd.pos) + 0.05).toLong()
+                        dd.phraseOff = Math.floorMod(bar, 16L).toInt()
+                        hint("Phrase beginnt in diesem Takt – die gelbe Linie zeigt alle 16 Takte")
+                    }
+                    else -> { Dj.analyzePhrase(dd); hint("Takte und Phrasen neu erkannt") }
                 }
                 if (dd.sync) dd.syncReq = true
             }
