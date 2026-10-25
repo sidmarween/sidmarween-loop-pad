@@ -124,6 +124,8 @@ object Engine {
     const val CHAINS = PADS + 1
     /** Längste Aufnahme (16 Takte bei 60 BPM passen hinein). */
     const val MAX_SECONDS = 66
+    /** Längste Datei, die auf ein Pad geladen wird (ganze Songs). */
+    const val MAX_IMPORT_SECONDS = 600
     private const val MIN_HOLD_NANOS = 180_000_000L
     private const val FADE_MS = 4
 
@@ -703,6 +705,11 @@ object Engine {
     /** Effekt je Pad an/aus (true = Pad läuft durch den Effekt). */
     val padFx = BooleanArray(PADS) { true }
 
+    /** SELECT in der Pad-Ansicht: nur dieses Pad läuft durch die Effekt-Fläche (-1 = wie eingestellt). */
+    @Volatile var fxOnlyPad = -1
+
+    private fun toFx(p: Int): Boolean { val o = fxOnlyPad; return if (o >= 0) o == p else padFx[p] }
+
     fun setAllFx(on: Boolean) {
         for (p in 0 until PADS) padFx[p] = on
     }
@@ -806,7 +813,7 @@ object Engine {
                 if (!v.active) continue
                 val d = v.data
                 val len = d.size
-                val dst = if (v.pad in 0 until PADS && chain[v.pad]) padBufs[v.pad] else if (v.pad >= 0 && padFx[v.pad]) bus else out
+                val dst = if (v.pad in 0 until PADS && chain[v.pad]) padBufs[v.pad] else if (v.pad >= 0 && toFx(v.pad)) bus else out
                 val pg = if (v.pad in 0 until PADS) (loops.get(v.pad)?.gain ?: 1f) else 1f
                 var peak = 0f
                 for (i in 0 until block) {
@@ -2214,7 +2221,7 @@ object Engine {
                     levels[p] *= 0.9f
                     continue
                 }
-                val dst = if (chainNow[p]) padBufs[p] else if (padFx[p]) bus else out
+                val dst = if (chainNow[p]) padBufs[p] else if (toFx(p)) bus else out
                 val pa = loop.pendAt
                 if (pa != Long.MIN_VALUE && pa < w + block) {
                     // quantisierter Start/Stopp genau auf dem Rasterpunkt
@@ -2382,7 +2389,7 @@ object Engine {
                     for (i in 0 until block) pb[i] *= x0 + d * (i + 1)
                     xfCur[p] = xg
                 }
-                val dst = if (padFx[p]) bus else out
+                val dst = if (toFx(p)) bus else out
                 for (i in 0 until block) dst[i] += pb[i]
                 if (capOn && (captureMask shr p) and 1 != 0) for (i in 0 until block) capBuf[i] += pb[i]
             }
@@ -2393,7 +2400,7 @@ object Engine {
             val ci = captureInst
             for (kk in 0 until 2 + InstState.SYN_TRACKS) {
                 val kind = min(kk, 2)
-                val dst = if (soloed) instScratch else when (kk) {
+                val dst = if (soloed) instScratch else if (fxOnlyPad >= 0) out else when (kk) {
                     0 -> if (InstState.acidFx) bus else out
                     1 -> if (InstState.drumFx) bus else out
                     else -> if (InstState.synTracks[kk - 2].fx) bus else out

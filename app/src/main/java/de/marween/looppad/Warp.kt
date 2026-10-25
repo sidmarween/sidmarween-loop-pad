@@ -118,7 +118,7 @@ object Warp {
                 }
             }
         }
-        val fit = best
+        val fit = if (dur > 45f) null else best
         // sauberer Loop: Länge ergibt ganze Takte und passt (±1,5 %) zum gehörten Tempo, Schlag 1 am Anfang
         val first = clip?.second ?: 0
         val startsOnBeat = first < sr * 0.03 || (clip != null && first > x.size - sr * 0.03)
@@ -127,6 +127,7 @@ object Warp {
         }
         if (auto == null) {
             if (fit != null) return Info(fit.first, fit.second, "Länge")
+            if (dur > 45f) return Info(120f, max(1f, kotlin.math.floor(dur * 120f / 240f)), "ganzer Song (Tempo unbekannt)")
             return Info(120f, max(1f, (dur * 120f / 240f).roundToInt().toFloat()), "Standard")
         }
         // Ausschnitt aus einem Song (z. B. MP3): exaktes Tempo, ab dem ersten Schlag ganze Takte schneiden
@@ -136,10 +137,12 @@ object Warp {
         val usable = (x.size - first).toFloat() / sr
         var bars = kotlin.math.floor(usable * bpm / 240f)
         if (bars < 1f) bars = max(0.25f, kotlin.math.floor(usable * bpm / 60f) / 4f)
-        // längste sinnvolle Loop-Länge: Zweierpotenz an Takten
-        var pb = 1f
-        while (pb * 2 <= bars && pb < 32f) pb *= 2
-        if (bars >= 1f) bars = pb
+        // kurzer Ausschnitt: längste Zweierpotenz an Takten · ganzer Song (> 45 s): alle vollen Takte
+        if (dur <= 45f) {
+            var pb = 1f
+            while (pb * 2 <= bars && pb < 32f) pb *= 2
+            if (bars >= 1f) bars = pb
+        } else bars = bars.coerceIn(1f, 1024f)
         return Info(bpm, bars, "Schlag-Analyse ab ${String.format(java.util.Locale.GERMANY, "%.2f", first.toFloat() / sr)} s", first, true)
     }
 

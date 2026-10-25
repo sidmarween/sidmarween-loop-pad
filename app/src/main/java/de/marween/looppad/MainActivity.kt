@@ -1128,7 +1128,7 @@ class MainActivity : Activity() {
         val rate = Engine.sampleRate
         Thread {
             try {
-                val data = AudioFiles.decodeFile(smp.file, rate, Engine.MAX_SECONDS)
+                val data = AudioFiles.decodeFile(smp.file, rate, Engine.MAX_IMPORT_SECONDS)
                 Engine.padOneShot[p] = smp.oneShot
                 if (smp.oneShot) {
                     Engine.importLoop(p, data)
@@ -1365,7 +1365,7 @@ class MainActivity : Activity() {
             var fail = 0
             for (u in uris) {
                 try {
-                    val data = AudioFiles.decode(this, u, rate, Engine.MAX_SECONDS)
+                    val data = AudioFiles.decode(this, u, rate, Engine.MAX_IMPORT_SECONDS)
                     if (data.size < 64) { fail++; continue }
                     val title = (displayName(u) ?: "Sample").substringBeforeLast('.').ifEmpty { "Sample" }
                     // kurz = ⚡ One-Shot, lang = ∞ Loop (folgt beim Laden dem Tempo)
@@ -4210,7 +4210,7 @@ class MainActivity : Activity() {
                 val rate = Engine.sampleRate
                 Thread {
                     try {
-                        val samples = AudioFiles.decode(this, uri, rate, Engine.MAX_SECONDS)
+                        val samples = AudioFiles.decode(this, uri, rate, Engine.MAX_IMPORT_SECONDS)
                         if (Engine.padOneShot[pad]) {
                             Engine.importLoop(pad, samples)
                             runOnUiThread { toast("Pad ${pad + 1}: Import fertig") }
@@ -4219,6 +4219,8 @@ class MainActivity : Activity() {
                             val desc = clipToPad(pad, samples, rate, name)
                             runOnUiThread { hint("Pad ${pad + 1}: ${name ?: "Datei"} · $desc · antippen startet ihn auf der Eins") }
                         }
+                    } catch (e: OutOfMemoryError) {
+                        runOnUiThread { toast("Datei zu lang für den Speicher – bitte kürzeren Song oder Ausschnitt wählen") }
                     } catch (e: Exception) {
                         runOnUiThread { toast("Import fehlgeschlagen: ${e.message ?: e}") }
                     }

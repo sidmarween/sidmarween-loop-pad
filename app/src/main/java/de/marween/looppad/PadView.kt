@@ -812,6 +812,8 @@ class PadView(context: Context) : View(context) {
     // ---------------------------------------------------------------- Zeichnen
 
     override fun onDraw(canvas: Canvas) {
+        // SELECT + gewähltes Pad: die Effekt-Fläche wirkt nur auf dieses Pad
+        Engine.fxOnlyPad = if (selectMode && selPad >= 0 && Engine.hasLoop(selPad)) selPad else -1
         val now = System.nanoTime()
         val dt = if (lastFrameNanos == 0L) 0.016f else ((now - lastFrameNanos) / 1e9f).coerceIn(0f, 0.05f)
         lastFrameNanos = now
@@ -1644,7 +1646,7 @@ class PadView(context: Context) : View(context) {
             }
             selBtns[0].contains(x, y) -> {
                 selectMode = !selectMode
-                hint(if (selectMode) "SELECT: Pad antippen wählt es aus (spielt nicht) – Wave, Noten, FX und ⋯ gelten dann nur für dieses Pad" else "SELECT aus: Pads spielen wieder")
+                hint(if (selectMode) "SELECT: Pad antippen wählt es aus (spielt nicht) – Effekt-Fläche, Wave, Noten, FX und ⋯ gelten dann nur für dieses Pad" else "SELECT aus: Pads spielen wieder, Effekt-Fläche wirkt wieder auf alle")
             }
             selBtns[2].contains(x, y) -> if (has) { closeFocus(); openEditor(p) } else hint(if (p < 0) "Erst ein Pad wählen (SELECT)" else "Pad ${p + 1} ist leer")
             selBtns[3].contains(x, y) -> if (has) { closeFocus(); openKeyboard(p) } else hint(if (p < 0) "Erst ein Pad wählen (SELECT)" else "Pad ${p + 1} ist leer")
@@ -4379,7 +4381,7 @@ class PadView(context: Context) : View(context) {
                     flash[p] = 1f
                     performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
                     burst(padRects[p].centerX(), padRects[p].centerY(), overlayColors()[2], 14, 180f)
-                    hint("Pad ${p + 1} ausgewählt" + if (Engine.hasLoop(p)) " – 〰 WAVE / 🎹 NOTEN / ✨ FX gelten jetzt für dieses Pad" else " (leer)")
+                    hint("Pad ${p + 1} ausgewählt" + if (Engine.hasLoop(p)) " – Effekt-Fläche wirkt jetzt nur auf dieses Pad · 〰 WAVE / 🎹 NOTEN / ✨ FX ebenso" else " (leer)")
                     return true
                 }
                 if (drumActive() && Engine.state(p) == Engine.PadState.EMPTY && !Engine.isArmed(p)) {
