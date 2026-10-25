@@ -223,13 +223,29 @@ object Warp {
         while (slices > 1 && n / slices < sr * 0.045) slices /= 2
         val hit = BooleanArray(slices + 1)
         val bounds = sliceBounds(x, sr, slices, hit)
-        // geschnitten wird nur an echten Anschlägen: dazwischen läuft der Klang ungeteilt (keine Dellen
-        // in gehaltenen Tönen), jeder Anschlag sitzt aber genau auf seinem 1/16-Platz
-        val cuts = ArrayList<Int>()
-        cuts.add(0)
-        for (k in 1 until slices) if (hit[k]) cuts.add(k)
-        cuts.add(slices)
+        // Zwei Bänder: Höhen werden an JEDEM Anschlag geschnitten (Hi-Hats, Snare, Klick der Kick sitzen
+        // exakt), der Bass (< ~180 Hz) nur dort, wo im Bass selbst etwas neu einsetzt (Kick, Basston).
+        // So läuft der Bauch der Kick und der Bass ungestückelt durch – nichts fehlt, nichts wummert.
+        val low = lowBand(x, sr)
+        val high = FloatArray(n) { x[it] - low[it] }
+        val cutsHi = ArrayList<Int>()
+        val cutsLo = ArrayList<Int>()
+        val win = (sr * 0.03).toInt()
+        fun lowEnergy(from: Int, len: Int): Double { var s2 = 1e-12; for (i in 0 until len) { val v = low[Math.floorMod(from + i, n)]; s2 += v * v }; return s2 / len }
+        for (k in 0..slices) {
+            if (k == slices) { cutsHi.add(k); cutsLo.add(k); continue }
+            if (k == 0 || hit[k]) cutsHi.add(k)
+            if (k == 0 || (hit[k] && lowEnergy(bounds[k], win) > 2.5 * lowEnergy(bounds[k] - win, win))) cutsLo.add(k)
+        }
+        val hit0Lo = hit[0] && lowEnergy(0, win) > 2.5 * lowEnergy(-win, win)
         val out = FloatArray(outLen)
+        assemble(high, bounds, cutsHi, slices, outLen, sr, pre != null, hit[0], out)
+        assemble(low, bounds, cutsLo, slices, outLen, sr, pre != null, hit0Lo, out)
+        return seamEnd(out, pre, sr)
+    }
+
+    /** Stücke zwischen den Schnitten dehnen und genau auf ihre Rasterplätze legen (addiert in [out]). */
+    private fun assemble(x: FloatArray, bounds: IntArray, cuts: List<Int>, slices: Int, outLen: Int, sr: Int, hasPre: Boolean, hit0: Boolean, out: FloatArray) {
         val xf = max(16, (sr * 0.002).toInt())
         for (ci in 0 until cuts.size - 1) {
             val k = cuts[ci]
@@ -241,22 +257,37 @@ object Warp {
             if (lo <= 0) continue
             val last = k2 == slices
             // An einem Anschlag: Stück endet mit 1 ms Ausblende, das nächste setzt (fast) hart ein –
-            // der Anschlag verdeckt den Schnitt und sitzt exakt. Nur der Loop-Übergang ohne [pre]
-            // (nahtloser Loop) und Stück 0 ohne Anschlag werden weich überblendet.
-            val softStart = k == 0 && pre == null && !hit[0]
-            val tail = if (last && pre == null) xf else 0
+            // der Anschlag verdeckt den Schnitt und sitzt exakt. Der Loop-Übergang ohne Vorlauf
+            // (nahtloser Loop) und ein Anfang ohne Anschlag werden weich überblendet.
+            val softStart = k == 0 && !hasPre && !hit0
+            val tail = if (last && !hasPre) xf else 0
             val seg = stretchSeg(x, a, max(1, ls), lo, tail, sr)
             val fo = max(8, sr / 1000)
             val fi = if (softStart) xf else max(4, sr / 4000)
             for (j in seg.indices) {
                 var g = 1f
-                if (j < fi && !(k == 0 && pre != null)) g = (j + 1).toFloat() / (fi + 1)
+                if (j < fi && !(k == 0 && hasPre)) g = (j + 1).toFloat() / (fi + 1)
                 if (tail == 0 && !last && j >= lo - fo) g *= (lo - j).toFloat() / (fo + 1)
                 if (j >= lo) g *= 1f - (j - lo + 1).toFloat() / (tail + 1)
                 out[(o0 + j) % outLen] += seg[j] * g
             }
         }
-        return seamEnd(out, pre, sr)
+    }
+
+    /** Bass-Anteil (< ~180 Hz) ohne Phasenverschiebung (vor- und rückwärts gefiltert, zirkulär wie ein Loop). */
+    private fun lowBand(x: FloatArray, sr: Int): FloatArray {
+        val n = x.size
+        val pad = min(n, (sr * 0.3).toInt())
+        val m = n + 2 * pad
+        val y = FloatArray(m) { x[Math.floorMod(it - pad, n)] }
+        val a = (1.0 - kotlin.math.exp(-2.0 * PI * 180.0 / sr)).toFloat()
+        repeat(2) {
+            var s1 = 0f
+            for (i in 0 until m) { s1 += (y[i] - s1) * a; y[i] = s1 }
+            s1 = 0f
+            for (i in m - 1 downTo 0) { s1 += (y[i] - s1) * a; y[i] = s1 }
+        }
+        return FloatArray(n) { y[it + pad] }
     }
 
     /** Ende in das Audio vor dem Anfang blenden (gleiche Leistung) – nahtloser Übergang Ende → Anfang. */
@@ -339,13 +370,43 @@ object Warp {
                 for (i in lo until hi) mx = max(mx, abs(x[i] - x[i - 1]))
                 var on = lo
                 for (i in lo until hi) if (abs(x[i] - x[i - 1]) > 0.3f * mx) { on = i; break }
-                pos = max(0, on - (sr * 0.0003).toInt())
+                pos = max(0, onsetStart(x, on, sr) - (sr * 0.0003).toInt())
                 hit?.set(k, true)
             }
             pos = pos.coerceIn(b[k - 1] + minGap, n - minGap * (slices - k))
             b[k] = pos
         }
         return b
+    }
+
+    /**
+     * Wo beginnt der Anschlag wirklich? Vom gefundenen Sprung [near] aus rückwärts, solange die
+     * Hüllkurve (alle Frequenzen, auch der Bass einer Kick) noch fällt – bis zum Tal davor bzw. bis
+     * sie unter ~12 % des Anschlags liegt. So wird keine Kick vorne angeschnitten.
+     */
+    fun onsetStart(x: FloatArray, near: Int, sr: Int): Int {
+        val n = x.size
+        val q = max(4, sr / 4000)
+        val back = (sr * 0.015).toInt() / q
+        val fwd = (sr * 0.012).toInt() / q
+        val c0 = near / q
+        fun env(b: Int): Float {
+            var m = 0f
+            val s0 = b * q
+            for (i in s0 until min(n, s0 + q)) if (i >= 0) m = max(m, abs(x[i]))
+            return m
+        }
+        var peak = 0f
+        for (b in c0 until c0 + fwd) peak = max(peak, env(b))
+        if (peak <= 0f) return near
+        var b = c0
+        while (b > 0 && b > c0 - back) {
+            val e = env(b - 1)
+            if (e < 0.12f * peak) break
+            if (e > env(b) * 1.05f && env(b) < 0.5f * peak) break // Tal erreicht – davor klingt etwas anderes
+            b--
+        }
+        return max(0, min(near, b * q))
     }
 
     /**
@@ -370,9 +431,10 @@ object Warp {
         val total2 = total - att
         if (total2 <= 0) return out
         val r = ls2.toDouble() / lo2
-        val w = (min(sr * 0.030, lo2 / 2.5).toInt() / 2 * 2).coerceAtLeast(32)
+        val w = (min(sr * 0.040, lo2 / 2.0).toInt() / 2 * 2).coerceAtLeast(32)
         val h = w / 2
-        val tol = min((sr * 0.006).toInt(), h / 2)
+        // Suchweite bis 12 ms: auch tiefe Bässe (40–50 Hz) finden eine passende Stelle (keine Auslöschung)
+        val tol = min((sr * 0.012).toInt(), (h * 0.8).toInt())
         val wnd = FloatArray(w) { (0.5 - 0.5 * cos(2.0 * PI * it / w)).toFloat() }
         val acc = FloatArray(total2 + w)
         val norm = FloatArray(total2 + w)
@@ -392,7 +454,7 @@ object Warp {
                         val u = at(c + j)
                         sum += u * at(natural + j)
                         e1 += u * u
-                        j += 3
+                        j += 4
                     }
                     return sum / kotlin.math.sqrt(e1)
                 }

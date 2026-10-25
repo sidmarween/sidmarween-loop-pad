@@ -4186,13 +4186,16 @@ object Engine {
         val target = max(64L, (info.bars * m).toLong()).toInt()
         // Song-Ausschnitt: ab dem ersten Schlag genau [bars] Takte im erkannten Tempo – danach exakt aufs Master-Tempo dehnen
         val body = if (info.cut) {
-            val o = info.offset.coerceIn(0, max(0, src.size - 2))
+            // Schnitt genau vor den Anfang der ersten Kick (die Analyse rastet nur auf ~5 ms) – sonst fehlt ihr Anschlag
+            val o0 = info.offset.coerceIn(0, max(0, src.size - 2))
+            val o = if (o0 > 0) max(0, Warp.onsetStart(src, o0, sampleRate) - sampleRate / 3000) else 0
             val want = (info.bars * 240.0 / info.bpm * sampleRate).toLong().toInt()
             val e = min(src.size, o + max(2, want))
             src.copyOfRange(o, e).let { if (it.size < want) it.copyOf(want) else it }
         } else src
         // Audio vor dem Schnitt: das Loop-Ende blendet hinein (kein Knacks, keine Lücke auf der Eins)
-        val pre = preIn ?: if (info.cut && info.offset > 0) src.copyOfRange(max(0, info.offset - sampleRate / 20), info.offset.coerceAtMost(src.size)) else null
+        val bodyStart = if (info.cut) (info.offset.coerceIn(0, max(0, src.size - 2)).let { if (it > 0) max(0, Warp.onsetStart(src, it, sampleRate) - sampleRate / 3000) else 0 }) else 0
+        val pre = preIn ?: if (info.cut && bodyStart > 0) src.copyOfRange(max(0, bodyStart - sampleRate / 20), bodyStart) else null
         // BEATS-Warp: jeder Schlag landet exakt auf seinem 1/16-Platz (vorher WSOLA: bis zu ~20 ms daneben = Holpern)
         val data = Warp.stretchBeats(body, target, sampleRate, info.bars, pre)
         val loop = Loop(data)
