@@ -895,7 +895,7 @@ object Dj {
         return Math.pow(10.0, db / 20.0).toFloat()
     }
 
-    fun setTargetLufs(v: Float) {
+    fun changeTargetLufs(v: Float) {
         targetLufs = v
         for (d in decks) d.agFactor = agOf(d.lufs)
     }

@@ -178,7 +178,7 @@ class MainActivity : Activity() {
         dj.skinIdx = prefs.getInt("djSkin", 15)
         Dj.autoGain = prefs.getBoolean("djAutoGain", true)
         Dj.colorWave = prefs.getBoolean("djColorWave", true)
-        Dj.setTargetLufs(prefs.getFloat("djTargetLufs", -10f))
+        Dj.changeTargetLufs(prefs.getFloat("djTargetLufs", -10f))
         dj.onLoad = { k -> showDeckLoad(k) }
         dj.onMenu = { showMainMenu() }
         dj.onTempo = { showTempo() }
@@ -2631,7 +2631,7 @@ class MainActivity : Activity() {
                 if (w0 == agIdx + 1) {
                     val opts = intArrayOf(-6, -8, -9, -10, -12, -14)
                     ui().setTitle("Auto-Gain: Ziel-Lautheit").setItems(opts.map { "$it LUFS" + when (it) { -8 -> " (laut, Club)"; -10 -> " (Standard)"; -14 -> " (leise, viel Reserve)"; else -> "" } }.toTypedArray()) { _, i ->
-                        Dj.setTargetLufs(opts[i].toFloat())
+                        Dj.changeTargetLufs(opts[i].toFloat())
                         getSharedPreferences("marvpad", MODE_PRIVATE).edit().putFloat("djTargetLufs", Dj.targetLufs).apply()
                     }.show()
                     return@setItems
