@@ -76,6 +76,7 @@ object Link {
         /** Senden läuft immer über einen eigenen Thread (Netzwerk im UI-Thread verbietet Android). */
         private val outQ = java.util.concurrent.LinkedBlockingQueue<String>()
         private val writer = Thread {
+            android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_URGENT_AUDIO)
             try {
                 while (alive) {
                     val first = outQ.poll(500, java.util.concurrent.TimeUnit.MILLISECONDS) ?: continue
@@ -103,6 +104,26 @@ object Link {
             alive = false
             try { closer() } catch (ignored: Exception) {}
         }
+    }
+
+    // ================================================================ WLAN schnell halten
+
+    private var wifiLock: WifiManager.WifiLock? = null
+
+    /** WLAN-Stromsparen aus, solange gekoppelt ist (spart sonst 50–200 ms Verzögerung). */
+    @Suppress("DEPRECATION")
+    fun lowLatency(ctx: Context, on: Boolean) {
+        try {
+            if (on) {
+                if (wifiLock?.isHeld == true) return
+                val wm = ctx.applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
+                val mode = if (android.os.Build.VERSION.SDK_INT >= 29) WifiManager.WIFI_MODE_FULL_LOW_LATENCY else WifiManager.WIFI_MODE_FULL_HIGH_PERF
+                wifiLock = wm.createWifiLock(mode, "marvpad-link").apply { setReferenceCounted(false); acquire() }
+            } else {
+                wifiLock?.release()
+                wifiLock = null
+            }
+        } catch (ignored: Exception) {}
     }
 
     // ================================================================ HOST
@@ -156,6 +177,7 @@ object Link {
         if (hosting) return
         hosting = true
         stateError = null
+        lowLatency(ctx, true)
         val myName = deviceName(ctx)
         // WLAN: TCP-Server + im Netz bekannt machen (mDNS und UDP-Rundruf)
         wlanStatus = "startet …"
@@ -244,13 +266,13 @@ object Link {
                         for (c in clients) {
                             if (!c.alive) { clients.remove(c); onClientsChanged?.invoke(); continue }
                             // Bluetooth ist langsamer: höchstens 10× pro Sekunde; unverändert nur alle 0,5 s
-                            val due = now - c.lastSent >= (if (c.viaBt) 100_000_000L else 35_000_000L)
+                            val due = now - c.lastSent >= (if (c.viaBt) 100_000_000L else 18_000_000L)
                             if (st != null && due && (st != c.lastState || now - c.lastSent > 500_000_000L)) {
                                 c.send(st)
                                 c.lastState = st
                                 c.lastSent = now
                             }
-                            if (n % 12 == 0) c.send("PING ${System.nanoTime()}")
+                            if (n % 25 == 0) c.send("PING ${System.nanoTime()}")
                         }
                         // Wellenformen nur bei Bedarf (neuer Track)
                         for (k in 0..1) {
@@ -264,7 +286,7 @@ object Link {
                         }
                     }
                     n++
-                    Thread.sleep(40)
+                    Thread.sleep(20)
                 } catch (ignored: Exception) {}
             }
         }.apply { isDaemon = true }.start()
@@ -306,6 +328,7 @@ object Link {
     }
 
     private fun hostServe(c: Conn) {
+        Thread.currentThread().priority = Thread.MAX_PRIORITY
         clients.add(c)
         // nächste freie Oberfläche als Vorschlag (die Vorlage verteilt neu)
         c.surface = defaultSurfaceFor(clients.indexOf(c))
@@ -315,6 +338,7 @@ object Link {
         onHostHint?.invoke("📡 ${c.peerName} verbunden")
         Thread {
             try {
+                android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_URGENT_AUDIO)
                 val r = c.reader()
                 while (c.alive && hosting) {
                     val line = r.readLine() ?: break
@@ -356,6 +380,8 @@ object Link {
 
     fun stopHost() {
         hosting = false
+        wifiLock?.let { try { it.release() } catch (ignored: Exception) {} }
+        wifiLock = null
         for (c in clients) { c.send("BYE"); c.close() }
         clients.clear()
         try { server?.close() } catch (ignored: Exception) {}
@@ -438,6 +464,7 @@ object Link {
         fun n(i: Int) = a.getOrNull(i)?.toIntOrNull() ?: 0
         fun l(i: Int) = a.getOrNull(i)?.toLongOrNull() ?: 0L
         when (a[0]) {
+            "K" -> return
             "HELLO" -> { c.peerName = line.removePrefix("HELLO ").take(40); onClientsChanged?.invoke() }
             "PONG" -> {
                 // PONG <hostSendNanos> <remoteNanos>
@@ -457,8 +484,8 @@ object Link {
                 val p = n(1)
                 if (p !in 0 until 12) return
                 if (a.getOrNull(2) == "d") {
-                    val ts = l(4).let { if (it > 0L && c.bestRtt < Long.MAX_VALUE) it - c.offset else 0L }
-                    val r = Engine.liveDown(p, f(3).coerceIn(0.05f, 1f), ts)
+                    // sofort auslösen (kein Zeitstempel-Ausgleich – der würde Verzögerung hinzufügen)
+                    val r = Engine.liveDown(p, f(3).coerceIn(0.05f, 1f), 0L)
                     remoteLaunched[p] = (r and Engine.LIVE_LAUNCHED) != 0
                 } else Engine.liveUp(p, remoteLaunched[p])
             }
@@ -609,12 +636,18 @@ object Link {
 
     private fun clientRun(ctx: Context, c: Conn) {
         client = c
+        if (!c.viaBt) lowLatency(ctx, true)
+        // kleines Lebenszeichen: hält das WLAN des Handys wach (sonst schläft es zwischen zwei Berührungen ein)
+        if (!c.viaBt) Thread {
+            while (c.alive) { c.send("K"); try { Thread.sleep(50) } catch (e: InterruptedException) { break } }
+        }.apply { isDaemon = true }.start()
         hostError = null
         state = null
         connectedAt = System.currentTimeMillis()
         c.send("HELLO " + deviceName(ctx))
         Thread {
             try {
+                android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_URGENT_AUDIO)
                 val r = c.reader()
                 while (c.alive) {
                     val line = r.readLine() ?: break
@@ -643,6 +676,7 @@ object Link {
     fun send(line: String) { client?.send(line) }
 
     fun disconnect() {
+        if (!hosting) { wifiLock?.let { try { it.release() } catch (ignored: Exception) {} }; wifiLock = null }
         client?.close()
         client = null
         state = null
