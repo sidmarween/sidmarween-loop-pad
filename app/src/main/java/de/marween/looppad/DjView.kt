@@ -147,8 +147,24 @@ class DjView(context: Context) : View(context) {
     // ================================================================ Zustand der Oberfläche
     /** Fokus-Deck für die 4 Regler und die XY-Fläche. */
     private var focus = 0
-    /** Pads: 0 = Hot Cues/Loops, 1 = Sampler (Pads der App). */
+    /** Pads: 0 = CUES, 1 = LOOP, 2 = ROLL, 3 = FX, 4 = SAMPLER. */
     private var padMode = 0
+    /** Welches Deck die (kleinen) Pads gerade steuern; groß zeigen beide Decks. */
+    private var padDeck = 0
+    /** Sampler (klein): Seite 0 = Pads 1–8, 1 = Pads 9–12 + Steuerung. */
+    private var samplerPage = 0
+    /** Pad-Bereich hochgeschoben: Regler/XY ausgeblendet, Pads groß (beide Decks bzw. alle Sampler). */
+    var padsBig = false
+        private set
+    private var padCount = 8
+    private val MODE_NAMES = arrayOf("CUES", "LOOP", "ROLL", "FX", "SAMPLER")
+    private val MODE_COLS = intArrayOf(Color.rgb(255, 150, 40), Color.rgb(60, 200, 120), Color.rgb(70, 160, 255), Color.rgb(255, 70, 110), Color.rgb(190, 120, 255))
+    private val ROLLS = floatArrayOf(0.125f, 0.25f, 0.5f, 1f, 2f, 4f, 8f)
+    private val tabBar = RectF()
+    private val tabDeckR = RectF()
+    private val tabModeR = Array(5) { RectF() }
+    private val tabBigR = RectF()
+    private val tabFxStop = RectF()
     private var xyHold = false
     /** Sampler: nächstes angetipptes Pad wird neu geladen. */
     private var loadArm = false
@@ -208,7 +224,7 @@ class DjView(context: Context) : View(context) {
     private val side = Array(2) { Array(5) { RectF() } }
     private val xy = RectF()
     private val xfader = RectF()
-    private val pads = Array(18) { RectF() }
+    private val pads = Array(16) { RectF() }
 
     override fun onApplyWindowInsets(insets: WindowInsets): WindowInsets {
         if (android.os.Build.VERSION.SDK_INT >= 30) {
@@ -259,49 +275,86 @@ class DjView(context: Context) : View(context) {
             overview[k].set(lanes[k].left, lanes[k].bottom - dp(7f), lanes[k].right, lanes[k].bottom - dp(1f))
         }
         y = display.bottom + dp(8f)
-        val kh = min(dp(66f), avail * 0.11f)
-        val kw = (R - L) / 4f
-        for (i in 0..3) knobs[i].set(L + i * kw, y, L + (i + 1) * kw, y + kh + dp(12f))
-        y += kh + dp(16f)
-        val th = dp(28f)
-        val tw = dp(64f)
-        val tg = dp(14f)
-        val tx0 = (L + R) / 2f - (3 * tw + 2 * tg) / 2f
-        for (i in 0..2) tops[i].set(tx0 + i * (tw + tg), y, tx0 + i * (tw + tg) + tw, y + th)
-        y += th + dp(10f)
-        val midH = max(dp(150f), avail * 0.27f)
-        val pw = dp(30f)
-        val vw = dp(36f)
-        val bw = dp(44f)
-        val g = dp(5f)
-        pitch[0].set(L, y, L + pw, y + midH)
-        vol[0].set(pitch[0].right + g, y, pitch[0].right + g + vw, y + midH)
-        pitch[1].set(R - pw, y, R, y + midH)
-        vol[1].set(pitch[1].left - g - vw, y, pitch[1].left - g, y + midH)
-        val sbH = (midH - 4 * dp(5f)) / 5f
-        for (k in 0..1) {
-            val x0 = if (k == 0) vol[0].right + g else vol[1].left - g - bw
-            for (i in 0..4) side[k][i].set(x0, y + i * (sbH + dp(5f)), x0 + bw, y + i * (sbH + dp(5f)) + sbH)
+        fun off(r: RectF) = r.set(-9999f, -9999f, -9998f, -9998f)
+        if (padsBig) {
+            for (r in knobs) off(r)
+            for (r in tops) off(r)
+            for (k in 0..1) { off(pitch[k]); off(vol[k]); for (r in side[k]) off(r) }
+            off(xy)
+            val xh = dp(34f)
+            xfader.set(L + (R - L) * 0.12f, y, R - (R - L) * 0.12f, y + xh)
+            y += xh + dp(8f)
+        } else {
+            val kh = min(dp(60f), avail * 0.10f)
+            val kw = (R - L) / 4f
+            for (i in 0..3) knobs[i].set(L + i * kw, y, L + (i + 1) * kw, y + kh + dp(12f))
+            y += kh + dp(16f)
+            val th = dp(28f)
+            val tw = dp(64f)
+            val tg = dp(14f)
+            val tx0 = (L + R) / 2f - (3 * tw + 2 * tg) / 2f
+            for (i in 0..2) tops[i].set(tx0 + i * (tw + tg), y, tx0 + i * (tw + tg) + tw, y + th)
+            y += th + dp(10f)
+            val midH = max(dp(140f), avail * 0.25f)
+            val pw = dp(30f)
+            val vw = dp(36f)
+            val bw = dp(44f)
+            val g = dp(5f)
+            pitch[0].set(L, y, L + pw, y + midH)
+            vol[0].set(pitch[0].right + g, y, pitch[0].right + g + vw, y + midH)
+            pitch[1].set(R - pw, y, R, y + midH)
+            vol[1].set(pitch[1].left - g - vw, y, pitch[1].left - g, y + midH)
+            val sbH = (midH - 4 * dp(5f)) / 5f
+            for (k in 0..1) {
+                val x0 = if (k == 0) vol[0].right + g else vol[1].left - g - bw
+                for (i in 0..4) side[k][i].set(x0, y + i * (sbH + dp(5f)), x0 + bw, y + i * (sbH + dp(5f)) + sbH)
+            }
+            val xl = side[0][0].right + dp(10f)
+            val xr = side[1][0].left - dp(10f)
+            val xs = min(xr - xl, midH)
+            xy.set((xl + xr) / 2f - xs / 2f, y + (midH - xs) / 2f, (xl + xr) / 2f + xs / 2f, y + (midH + xs) / 2f)
+            y += midH + dp(10f)
+            val xh = dp(40f)
+            xfader.set(L + (R - L) * 0.12f, y, R - (R - L) * 0.12f, y + xh)
+            y += xh + dp(8f)
         }
-        val xl = side[0][0].right + dp(10f)
-        val xr = side[1][0].left - dp(10f)
-        val xs = min(xr - xl, midH)
-        xy.set((xl + xr) / 2f - xs / 2f, y + (midH - xs) / 2f, (xl + xr) / 2f + xs / 2f, y + (midH + xs) / 2f)
-        y += midH + dp(10f)
-        val xh = dp(40f)
-        xfader.set(L + (R - L) * 0.12f, y, R - (R - L) * 0.12f, y + xh)
-        y += xh + dp(10f)
+        // Reiter-Leiste: Deck/Seite · CUES LOOP ROLL FX SAMPLER · groß/klein
+        val tabH = dp(36f)
+        tabBar.set(L, y, R, y + tabH)
+        val showDeckTab = !padsBig || padMode == 4
+        val dw = if (showDeckTab) dp(50f) else 0f
+        val bw2 = dp(42f)
+        if (showDeckTab) tabDeckR.set(L, y, L + dw, y + tabH) else tabDeckR.setEmpty()
+        tabBigR.set(R - bw2, y, R, y + tabH)
+        val mx0 = L + dw + (if (showDeckTab) dp(6f) else 0f)
+        val mw = (tabBigR.left - dp(6f) - mx0) / 5f
+        for (i in 0..4) tabModeR[i].set(mx0 + i * mw + dp(1.5f), y, mx0 + (i + 1) * mw - dp(1.5f), y + tabH)
+        y += tabH + dp(8f)
+        // Pads: 4 Spalten, klein 2 Reihen, groß 4 Reihen (Deck A oben, Deck B unten bzw. alle Sampler)
         val pb = panel.bottom - m
-        val rows = 3
-        val cols = 6
-        val pg = dp(7f)
-        val phh = (pb - y - (rows - 1) * pg) / rows
+        val rows = if (padsBig) 4 else 2
+        val cols = 4
+        padCount = rows * cols
+        val pg = dp(8f)
+        val blockGap = if (padsBig && padMode != 4) dp(12f) else 0f
+        val phh = (pb - y - (rows - 1) * pg - blockGap) / rows
         val pww = (R - L - (cols - 1) * pg) / cols
         for (r in 0 until rows) for (cI in 0 until cols) {
             val x0 = L + cI * (pww + pg)
-            val y0 = y + r * (phh + pg)
+            val y0 = y + r * (phh + pg) + (if (r >= 2) blockGap else 0f)
             pads[r * cols + cI].set(x0, y0, x0 + pww, y0 + phh)
         }
+        for (i in padCount until pads.size) off(pads[i])
+    }
+
+    /** Pad-Bereich groß/klein umschalten. */
+    fun setPadsBig(on: Boolean) {
+        if (padsBig == on) return
+        padsBig = on
+        for (i in padDown.indices) padDown[i] = false
+        layoutAll()
+        invalidate()
+        onHint?.invoke(if (on) "Pads groß – beide Decks (bzw. alle Sampler-Pads). ⌄ oder nach unten wischen = Regler zurück" else "Regler und XY wieder da")
     }
 
     // ================================================================ Textur (gebürstet, Holz, Kunststoff …)
@@ -445,12 +498,14 @@ class DjView(context: Context) : View(context) {
         val dk = Dj.decks[focus]
         val kv = floatArrayOf(dk.hi, dk.mid, dk.lo, dk.filter)
         val kl = arrayOf("HI", "MID", "LOW", "FILTER")
-        for (i in 0..3) drawKnob(c, knobs[i], i, kv[i], kl[i] + " " + "AB"[focus], focusCol)
+        if (!padsBig) for (i in 0..3) drawKnob(c, knobs[i], i, kv[i], kl[i] + " " + "AB"[focus], focusCol)
         val fxName = Fx.NAMES[dk.fxType.coerceIn(0, Fx.COUNT - 1)]
-        drawTop(c, tops[0], 0, "DECK " + "AB"[focus], true, focusCol)
-        drawTop(c, tops[1], 1, fxName, dk.fxAmt > 0.02f, s.accent)
-        drawTop(c, tops[2], 2, when (padMode) { 0 -> "CUES"; 2 -> "PERFORM"; 3 -> "DJ FX"; else -> "SAMPLER" }, padMode != 0, s.accent)
-        for (k in 0..1) {
+        if (!padsBig) {
+            drawTop(c, tops[0], 0, "DECK " + "AB"[focus], true, focusCol)
+            drawTop(c, tops[1], 1, fxName, dk.fxAmt > 0.02f, s.accent)
+            drawTop(c, tops[2], 2, "PADS ⌃", false, s.accent)
+        }
+        if (!padsBig) for (k in 0..1) {
             val dd = Dj.decks[k]
             val col = if (k == 0) s.colA else s.colB
             drawFader(c, pitch[k], 0.5f - dd.pitch * 0.5f, col, true, k)
@@ -467,8 +522,9 @@ class DjView(context: Context) : View(context) {
             c.drawText(fitLabel(text, pr, pitch[k].width() + dp(12f), dp(8.5f), dp(6.5f)), pitch[k].centerX(), pitch[k].bottom + dp(9f), text)
             c.drawText(fitLabel(text, "LINE " + "AB"[k], vol[k].width() + dp(10f), dp(8.5f), dp(6.5f)), vol[k].centerX(), vol[k].top - dp(3f), text)
         }
-        drawXy(c)
+        if (!padsBig) drawXy(c)
         drawCross(c)
+        drawTabBar(c)
         drawPads(c)
         if (Dj.splitCue) {
             text.textSize = dp(9f)
@@ -746,7 +802,7 @@ class DjView(context: Context) : View(context) {
             }
             // Cue und Hot Cues
             marker(c, cx + ((dd.cuePoint - pos) / fpp).toFloat(), wave, Color.rgb(255, 170, 0))
-            for (h in 0..3) if (dd.hot[h] >= 0) marker(c, cx + ((dd.hot[h] - pos) / fpp).toFloat(), wave, HOT[h])
+            for (h in dd.hot.indices) if (dd.hot[h] >= 0) marker(c, cx + ((dd.hot[h] - pos) / fpp).toFloat(), wave, HOT[h % HOT.size])
             // Übersicht
             val ov = overview[k]
             fill.color = alpha(ink, 0.12f)
@@ -802,7 +858,8 @@ class DjView(context: Context) : View(context) {
     /** Tonart-Feld im Deck angetippt (Keylock, Key-Shift, Tonart). */
     var onKeyMenu: ((Int) -> Unit)? = null
 
-    private val HOT = intArrayOf(Color.rgb(255, 60, 90), Color.rgb(60, 220, 120), Color.rgb(70, 150, 255), Color.rgb(200, 90, 255))
+    private val HOT = intArrayOf(Color.rgb(255, 60, 90), Color.rgb(60, 220, 120), Color.rgb(70, 150, 255), Color.rgb(200, 90, 255),
+        Color.rgb(255, 170, 40), Color.rgb(40, 220, 230), Color.rgb(255, 110, 200), Color.rgb(230, 230, 80))
 
     private fun marker(c: Canvas, x: Float, r: RectF, col: Int) {
         if (x < r.left || x > r.right) return
@@ -1553,104 +1610,120 @@ class DjView(context: Context) : View(context) {
 
     // ---------------------------------------------------------------- Pads
 
-    private val padDown = BooleanArray(18)
-    private val padFlash = FloatArray(18)
+    private val padDown = BooleanArray(16)
+    private val padFlash = FloatArray(16)
 
-    private fun padLabel(i: Int): Pair<String, Boolean> {
-        val row = i / 6
-        val colI = i % 6
-        val k = if (colI < 3) 0 else 1
-        val j = colI % 3
-        val dd = Dj.decks[k]
-        if (padMode == 1) {
-            if (row < 2) {
-                val p = row * 6 + colI
+    /** Was ein Pad gerade bedeutet: Beschriftung, leuchtet?, Farbe, muss gehalten werden?, Deck (-1 = Sampler), Platz. */
+    private class PadSpec(val label: String, val lit: Boolean, val col: Int, val hold: Boolean, val deck: Int, val slot: Int)
+
+    private fun padSpec(i: Int): PadSpec {
+        val mc = MODE_COLS[padMode]
+        if (padMode == 4) {
+            val idx = if (padsBig) i else samplerPage * 8 + i
+            if (idx < 12) {
+                val p = idx
                 val st = Engine.state(p)
                 val on = st == Engine.PadState.PLAYING || st == Engine.PadState.RECORDING || st == Engine.PadState.OVERDUB
+                val nm = Engine.padName(p)
                 val lbl = when (st) {
-                    Engine.PadState.EMPTY -> "${p + 1}"
+                    Engine.PadState.EMPTY -> "${p + 1} ＋"
                     Engine.PadState.RECORDING -> "● ${p + 1}"
-                    Engine.PadState.ONESHOT -> "⚡${p + 1}"
-                    else -> "∞${p + 1}"
+                    Engine.PadState.ONESHOT -> "⚡${p + 1}" + if (nm != null) " " + nm else ""
+                    else -> "∞${p + 1}" + if (nm != null) " " + nm else ""
                 }
-                return lbl to (on || Engine.levels[p] > 0.05f)
+                return PadSpec(lbl, on || Engine.levels[p] > 0.05f, mc, false, -1, p)
             }
-            return when (colI) {
-                0 -> (if (Engine.seqPlaying) "■ STOP" else "▶ PLAY") to Engine.seqPlaying
-                1 -> "ACID" to InstState.acidOn
-                2 -> "DRUM" to InstState.drumOn
-                3 -> "⏏ LADEN" to loadArm
-                4 -> "🎙 MIC" to Engine.monitorOn
-                else -> "TAP" to false
+            return when (idx) {
+                12 -> PadSpec(if (Engine.seqPlaying) "■ STOP" else "▶ PLAY", Engine.seqPlaying, skin.accent, false, -1, idx)
+                13 -> PadSpec("⏏ LADEN", loadArm, skin.accent, false, -1, idx)
+                14 -> PadSpec("🎙 MIC", Engine.monitorOn, skin.accent, false, -1, idx)
+                else -> PadSpec("TAP", false, skin.accent, false, -1, idx)
             }
         }
-        if (padMode == 3) {
-            return when (row) {
-                0 -> when (j) {
-                    0 -> "ECHO OUT" to dd.echoOn
-                    1 -> "BRAKE" to (dd.stopFx == 1)
-                    else -> "BACKSPIN" to (dd.stopFx == 2)
-                }
-                1 -> when (j) {
-                    0 -> "BUILD ↑ ${dd.sweepBars.toInt()}T" to (dd.sweepMode == 1)
-                    1 -> "SWEEP ↓ ${dd.sweepBars.toInt()}T" to (dd.sweepMode == 2)
-                    else -> "CENSOR" to dd.censor
-                }
-                else -> when (j) {
-                    0 -> (if (dd.loopOn) "LOOP → PAD" else "4T → PAD") to false
-                    1 -> "⚡ → PAD" to false
-                    else -> "FX STOP" to false
-                }
+        val k = if (padsBig) i / 8 else padDeck
+        val sl = if (padsBig) i % 8 else i
+        val dd = Dj.decks[k]
+        return when (padMode) {
+            0 -> PadSpec("CUE ${sl + 1}", dd.hot[sl] >= 0, HOT[sl], false, k, sl)
+            1 -> when (sl) {
+                0 -> PadSpec("◀ JUMP", false, mc, false, k, sl)
+                1 -> PadSpec("JUMP ${barsLabel(dd.jumpBars)}", false, mc, false, k, sl)
+                2 -> PadSpec("JUMP ▶", false, mc, false, k, sl)
+                3 -> PadSpec(if (dd.slipOn) "SLIP AN" else "SLIP", dd.slipOn, mc, false, k, sl)
+                4 -> PadSpec("LOOP ½", false, mc, false, k, sl)
+                5 -> PadSpec("LOOP ${beatsLabel(dd.loopBeats)}", dd.loopOn, mc, false, k, sl)
+                6 -> PadSpec("LOOP ×2", false, mc, false, k, sl)
+                else -> PadSpec("RELOOP", false, mc, false, k, sl)
             }
-        }
-        if (padMode == 2) {
-            return when (row) {
-                0 -> when (j) {
-                    0 -> "◀ ${barsLabel(dd.jumpBars)}" to false
-                    1 -> "JUMP ${barsLabel(dd.jumpBars)}" to false
-                    else -> "${barsLabel(dd.jumpBars)} ▶" to false
-                }
-                1 -> {
-                    val b = floatArrayOf(0.25f, 0.5f, 1f)[j]
-                    "ROLL ${rollLabel(b)}" to (dd.rollBeats == b)
-                }
-                else -> when (j) {
-                    0 -> "ROLL 2" to (dd.rollBeats == 2f)
-                    1 -> "ROLL 4" to (dd.rollBeats == 4f)
-                    else -> (if (dd.slipOn) "SLIP AN" else "SLIP") to dd.slipOn
-                }
-            }
-        }
-        return when (row) {
-            0 -> "CUE ${j + 1}" to (dd.hot[j] >= 0)
-            1 -> when (j) {
-                0 -> "CUE 4" to (dd.hot[3] >= 0)
-                1 -> "◀◀ ${beatsLabel(dd.loopBeats)}" to false
-                else -> "${beatsLabel(dd.loopBeats)} ▶▶" to false
-            }
-            else -> when (j) {
-                0 -> "½×" to false
-                1 -> "LOOP ${beatsLabel(dd.loopBeats)}" to dd.loopOn
-                else -> "2×" to false
+            2 -> if (sl < 7) PadSpec("ROLL ${rollLabel(ROLLS[sl])}", dd.rollBeats == ROLLS[sl], mc, true, k, sl)
+                 else PadSpec(if (dd.slipOn) "SLIP AN" else "SLIP", dd.slipOn, mc, false, k, sl)
+            else -> when (sl) {
+                0 -> PadSpec("ECHO OUT", dd.echoOn, mc, false, k, sl)
+                1 -> PadSpec("BRAKE", dd.stopFx == 1, mc, false, k, sl)
+                2 -> PadSpec("BACKSPIN", dd.stopFx == 2, mc, false, k, sl)
+                3 -> PadSpec("CENSOR", dd.censor, mc, true, k, sl)
+                4 -> PadSpec("BUILD ↑ ${dd.sweepBars.toInt()}T", dd.sweepMode == 1, mc, false, k, sl)
+                5 -> PadSpec("SWEEP ↓ ${dd.sweepBars.toInt()}T", dd.sweepMode == 2, mc, false, k, sl)
+                6 -> PadSpec(if (dd.loopOn) "LOOP → PAD" else "4T → PAD", false, mc, false, k, sl)
+                else -> PadSpec("⚡ → PAD", false, mc, false, k, sl)
             }
         }
     }
 
+    private fun drawTabBar(c: Canvas) {
+        val s = skin
+        val ink = s.ink
+        fun box(r: RectF, label: String, on: Boolean, col: Int) {
+            if (r.isEmpty || r.left < -1000f) return
+            fill.shader = null
+            fill.color = if (on) col else if (s.dark) Color.argb(110, 0, 0, 0) else Color.argb(36, 0, 0, 0)
+            c.drawRoundRect(r, dp(9f), dp(9f), fill)
+            stroke.strokeWidth = dp(if (on) 1.6f else 1f)
+            stroke.color = if (on) lighten(col, 0.3f) else alpha(col, 0.55f)
+            c.drawRoundRect(r, dp(9f), dp(9f), stroke)
+            text.color = if (on) (if (lum(col) > 0.6f) Color.rgb(20, 20, 24) else Color.WHITE) else ink
+            val t = fitLabel(text, label, r.width() - dp(6f), dp(12.5f), dp(7.5f))
+            c.drawText(t, r.centerX(), r.centerY() + text.textSize * 0.36f, text)
+        }
+        if (!tabDeckR.isEmpty) {
+            if (padMode == 4) box(tabDeckR, if (samplerPage == 0) "1–8" else "9–12", true, MODE_COLS[4])
+            else box(tabDeckR, "DECK ${"AB"[padDeck]}", true, if (padDeck == 0) s.colA else s.colB)
+        }
+        for (i in 0..4) box(tabModeR[i], MODE_NAMES[i], padMode == i, MODE_COLS[i])
+        box(tabBigR, if (padsBig) "⌄" else "⌃", padsBig, s.accent)
+        // FX-Stopp nur im FX-Modus, wenn etwas läuft
+        tabFxStop.setEmpty()
+        if (padMode == 3) {
+            val any = Dj.decks.any { it.echoOn || it.sweepMode != 0 || it.censor || it.stopFx != 0 || it.fxOn }
+            if (any) {
+                val r = tabModeR[3]
+                tabFxStop.set(r.right - dp(16f), r.top - dp(8f), r.right + dp(6f), r.top + dp(14f))
+                fill.color = Color.rgb(230, 40, 60)
+                c.drawOval(tabFxStop, fill)
+                text.color = Color.WHITE
+                text.textSize = dp(11f)
+                c.drawText("✕", tabFxStop.centerX(), tabFxStop.centerY() + dp(4f), text)
+            }
+        }
+    }
+
+    private fun lum(col: Int): Float = (0.299f * Color.red(col) + 0.587f * Color.green(col) + 0.114f * Color.blue(col)) / 255f
+
     private fun barsLabel(b: Float): String = if (b >= 1f) "${b.toInt()} T" else if (b == 0.5f) "½ T" else "¼ T"
-    private fun rollLabel(b: Float): String = when (b) { 0.25f -> "1/16"; 0.5f -> "1/8"; 1f -> "1/4"; 2f -> "1/2"; 4f -> "1 T"; else -> b.toString() }
+    private fun rollLabel(b: Float): String = when (b) { 0.125f -> "1/32"; 0.25f -> "1/16"; 0.5f -> "1/8"; 1f -> "1/4"; 2f -> "1/2"; 4f -> "1 T"; 8f -> "2 T"; else -> b.toString() }
 
     private fun drawPads(c: Canvas) {
         val s = skin
-        for (i in 0 until 18) {
+        for (i in 0 until padCount) {
             val r = pads[i]
-            val (lbl, lit0) = padLabel(i)
-            val k = if (i % 6 < 3) 0 else 1
+            val spec = padSpec(i)
+            val lbl = spec.label
+            val lit0 = spec.lit
             padFlash[i] *= 0.88f
             val lit = lit0 || padDown[i] || padFlash[i] > 0.2f
-            val deckCol = if (padMode == 1 && i < 12) s.accent else if (k == 0) s.colA else s.colB
-            val hotCol = if (padMode == 0 && (i / 6 == 0 || i % 3 == 0 && i / 6 == 1)) HOT[if (i / 6 == 0) i % 3 else 3] else deckCol
-            val palCol = if (s.padCols.size > 1) s.padCols[(i * 7 + i / 6) % s.padCols.size] else hotCol
-            val rad = dp(if (s.pad == 7 || s.pad == 11) 7f else 5f)
+            val hotCol = spec.col
+            val palCol = if (s.padCols.size > 1) s.padCols[(i * 7 + i / 4) % s.padCols.size] else hotCol
+            val rad = dp(if (s.pad == 7 || s.pad == 11) 9f else 7f)
             val pressed = padDown[i]
             val rr = if (pressed) RectF(r.left + dp(1.5f), r.top + dp(1.5f), r.right - dp(1.5f), r.bottom - dp(1.5f)) else r
             when (s.pad) {
@@ -1785,17 +1858,31 @@ class DjView(context: Context) : View(context) {
                 continue
             }
             val dark = when (s.pad) { 0, 3, 5, 6, 9, 12 -> true; 1 -> lit; else -> false }
-            text.color = if (dark) Color.argb(200, 30, 30, 34) else Color.argb(if (lit) 255 else 190, 255, 255, 255)
-            val pl = fitLabel(text, lbl, rr.width() - dp(6f), min(dp(11f), rr.height() * 0.24f), dp(6.5f))
+            // Funktionsfarbe als Streifen oben (auch wenn das Pad nicht leuchtet)
+            fill.shader = null
+            fill.color = alpha(hotCol, if (lit) 1f else 0.75f)
+            tmp.set(rr.left + rad, rr.top + dp(3f), rr.right - rad, rr.top + dp(6f))
+            c.drawRoundRect(tmp, dp(2f), dp(2f), fill)
+            text.color = if (dark) Color.argb(220, 30, 30, 34) else Color.argb(if (lit) 255 else 210, 255, 255, 255)
+            val pl = fitLabel(text, lbl, rr.width() - dp(10f), min(dp(15f), rr.height() * 0.26f), dp(8f))
             c.drawText(pl, rr.centerX(), rr.centerY() + text.textSize * 0.36f, text)
+            if (spec.hold) {
+                // „halten“-Hinweis
+                text.textSize = min(dp(9f), rr.height() * 0.16f)
+                text.color = alpha(if (dark) Color.rgb(30, 30, 34) else Color.WHITE, 0.7f)
+                c.drawText("● HALTEN", rr.centerX(), rr.bottom - dp(5f), text)
+            }
         }
-        // Deck-Kennung über den Pad-Hälften
-        if (padMode != 1) {
-            text.textSize = dp(9f)
-            text.color = s.colA
-            c.drawText("DECK A", (pads[0].left + pads[2].right) / 2, pads[0].top - dp(3f), text)
-            text.color = s.colB
-            c.drawText("DECK B", (pads[3].left + pads[5].right) / 2, pads[0].top - dp(3f), text)
+        // Deck-Kennung: groß über jedem 4×2-Block
+        if (padsBig && padMode != 4) {
+            text.textSize = dp(10f)
+            for (k in 0..1) {
+                val r0 = pads[k * 8]
+                text.color = if (k == 0) s.colA else s.colB
+                text.textAlign = Paint.Align.LEFT
+                c.drawText("DECK ${"AB"[k]}", r0.left + dp(2f), r0.top - dp(3f), text)
+                text.textAlign = Paint.Align.CENTER
+            }
         }
     }
 
@@ -1810,10 +1897,13 @@ class DjView(context: Context) : View(context) {
 
     private enum class K { NONE, KNOB, PITCH, VOL, XF, XY, PAD, SIDE, WAVE, OVERVIEW, TOP, CHIP }
 
-    private class Ptr(val kind: K, val idx: Int, val sub: Int, var lastX: Float, var lastY: Float, val downAt: Long)
+    private class Ptr(val kind: K, val idx: Int, val sub: Int, var lastX: Float, var lastY: Float, val downAt: Long) {
+        val lastY0 = lastY
+    }
 
     private val ptrs = HashMap<Int, Ptr>()
     private val lastTap = LongArray(32)
+    private val hotTap = LongArray(16)
     private val cuePreview = BooleanArray(2)
     private val padLaunched = BooleanArray(12)
 
@@ -1856,22 +1946,53 @@ class DjView(context: Context) : View(context) {
     private fun down(id: Int, x: Float, y: Float) {
         val now = SystemClock.uptimeMillis()
         // Pads zuerst – sie müssen sofort reagieren
-        for (i in 0 until 18) if (hit(pads[i], x, y, dp(2f))) {
+        for (i in 0 until padCount) if (hit(pads[i], x, y, dp(2f))) {
             ptrs[id] = Ptr(K.PAD, i, 0, x, y, now)
-            if (padMode == 1 && i < 12 && !Engine.hasLoop(i)) {
-                // leeres Sampler-Pad: Audio laden
-                onSamplerLoad?.invoke(i)
-                ptrs.remove(id)
-                return
-            }
-            if (padMode == 1 && i < 12 && loadArm) {
-                // ⏏ LADEN aktiv: dieses Pad neu belegen
-                loadArm = false
-                ptrs.remove(id)
-                onSamplerLoad?.invoke(i)
-                return
+            if (padMode == 4) {
+                val p = padSpec(i).slot
+                if (p < 12 && !Engine.hasLoop(p)) {
+                    // leeres Sampler-Pad: Audio laden
+                    onSamplerLoad?.invoke(p)
+                    ptrs.remove(id)
+                    return
+                }
+                if (p < 12 && loadArm) {
+                    // ⏏ LADEN aktiv: dieses Pad neu belegen
+                    loadArm = false
+                    ptrs.remove(id)
+                    onSamplerLoad?.invoke(p)
+                    return
+                }
             }
             padPress(i, true)
+            return
+        }
+        if (hit(tabBar, x, y, dp(3f))) {
+            ptrs[id] = Ptr(K.CHIP, 0, 0, x, y, now)
+            haptic()
+            when {
+                !tabFxStop.isEmpty && hit(tabFxStop, x, y, dp(4f)) -> { for (dd in Dj.decks) Dj.stopAllFx(dd); onHint?.invoke("Alle Deck-Effekte aus") }
+                hit(tabBigR, x, y, dp(2f)) -> setPadsBig(!padsBig)
+                !tabDeckR.isEmpty && hit(tabDeckR, x, y, dp(2f)) -> {
+                    if (padMode == 4) samplerPage = 1 - samplerPage else padDeck = 1 - padDeck
+                    for (q in padDown.indices) padDown[q] = false
+                    onHint?.invoke(if (padMode == 4) (if (samplerPage == 0) "Sampler-Pads 1–8" else "Sampler-Pads 9–12 + Steuerung") else "Pads steuern Deck ${"AB"[padDeck]}")
+                }
+                else -> for (m in 0..4) if (hit(tabModeR[m], x, y, dp(2f))) {
+                    if (padMode != m) {
+                        padMode = m
+                        for (q in padDown.indices) padDown[q] = false
+                        layoutAll()
+                        onHint?.invoke(when (m) {
+                            0 -> "CUES: 8 Hot Cues – leer antippen = setzen, doppelt tippen = löschen"
+                            1 -> "LOOP: Beat Jump (Weite in der Mitte), SLIP, Loop ½ / an-aus / ×2, Reloop"
+                            2 -> "ROLL: halten = Stotter-Loop 1/32 … 2 Takte, loslassen = Track läuft im Takt weiter"
+                            3 -> "FX: Echo-Out, Brake, Backspin, Censor (halten), Build/Sweep, Loop/Schlag → Pad"
+                            else -> "SAMPLER: die Pads der App – leeres Pad antippen = Audio laden"
+                        })
+                    }
+                }
+            }
             return
         }
         for (k in 0..1) for (j in 0..4) if (hit(side[k][j], x, y)) {
@@ -1977,6 +2098,14 @@ class DjView(context: Context) : View(context) {
                 dd.scratchTarget = (dd.scratchTarget - dx * fpp).coerceIn(0.0, (dd.len - 2).toDouble())
             }
             K.OVERVIEW -> seekOverview(p.idx, x)
+            K.CHIP -> {
+                // über die Reiter wischen: hoch = Pads groß, runter = Regler zurück
+                if (abs(y - p.lastY0) > dp(46f)) {
+                    setPadsBig(y < p.lastY0)
+                    ptrs[id] = Ptr(K.NONE, 0, 0, x, y, p.downAt)
+                    return
+                }
+            }
             else -> {}
         }
         p.lastX = x
@@ -2039,12 +2168,7 @@ class DjView(context: Context) : View(context) {
                 dd.fxType = ch[(idx + 1) % ch.size]
                 onHint?.invoke("Effekt Deck ${"AB"[focus]}: ${Fx.NAMES[dd.fxType]} – auf der XY-Fläche spielen")
             }
-            2 -> {
-                padMode = when (padMode) { 0 -> 2; 2 -> 3; 3 -> 1; else -> 0 }
-                if (padMode == 2) onHint?.invoke("Pads: PERFORM – Beat Jump (Weite in der Mitte), Loop Rolls 1/16 … 1 Takt (halten), SLIP")
-                else if (padMode == 3) onHint?.invoke("Pads: FX – Echo-Out, Brake, Backspin, Build/Sweep, Censor (halten), Loop/Schlag → Pad")
-                else onHint?.invoke(if (padMode == 0) "Pads: Hot Cues, Beat-Jump und Loops je Deck" else "Pads: Sampler – die 12 Pads der App (leeres Pad antippen = Audio laden, spielt synchron ab dem Startpunkt), darunter Transport, ACID, DRUM, Laden, Mikro, Tap")
-            }
+            2 -> setPadsBig(true)
         }
     }
 
@@ -2112,29 +2236,26 @@ class DjView(context: Context) : View(context) {
             padFlash[i] = 1f
             haptic()
         }
-        val row = i / 6
-        val colI = i % 6
-        if (padMode == 1) {
-            if (row < 2) {
-                val p = row * 6 + colI
+        val spec = padSpec(i)
+        if (padMode == 4) {
+            val idx = spec.slot
+            if (idx < 12) {
                 if (down) {
-                    val r = Engine.liveDown(p)
-                    padLaunched[p] = (r and Engine.LIVE_LAUNCHED) != 0
+                    val r = Engine.liveDown(idx)
+                    padLaunched[idx] = (r and Engine.LIVE_LAUNCHED) != 0
                 } else {
-                    Engine.liveUp(p, padLaunched[p])
+                    Engine.liveUp(idx, padLaunched[idx])
                 }
                 return
             }
             if (!down) return
-            when (colI) {
-                0 -> if (Engine.seqPlaying) Engine.seqStop() else Engine.seqPlay()
-                1 -> InstState.acidOn = !InstState.acidOn
-                2 -> InstState.drumOn = !InstState.drumOn
-                3 -> {
+            when (idx) {
+                12 -> if (Engine.seqPlaying) Engine.seqStop() else Engine.seqPlay()
+                13 -> {
                     loadArm = !loadArm
                     if (loadArm) onHint?.invoke("Jetzt ein Pad antippen, um Audio darauf zu laden (startet synchron ab dem Startpunkt)")
                 }
-                4 -> {
+                14 -> {
                     Engine.monitorOn = !Engine.monitorOn
                     onHint?.invoke(if (Engine.monitorOn) "🎙 Mikrofon live – mit Kopfhörern, sonst pfeift es" else "Mikrofon aus")
                 }
@@ -2142,89 +2263,77 @@ class DjView(context: Context) : View(context) {
             }
             return
         }
-        val k = if (colI < 3) 0 else 1
-        val j = colI % 3
+        val k = spec.deck
+        val sl = spec.slot
         val dd = Dj.decks[k]
         if (!dd.loaded()) {
             if (down) onLoad?.invoke(k)
             return
         }
-        if (padMode == 3) {
-            if (row == 1 && j == 2) { Dj.censorOn(dd, down); return }
-            if (!down) return
-            when {
-                row == 0 && j == 0 -> { Dj.echoOut(dd); onHint?.invoke(if (dd.echoReq) "ECHO OUT ${"AB"[k]}: Track stoppt, das Echo läuft im Takt aus" else "Echo ${"AB"[k]} aus") }
-                row == 0 -> { Dj.brake(dd, j == 2); if (!dd.playing) onHint?.invoke("Deck ${"AB"[k]} läuft nicht") }
-                row == 1 -> {
-                    Dj.toggleSweep(dd, j + 1)
-                    onHint?.invoke(when {
-                        dd.sweepMode == 0 -> "Filter zurück – Drop!"
-                        j == 0 -> "BUILD ${"AB"[k]}: Hochpass steigt über ${dd.sweepBars.toInt()} Takte – nochmal tippen = Drop"
-                        else -> "SWEEP ${"AB"[k]}: Tiefpass schließt über ${dd.sweepBars.toInt()} Takte – nochmal tippen = auf"
-                    })
-                }
-                row == 2 && j < 2 -> {
-                    val one = j == 1
-                    onHint?.invoke(if (one) "Schlag → Pad …" else "Loop → Pad …")
-                    Thread {
-                        val p = Dj.grabToPad(dd, 4f, one)
-                        post { onHint?.invoke(if (p < 0) "Kein freies Pad (1–12) oder kein Tempo" else if (one) "⚡ Pad ${p + 1}: Schlag aus Deck ${"AB"[k]} – unter SAMPLER spielen" else "Pad ${p + 1}: Loop aus Deck ${"AB"[k]}, im Takt gewarpt – unter SAMPLER starten") }
-                    }.start()
-                }
-                else -> { Dj.stopAllFx(dd); onHint?.invoke("Alle Effekte Deck ${"AB"[k]} aus") }
-            }
-            return
-        }
-        if (padMode == 2) {
-            val rollB = when {
-                row == 1 -> floatArrayOf(0.25f, 0.5f, 1f)[j]
-                row == 2 && j < 2 -> if (j == 0) 2f else 4f
-                else -> 0f
-            }
-            if (rollB > 0f) {
-                // Loop Roll: halten = stottern, loslassen = Track läuft weiter, als wäre nichts gewesen
-                if (down) Dj.rollStart(dd, rollB) else if (dd.rollBeats == rollB) {
-                    // anderer Roll noch gedrückt? dann zu dem wechseln
-                    val other = (0 until 18).firstOrNull { it != i && padDown[it] && it % 6 / 3 == k && it / 6 >= 1 && !(it / 6 == 2 && it % 3 == 2) }
-                    if (other != null) {
-                        val r2 = other / 6
-                        val j2 = other % 3
-                        Dj.rollStart(dd, if (r2 == 1) floatArrayOf(0.25f, 0.5f, 1f)[j2] else if (j2 == 0) 2f else 4f)
-                    } else Dj.rollEnd(dd)
-                }
-                return
-            }
-            if (!down) return
-            when {
-                row == 0 && j == 0 -> Dj.beatJump(dd, -dd.jumpBars)
-                row == 0 && j == 2 -> Dj.beatJump(dd, dd.jumpBars)
-                row == 0 -> {
-                    val opts = floatArrayOf(0.25f, 0.5f, 1f, 2f, 4f, 8f, 16f, 32f)
-                    dd.jumpBars = opts[(opts.indexOfFirst { it == dd.jumpBars } + 1).coerceAtLeast(0) % opts.size]
-                    onHint?.invoke("Beat Jump Deck ${"AB"[k]}: ${barsLabel(dd.jumpBars)}")
-                }
-                else -> {
-                    dd.slipOn = !dd.slipOn
-                    onHint?.invoke(if (dd.slipOn) "SLIP ${"AB"[k]}: Scratchen und Rolls – danach geht es dort weiter, wo der Track ohne sie wäre" else "SLIP ${"AB"[k]} aus")
+        when (padMode) {
+            0 -> if (down) hotPress(k, sl)
+            1 -> {
+                if (!down) return
+                when (sl) {
+                    0 -> Dj.beatJump(dd, -dd.jumpBars)
+                    2 -> Dj.beatJump(dd, dd.jumpBars)
+                    1 -> {
+                        val opts = floatArrayOf(0.25f, 0.5f, 1f, 2f, 4f, 8f, 16f, 32f)
+                        dd.jumpBars = opts[(opts.indexOfFirst { it == dd.jumpBars } + 1).coerceAtLeast(0) % opts.size]
+                        onHint?.invoke("Beat Jump Deck ${"AB"[k]}: ${barsLabel(dd.jumpBars)}")
+                    }
+                    3 -> {
+                        dd.slipOn = !dd.slipOn
+                        onHint?.invoke(if (dd.slipOn) "SLIP ${"AB"[k]}: Scratchen, Rolls, Censor – danach geht es dort weiter, wo der Track ohne sie wäre" else "SLIP ${"AB"[k]} aus")
+                    }
+                    4 -> Dj.setLoopBeats(dd, dd.loopBeats / 2f)
+                    5 -> Dj.toggleLoop(dd)
+                    6 -> Dj.setLoopBeats(dd, dd.loopBeats * 2f)
+                    else -> {
+                        // RELOOP: letzten Loop wieder an und zu seinem Anfang springen
+                        if (dd.loopOut > dd.loopIn + 16) {
+                            dd.loopOn = true
+                            dd.seekTo = dd.loopIn
+                            if (dd.sync && dd.playing) dd.syncReq = true
+                        } else onHint?.invoke("Noch kein Loop gesetzt")
+                    }
                 }
             }
-            return
-        }
-        if (!down) {
-            // Hot Cue lange gehalten = löschen
-            return
-        }
-        when (row) {
-            0 -> hotPress(k, j)
-            1 -> when (j) {
-                0 -> hotPress(k, 3)
-                1 -> jump(dd, -1)
-                else -> jump(dd, 1)
+            2 -> {
+                if (sl == 7) {
+                    if (down) { dd.slipOn = !dd.slipOn; onHint?.invoke(if (dd.slipOn) "SLIP ${"AB"[k]} an" else "SLIP ${"AB"[k]} aus") }
+                    return
+                }
+                val rb = ROLLS[sl]
+                if (down) Dj.rollStart(dd, rb) else if (dd.rollBeats == rb) {
+                    // noch ein anderer Roll desselben Decks gedrückt? dann zu dem wechseln
+                    val other = (0 until padCount).firstOrNull { it != i && padDown[it] && padSpec(it).let { o -> o.deck == k && o.slot < 7 } }
+                    if (other != null) Dj.rollStart(dd, ROLLS[padSpec(other).slot]) else Dj.rollEnd(dd)
+                }
             }
-            else -> when (j) {
-                0 -> Dj.setLoopBeats(dd, dd.loopBeats / 2f)
-                1 -> Dj.toggleLoop(dd)
-                else -> Dj.setLoopBeats(dd, dd.loopBeats * 2f)
+            else -> {
+                if (sl == 3) { Dj.censorOn(dd, down); return }
+                if (!down) return
+                when (sl) {
+                    0 -> { Dj.echoOut(dd); onHint?.invoke(if (dd.echoReq) "ECHO OUT ${"AB"[k]}: Track stoppt, das Echo läuft im Takt aus" else "Echo ${"AB"[k]} aus") }
+                    1, 2 -> { Dj.brake(dd, sl == 2); if (!dd.playing) onHint?.invoke("Deck ${"AB"[k]} läuft nicht") }
+                    4, 5 -> {
+                        Dj.toggleSweep(dd, sl - 3)
+                        onHint?.invoke(when {
+                            dd.sweepMode == 0 -> "Filter zurück – Drop!"
+                            sl == 4 -> "BUILD ${"AB"[k]}: Hochpass steigt über ${dd.sweepBars.toInt()} Takte – nochmal tippen = Drop"
+                            else -> "SWEEP ${"AB"[k]}: Tiefpass schließt über ${dd.sweepBars.toInt()} Takte – nochmal tippen = auf"
+                        })
+                    }
+                    else -> {
+                        val one = sl == 7
+                        onHint?.invoke(if (one) "Schlag → Pad …" else "Loop → Pad …")
+                        Thread {
+                            val p = Dj.grabToPad(dd, 4f, one)
+                            post { onHint?.invoke(if (p < 0) "Kein freies Pad (1–12) oder kein Tempo" else if (one) "⚡ Pad ${p + 1}: Schlag aus Deck ${"AB"[k]} – im Reiter SAMPLER spielen" else "Pad ${p + 1}: Loop aus Deck ${"AB"[k]}, im Takt gewarpt – im Reiter SAMPLER starten") }
+                        }.start()
+                    }
+                }
             }
         }
     }
@@ -2241,15 +2350,15 @@ class DjView(context: Context) : View(context) {
     private fun hotPress(k: Int, h: Int) {
         val dd = Dj.decks[k]
         val now = SystemClock.uptimeMillis()
-        val slot = 16 + k * 4 + h
-        if (dd.hot[h] >= 0 && now - lastTap[slot] < 320) {
+        val slot = k * 8 + h
+        if (dd.hot[h] >= 0 && now - hotTap[slot] < 320) {
             // doppelt tippen löscht den Hot Cue
             Dj.hotCue(dd, h, true)
-            lastTap[slot] = 0
+            hotTap[slot] = 0
             onHint?.invoke("Hot Cue ${h + 1} (Deck ${"AB"[k]}) gelöscht")
             return
         }
-        lastTap[slot] = now
+        hotTap[slot] = now
         Dj.hotCue(dd, h, false)
     }
 
@@ -2280,7 +2389,9 @@ class DjView(context: Context) : View(context) {
 
     /** MIDI/außen: Pad-Anzeige blinken lassen. */
     fun flashSampler(p: Int) {
-        if (padMode == 1 && p in 0 until 12) padFlash[p] = 1f
+        if (padMode != 4 || p !in 0 until 12) return
+        val v = if (padsBig) p else p - samplerPage * 8
+        if (v in 0 until padCount) padFlash[v] = 1f
     }
 
     // ================================================================ Track-Editor (Wave-Editor fürs Deck)

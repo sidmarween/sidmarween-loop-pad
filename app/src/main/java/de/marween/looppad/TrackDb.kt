@@ -32,7 +32,7 @@ object TrackDb {
         var energy: Int = 0,
         var seconds: Double = 0.0,
         var cue: Double = -1.0,
-        val hot: DoubleArray = DoubleArray(4) { -1.0 },
+        val hot: DoubleArray = DoubleArray(8) { -1.0 },
         val crates: MutableSet<String> = LinkedHashSet(),
         var plays: Int = 0,
         var lastPlayed: Long = 0L,
@@ -68,7 +68,7 @@ object TrackDb {
                     o.optString("id"), o.optString("uri"), o.optString("title"),
                     o.optDouble("bpm", 0.0).toFloat(), o.optDouble("grid", 0.0), o.optInt("key", -1),
                     o.optDouble("keyConf", 0.0).toFloat(), o.optDouble("lufs", Double.NaN).toFloat(), o.optInt("energy", 0),
-                    o.optDouble("sec", 0.0), o.optDouble("cue", -1.0), DoubleArray(4) { k -> h?.optDouble(k, -1.0) ?: -1.0 },
+                    o.optDouble("sec", 0.0), o.optDouble("cue", -1.0), DoubleArray(8) { k -> h?.optDouble(k, -1.0) ?: -1.0 },
                     LinkedHashSet<String>().apply { o.optJSONArray("crates")?.let { c -> for (k in 0 until c.length()) add(c.optString(k)) } },
                     o.optInt("plays", 0), o.optLong("last", 0L), o.optLong("added", 0L), o.optBoolean("ok", false),
                     o.optInt("barOff", 0), o.optInt("phraseOff", 0)

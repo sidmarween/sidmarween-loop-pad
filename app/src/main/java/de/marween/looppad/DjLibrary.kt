@@ -43,7 +43,7 @@ object DjLibrary {
             out.add(Item(
                 o.optString("id"), f, o.optString("title"), o.optDouble("bpm", 120.0).toFloat(),
                 o.optDouble("grid", 0.0), o.optDouble("cue", 0.0),
-                DoubleArray(4) { k -> h?.optDouble(k, -1.0) ?: -1.0 }, o.optDouble("sec", 0.0), o.optInt("key", -1)
+                DoubleArray(8) { k -> h?.optDouble(k, -1.0) ?: -1.0 }, o.optDouble("sec", 0.0), o.optInt("key", -1)
             ))
         }
         return out.reversed()

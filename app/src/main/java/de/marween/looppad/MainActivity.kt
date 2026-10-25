@@ -1350,7 +1350,7 @@ class MainActivity : Activity() {
                 Dj.load(dd, Dj.fromMono(data, Engine.sampleRate), it.title, it.bpm)
                 dd.grid = it.grid * r
                 dd.cuePoint = it.cue * r
-                for (h in 0..3) dd.hot[h] = if (it.hot[h] >= 0) it.hot[h] * r else -1.0
+                for (h in dd.hot.indices) dd.hot[h] = if (h < it.hot.size && it.hot[h] >= 0) it.hot[h] * r else -1.0
                 dd.seekTo = dd.cuePoint
                 dd.libId = it.id
                 if (it.key >= 0) { dd.keyGen++; dd.key = it.key; dd.keyConf = 1f }
@@ -3104,7 +3104,7 @@ class MainActivity : Activity() {
                 }
                 if (t.key >= 0) { dd.keyGen++; dd.key = t.key; dd.keyConf = t.keyConf }
                 if (t.cue >= 0) { dd.cuePoint = t.cue * r; dd.seekTo = dd.cuePoint } else { dd.cuePoint = dd.grid; dd.seekTo = dd.grid }
-                for (h in 0..3) dd.hot[h] = if (t.hot[h] >= 0) t.hot[h] * r else -1.0
+                for (h in dd.hot.indices) dd.hot[h] = if (h < t.hot.size && t.hot[h] >= 0) t.hot[h] * r else -1.0
                 dd.colId = t.id
                 t.missing = false
                 if (!t.analyzed) {
@@ -3138,7 +3138,7 @@ class MainActivity : Activity() {
         if (!dd.loaded()) return
         val r = dd.srcRate.toDouble()
         t.cue = dd.cuePoint / r
-        for (h in 0..3) t.hot[h] = if (dd.hot[h] >= 0) dd.hot[h] / r else -1.0
+        for (h in t.hot.indices) t.hot[h] = if (h < dd.hot.size && dd.hot[h] >= 0) dd.hot[h] / r else -1.0
         t.bpm = dd.bpm
         t.grid = dd.grid / r
         if (dd.key >= 0) { t.key = dd.key; t.keyConf = dd.keyConf }
@@ -3210,7 +3210,7 @@ class MainActivity : Activity() {
         val dd = Dj.decks[k]
         if (dd.colId != null && dd.libId == null) { saveDeckCollection(k); hint("💾 Cue-Punkte in der Sammlung gespeichert"); return }
         val r = dd.srcRate.toDouble()
-        val hot = DoubleArray(4) { if (dd.hot[it] >= 0) dd.hot[it] / r else -1.0 }
+        val hot = DoubleArray(dd.hot.size) { if (dd.hot[it] >= 0) dd.hot[it] / r else -1.0 }
         val id = dd.libId
         if (id != null) {
             DjLibrary.update(this, id, dd.bpm, dd.grid / r, dd.cuePoint / r, hot, dd.key)

@@ -102,7 +102,7 @@ object Dj {
         @Volatile var scratching = false
         @Volatile var scratchTarget = 0.0
         @Volatile var cuePoint = 0.0
-        val hot = DoubleArray(4) { -1.0 }
+        val hot = DoubleArray(8) { -1.0 }
         @Volatile var loopOn = false
         @Volatile var loopIn = 0.0
         @Volatile var loopOut = 0.0
@@ -1159,7 +1159,7 @@ object Dj {
         d.bpm = bpm
         d.grid = grid
         d.cuePoint = grid
-        for (k in 0 until 4) d.hot[k] = -1.0
+        for (k in d.hot.indices) d.hot[k] = -1.0
         d.pos = grid
         d.seekTo = grid
         d.pitch = 0f
@@ -1373,7 +1373,7 @@ object Dj {
         d.highs = w.highs
         d.grid = d.grid * r
         d.cuePoint = d.cuePoint * r
-        for (h in 0..3) if (d.hot[h] >= 0) d.hot[h] = d.hot[h] * r
+        for (h in d.hot.indices) if (d.hot[h] >= 0) d.hot[h] = d.hot[h] * r
         d.loopIn = d.loopIn * r
         d.loopOut = d.loopOut * r
         val newPos = d.pos * r
