@@ -689,6 +689,79 @@ class MainActivity : Activity() {
         } catch (ignored: Exception) {}
     }
 
+    /** So viele Sekunden lädt ein Pad, wie der freie Speicher sicher hergibt (Song + Kopie fürs Tempo + Analyse). */
+    private fun memSeconds(rate: Int): Int {
+        System.gc()
+        val rt = Runtime.getRuntime()
+        val free = rt.maxMemory() - (rt.totalMemory() - rt.freeMemory())
+        return (free / (rate * 4.0 * 3.6)).toInt().coerceIn(30, Engine.MAX_IMPORT_SECONDS)
+    }
+
+    // ---------------------------------------------------------------- Musik-Sammlung (Ordner → katalogisiert)
+
+    private fun showMusicLibrary() {
+        TrackDb.load(this)
+        val all = TrackDb.all()
+        val done = all.count { it.analyzed }
+        val open = all.count { !it.analyzed && !it.missing }
+        val items = ArrayList<Pair<String, () -> Unit>>()
+        items.add("📁 Ordner hinzufügen – alle Songs darin werden aufgenommen" to { pickCollectionFolder() })
+        items.add("🎵 Einzelne Songs hinzufügen" to { pickCollectionFiles() })
+        if (all.isNotEmpty()) items.add("📋 Sammlung durchsuchen (BPM, Tonart, Crates) → ins Deck" to { showCollection(0) })
+        if (open > 0) items.add((if (colBatch) "⟳ Analyse läuft … ($open offen)" else "⟳ Analyse fortsetzen ($open offen)") to { startBatchAnalysis(); hint("Analyse läuft im Hintergrund – App offen lassen") })
+        ui().setTitle("💿 Musik-Sammlung · ${all.size} Songs · $done analysiert")
+            .setItems(items.map { it.first }.toTypedArray()) { _, w -> items[w].second() }
+            .setNegativeButton("Schließen", null)
+            .show()
+        if (all.isEmpty()) hint("Ordner wählen: alle Songs darin bekommen Tempo, Takt-Raster, Tonart und Lautheit – danach laden sie sofort synchron in Decks und Pads")
+    }
+
+    /** Song aus der Sammlung aufs Pad – mit gespeichertem Tempo und erstem Schlag, ohne neue Analyse. */
+    private fun pickCollectionForPad(p: Int) {
+        TrackDb.load(this)
+        val list = TrackDb.all().filter { !it.missing }.sortedBy { it.title.lowercase() }
+        if (list.isEmpty()) { showMusicLibrary(); return }
+        val labels = list.map { t ->
+            t.title + "\n   " + (if (t.analyzed && t.bpm > 0f) String.format(Locale.GERMANY, "%.1f BPM · %s · %s", t.bpm, Keys.camelot(t.key), Dj.fmt(t.seconds)) else "noch nicht analysiert")
+        }.toTypedArray()
+        ui().setTitle("Pad ${p + 1} · aus der Sammlung (${list.size})")
+            .setItems(labels) { _, w -> loadPadFromCollection(p, list[w]) }
+            .setNegativeButton("Abbrechen", null)
+            .show()
+    }
+
+    private fun loadPadFromCollection(p: Int, t: TrackDb.Track) {
+        val rate = Engine.sampleRate
+        Thread {
+            try { padProgress(p) {
+                LoadProgress.stage(0f, 0.65f)
+                val secs = memSeconds(rate)
+                val data = AudioFiles.decode(this, Uri.parse(t.uri), rate, secs)
+                if (Engine.padOneShot[p]) {
+                    Engine.importLoop(p, data)
+                    runOnUiThread { hint("Pad ${p + 1}: ${t.title} (⚡ One Shot)") }
+                } else if (Engine.autoBeatmatch && t.analyzed && t.bpm > 0f) {
+                    val off = (t.grid * rate).toInt().coerceIn(0, max(0, data.size - 2))
+                    val usable = (data.size - off).toFloat() / rate
+                    var bars = kotlin.math.floor(usable * t.bpm / 240f)
+                    if (usable <= 45f) { var pb = 1f; while (pb * 2 <= bars && pb < 32f) pb *= 2; bars = pb }
+                    val info = Warp.Info(t.bpm, max(1f, bars.coerceAtMost(1024f)), "Sammlung", off, off > 0)
+                    val desc = Engine.importClip(p, data, info)
+                    runOnUiThread { hint("Pad ${p + 1}: ${t.title} · $desc · antippen startet ihn auf der Eins") }
+                } else {
+                    val desc = clipToPad(p, data, rate, t.title)
+                    runOnUiThread { hint("Pad ${p + 1}: ${t.title} · $desc") }
+                }
+            } } catch (e: OutOfMemoryError) {
+                runOnUiThread { toast("Song zu lang für den Speicher") }
+            } catch (e: SecurityException) {
+                runOnUiThread { toast("Kein Zugriff mehr auf „${t.title}“ – Ordner neu hinzufügen") }
+            } catch (e: Exception) {
+                runOnUiThread { toast("Laden fehlgeschlagen: ${e.message ?: e}") }
+            }
+        }.start()
+    }
+
     /** Lade-Fortschritt am Pad anzeigen, solange [block] läuft. */
     private fun <T> padProgress(p: Int, block: () -> T): T {
         Engine.padLoadText[p] = "lädt"
@@ -2238,6 +2311,7 @@ class MainActivity : Activity() {
                 applyDjOrientation()
             }) else emptyList()) + listOf(
             "💾 Projekt & Dateien" to { showMenuGroup(0) },
+            "💿 Musik-Sammlung: Ordner laden → automatisch katalogisiert & analysiert" to { showMusicLibrary() },
             "🎙 Aufnahme & Wiedergabe" to { showMenuGroup(1) },
             "🎨 Aussehen: Designs, Schriften, Ansicht" to { showMenuGroup(2) },
             "🔌 Audio, Latenz & MIDI" to { showMenuGroup(3) },
@@ -4274,11 +4348,7 @@ class MainActivity : Activity() {
                 Thread {
                     try { padProgress(pad) {
                         LoadProgress.stage(0f, 0.6f)
-                        // so viel laden, wie der freie Speicher sicher hergibt (Song + Kopie fürs Tempo + Analyse)
-                        System.gc()
-                        val rt = Runtime.getRuntime()
-                        val free = rt.maxMemory() - (rt.totalMemory() - rt.freeMemory())
-                        val secs = (free / (rate * 4.0 * 3.6)).toInt().coerceIn(30, Engine.MAX_IMPORT_SECONDS)
+                        val secs = memSeconds(rate)
                         val samples = AudioFiles.decode(this, uri, rate, secs)
                         if (samples.size >= rate.toLong() * secs - rate && secs < Engine.MAX_IMPORT_SECONDS)
                             runOnUiThread { hint("Speicher knapp: auf ${secs / 60}:${String.format(Locale.GERMANY, "%02d", secs % 60)} min gekürzt – andere Pads leeren gibt mehr Platz") }
@@ -4417,11 +4487,13 @@ class MainActivity : Activity() {
             .setItems(arrayOf(
                 "📂 Datei (WAV / MP3) – Tempo wird erkannt und gewarpt",
                 "📚 Bibliothek & eigene Aufnahmen",
+                "💿 Aus der Musik-Sammlung (schon analysiert – lädt schneller)",
                 if (shot) "Modus: ⚡ ONE SHOT  →  auf ∞ LOOP" else "Modus: ∞ LOOP  →  auf ⚡ ONE SHOT"
             )) { _, w ->
                 when (w) {
                     0 -> pickImport()
                     1 -> showLibrary(p)
+                    2 -> pickCollectionForPad(p)
                     else -> {
                         Engine.setPadMode(p, !shot)
                         showImportMenu(p)
