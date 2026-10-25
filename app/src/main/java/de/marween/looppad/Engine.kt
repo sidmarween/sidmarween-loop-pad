@@ -359,6 +359,9 @@ object Engine {
 
     fun masterFrames(): Long = masterLen
 
+    /** Zuletzt gerenderter Ausgabe-Frame (Zeitbasis der DJ-Automationen). */
+    fun outFrameNow(): Long = written
+
     /** Schlag-Phase (0..1) des Master-Rasters an einem Ausgabe-Frame, oder -1 ohne Tempo. */
     fun beatPhaseAt(frame: Long): Double {
         val m = masterLen

@@ -156,6 +156,32 @@ object Dj {
         internal var rollSaveIn = 0.0
         internal var rollSaveOut = 0.0
 
+        /** DJ-Effekte: 1 = Brake (Plattenstopp), 2 = Backspin – laufen von selbst aus und halten das Deck an. */
+        @Volatile var stopFx = 0
+        @Volatile var stopFxReq = 0
+        @Volatile var brakeSec = 1.2f
+        internal var stopT = 0.0
+        internal var stopLen = 1.0
+        /** CENSOR: rückwärts, solange gedrückt (mit Slip weiter). */
+        @Volatile var censor = false
+        /** Echo-Out: Track hört auf, das Echo läuft im Takt aus. */
+        @Volatile var echoReq = false
+        @Volatile var echoOn = false
+        internal var echoL = FloatArray(0)
+        internal var echoR = FloatArray(0)
+        internal var echoW = 0
+        internal var echoDry = 1f
+        internal var echoIn = 1f
+        internal var echoCut = 0
+        internal var echoHpL = 0f
+        internal var echoHpR = 0f
+        internal var echoLpL = 0f
+        internal var echoLpR = 0f
+        /** Filter-Sweep: 1 = BUILD (Hochpass steigt), 2 = SWEEP (Tiefpass schließt), über [sweepBars] Takte. */
+        @Volatile var sweepMode = 0
+        @Volatile var sweepBars = 8f
+        @Volatile var sweepStart = 0L
+
         /** Hörbare Tonart: mit Key-Shift und (ohne Keylock) der Tonhöhenänderung durchs Tempo. */
         fun effKey(): Int {
             if (key < 0) return -1
@@ -225,6 +251,13 @@ object Dj {
             val bl = d.bufL
             val br = d.bufR
             renderDeck(d, bl, br, n, w, sr)
+            // Filter-Sweep im Takt (BUILD hoch / SWEEP zu)
+            if (d.sweepMode != 0 && d.bpm > 0f) {
+                val len = sr * 240.0 / max(1f, d.effBpm()) * d.sweepBars
+                val t = ((w - d.sweepStart) / len).coerceIn(0.0, 1.0).toFloat()
+                val e = t * t * (3 - 2 * t)
+                d.filter = if (d.sweepMode == 1) 0.5f + 0.43f * e else 0.5f - 0.44f * e
+            }
             // EQ (Bass < 250 Hz, Höhen > 3 kHz, Mitten = Rest) – neutral exakt durchlässig
             val gl = eqGain(d.lo); val gm = eqGain(d.mid); val gh = eqGain(d.hi)
             val eqOn = abs(gl - 1f) > 0.01f || abs(gm - 1f) > 0.01f || abs(gh - 1f) > 0.01f
@@ -278,6 +311,54 @@ object Dj {
                 val mix = min(1f, amt * 1.6f)
                 d.fxL!!.process(bl, n, w, t, d.fxX, 0.55f, true, mix, Fx.P1_DEFAULT[t], Fx.P2_DEFAULT[t], Engine.masterFrames(), 0L, bl)
                 d.fxR!!.process(br, n, w, t, d.fxX, 0.55f, true, mix, Fx.P1_DEFAULT[t], Fx.P2_DEFAULT[t], Engine.masterFrames(), 0L, br)
+            }
+            // Echo-Out: Echo (punktierte Achtel) auf den Kanal, das Original blendet in ¼ Schlag aus
+            if (d.echoReq) {
+                d.echoReq = false
+                val sz = sr * 3
+                if (d.echoL.size != sz) { d.echoL = FloatArray(sz); d.echoR = FloatArray(sz) } else { java.util.Arrays.fill(d.echoL, 0f); java.util.Arrays.fill(d.echoR, 0f) }
+                d.echoW = 0
+                d.echoDry = 1f
+                d.echoIn = 1f
+                d.echoCut = max(64, (sr * 60.0 / max(40f, d.effBpm()) * 0.25).toInt())
+                d.echoOn = true
+            }
+            if (d.echoOn) {
+                val beat = sr * 60.0 / max(40f, if (d.bpm > 0f) d.effBpm() else 120f)
+                val dl = (beat * 0.75).toInt().coerceIn(64, d.echoL.size - 1)
+                val sz = d.echoL.size
+                val fb = 0.6f
+                val aH = 0.03f
+                val aL = 0.35f
+                var tail = 0f
+                val fadeStep = 1f / max(1, d.echoCut)
+                for (i in 0 until n) {
+                    if (d.echoCut > 0) {
+                        d.echoCut--
+                        d.echoDry = max(0f, d.echoDry - fadeStep)
+                        if (d.echoCut == 0) { d.echoIn = 0f; if (d.playing) { d.playing = false; d.slipTrack = false } }
+                    } else if (d.playing) d.echoDry = min(1f, d.echoDry + 0.002f)
+                    var ri = d.echoW - dl
+                    if (ri < 0) ri += sz
+                    var el = d.echoL[ri]
+                    var er = d.echoR[ri]
+                    // Rückkopplung dünner und dunkler (klingt weg statt zu matschen)
+                    d.echoHpL += aH * (el - d.echoHpL); d.echoHpR += aH * (er - d.echoHpR)
+                    el -= d.echoHpL; er -= d.echoHpR
+                    d.echoLpL += aL * (el - d.echoLpL); d.echoLpR += aL * (er - d.echoLpR)
+                    el = d.echoLpL; er = d.echoLpR
+                    val xl = bl[i]
+                    val xr = br[i]
+                    d.echoL[d.echoW] = xl * d.echoIn + el * fb
+                    d.echoR[d.echoW] = xr * d.echoIn + er * fb
+                    d.echoW++
+                    if (d.echoW >= sz) d.echoW = 0
+                    bl[i] = xl * d.echoDry + el
+                    br[i] = xr * d.echoDry + er
+                    tail = max(tail, abs(el) + abs(er))
+                    if (abs(bl[i]) > peak) peak = abs(bl[i])
+                }
+                if (d.echoIn == 0f && d.echoCut == 0 && tail < 1e-4f) { d.echoOn = false; d.echoDry = 1f }
             }
             val fg = d.fader * xGain(d.idx)
             for (i in 0 until n) {
@@ -337,9 +418,27 @@ object Dj {
         }
         // SLIP: unsichtbarer Abspielkopf läuft im normalen Tempo weiter
         if (d.slipTrack && playing) d.slipPos = min((len - 2).toDouble(), d.slipPos + base * ratio * n)
-        val rate = if (d.scratching) d.scratchVel else base * ratio * (1.0 + d.bend)
+        var rate = if (d.scratching) d.scratchVel else base * ratio * (1.0 + d.bend)
+        // Brake / Backspin: Tempo läuft von selbst gegen null (wie Platte anhalten / zurückdrehen)
+        if (d.stopFxReq != 0) {
+            d.stopFx = d.stopFxReq
+            d.stopFxReq = 0
+            d.stopT = 0.0
+            d.stopLen = sr * (if (d.stopFx == 1) d.brakeSec.toDouble() else 1.4)
+        }
+        if (d.stopFx != 0 && !d.scratching) {
+            val t = (d.stopT / d.stopLen).coerceIn(0.0, 1.0)
+            val m = if (d.stopFx == 1) (1.0 - t) * (1.0 - t * 0.35) else -3.2 * (1.0 - t) * (1.0 - t)
+            rate *= m
+            d.stopT += n
+            if (t >= 1.0) {
+                d.stopFx = 0
+                d.playing = false
+                d.slipTrack = false
+            }
+        } else if (d.censor && !d.scratching) rate = -rate
         // Keylock / Key-Shift: Tempo und Tonhöhe getrennt (Körner-Verfahren mit Phasen-Suche)
-        if (!d.scratching && (d.keylock || d.keyShift != 0)) {
+        if (!d.scratching && d.stopFx == 0 && !d.censor && (d.keylock || d.keyShift != 0)) {
             val pf = Keys.factor(d.keyShift.toDouble())
             val speed = if (d.keylock) base * pf else rate * pf
             if (abs(speed - rate) > 1e-6) {
@@ -629,6 +728,104 @@ object Dj {
         }
     }
 
+    // ---------------------------------------------------------------- DJ-Effekte
+
+    fun echoOut(d: Deck) {
+        if (!d.loaded()) return
+        if (d.echoOn && d.echoCut == 0) { d.echoOn = false; d.echoDry = 1f; return }
+        d.echoReq = true
+    }
+
+    fun brake(d: Deck, backspin: Boolean) {
+        if (!d.loaded() || !d.playing) return
+        d.stopFxReq = if (backspin) 2 else 1
+    }
+
+    fun censorOn(d: Deck, on: Boolean) {
+        if (!d.loaded()) return
+        if (on) {
+            if (!d.slipTrack && d.playing) { d.slipPos = d.pos; d.slipTrack = true }
+            d.censor = true
+        } else {
+            d.censor = false
+            if (d.slipTrack && d.rollBeats <= 0f && !d.scratching) { d.slipTrack = false; d.seekTo = d.slipPos }
+        }
+    }
+
+    /** Sweep starten bzw. (nochmal) beenden: BUILD-Ende = Filter schlagartig auf (der „Drop“). */
+    fun toggleSweep(d: Deck, mode: Int) {
+        if (!d.loaded()) return
+        if (d.sweepMode == mode) { d.sweepMode = 0; d.filter = 0.5f; return }
+        d.sweepMode = mode
+        d.sweepStart = Engine.outFrameNow()
+    }
+
+    fun stopAllFx(d: Deck) {
+        d.sweepMode = 0
+        d.filter = 0.5f
+        d.echoOn = false
+        d.echoDry = 1f
+        d.censor = false
+        d.stopFx = 0
+        d.fxAmt = 0f
+        d.fxOn = false
+    }
+
+    /**
+     * Remix-Deck: Ausschnitt des laufenden Tracks auf ein freies Pad – als Loop ([bars] Takte ab
+     * dem aktuellen Takt bzw. der aktive Loop) synchron ins Pad-Raster gewarpt, oder als ⚡ One-Shot.
+     * Liefert das Pad (oder -1).
+     */
+    fun grabToPad(d: Deck, bars: Float, oneShot: Boolean): Int {
+        val data = d.data ?: return -1
+        if (!d.loaded() || d.bpm <= 0f) return -1
+        val p = (0 until 12).firstOrNull { !Engine.hasLoop(it) } ?: return -1
+        val bf = d.beatFrames()
+        val start: Double
+        val lenF: Double
+        val barsOut: Float
+        if (d.loopOn && !oneShot) {
+            start = d.loopIn
+            lenF = d.loopOut - d.loopIn
+            barsOut = (lenF / (bf * 4)).toFloat()
+        } else if (oneShot) {
+            start = snapBeat(d, d.pos - bf * 0.25)
+            lenF = bf
+            barsOut = 0.25f
+        } else {
+            val bar = floor(barAt(d, d.pos))
+            start = d.grid + (bar * 4 + d.barOffset) * bf
+            lenF = bf * 4 * bars
+            barsOut = bars
+        }
+        val er = Engine.sampleRate
+        val ch = d.ch
+        val len = d.len
+        fun mono(pos: Double): Float {
+            val i0 = pos.toInt()
+            if (i0 < 0 || i0 + 1 >= len) return 0f
+            val fr = (pos - i0).toFloat()
+            val a = if (ch == 2) (data[2 * i0] + data[2 * i0 + 1]) / 65536f else data[i0] / 32768f
+            val b = if (ch == 2) (data[2 * i0 + 2] + data[2 * i0 + 3]) / 65536f else data[i0 + 1] / 32768f
+            return a + (b - a) * fr
+        }
+        val step = d.srcRate.toDouble() / er
+        val outN = (lenF / step).toInt()
+        if (outN < 64) return -1
+        val clip = FloatArray(outN) { mono(start + it * step) }
+        val preN = (er / 20)
+        val pre = FloatArray(preN) { mono(start - (preN - it) * step) }
+        Engine.padOneShot[p] = oneShot
+        if (oneShot) {
+            Engine.importLoop(p, clip)
+        } else {
+            Engine.importClip(p, clip, Warp.Info(d.bpm, barsOut, "DJ"), pre)
+            Engine.padSyncStart[p] = true
+        }
+        Engine.setPadName(p, d.title.take(18) + if (oneShot) " ⚡" else " ${if (barsOut >= 1f) barsOut.toInt().toString() else barsOut.toString()}T")
+        return p
+    }
+
     /** Tonart eines geladenen Decks im Hintergrund erkennen. */
     fun detectKeyAsync(d: Deck, then: (() -> Unit)? = null) {
         val gen = ++d.keyGen
@@ -671,6 +868,8 @@ object Dj {
     fun togglePlay(d: Deck) {
         if (!d.loaded()) return
         d.gReset = true
+        d.stopFx = 0
+        d.stopFxReq = 0
         if (!d.playing && d.sync) d.syncReq = true
         d.playing = !d.playing
     }

@@ -449,7 +449,7 @@ class DjView(context: Context) : View(context) {
         val fxName = Fx.NAMES[dk.fxType.coerceIn(0, Fx.COUNT - 1)]
         drawTop(c, tops[0], 0, "DECK " + "AB"[focus], true, focusCol)
         drawTop(c, tops[1], 1, fxName, dk.fxAmt > 0.02f, s.accent)
-        drawTop(c, tops[2], 2, when (padMode) { 0 -> "CUES"; 2 -> "PERFORM"; else -> "SAMPLER" }, padMode != 0, s.accent)
+        drawTop(c, tops[2], 2, when (padMode) { 0 -> "CUES"; 2 -> "PERFORM"; 3 -> "DJ FX"; else -> "SAMPLER" }, padMode != 0, s.accent)
         for (k in 0..1) {
             val dd = Dj.decks[k]
             val col = if (k == 0) s.colA else s.colB
@@ -1579,6 +1579,25 @@ class DjView(context: Context) : View(context) {
                 else -> "TAP" to false
             }
         }
+        if (padMode == 3) {
+            return when (row) {
+                0 -> when (j) {
+                    0 -> "ECHO OUT" to dd.echoOn
+                    1 -> "BRAKE" to (dd.stopFx == 1)
+                    else -> "BACKSPIN" to (dd.stopFx == 2)
+                }
+                1 -> when (j) {
+                    0 -> "BUILD ↑ ${dd.sweepBars.toInt()}T" to (dd.sweepMode == 1)
+                    1 -> "SWEEP ↓ ${dd.sweepBars.toInt()}T" to (dd.sweepMode == 2)
+                    else -> "CENSOR" to dd.censor
+                }
+                else -> when (j) {
+                    0 -> (if (dd.loopOn) "LOOP → PAD" else "4T → PAD") to false
+                    1 -> "⚡ → PAD" to false
+                    else -> "FX STOP" to false
+                }
+            }
+        }
         if (padMode == 2) {
             return when (row) {
                 0 -> when (j) {
@@ -2016,8 +2035,9 @@ class DjView(context: Context) : View(context) {
                 onHint?.invoke("Effekt Deck ${"AB"[focus]}: ${Fx.NAMES[dd.fxType]} – auf der XY-Fläche spielen")
             }
             2 -> {
-                padMode = when (padMode) { 0 -> 2; 2 -> 1; else -> 0 }
+                padMode = when (padMode) { 0 -> 2; 2 -> 3; 3 -> 1; else -> 0 }
                 if (padMode == 2) onHint?.invoke("Pads: PERFORM – Beat Jump (Weite in der Mitte), Loop Rolls 1/16 … 1 Takt (halten), SLIP")
+                else if (padMode == 3) onHint?.invoke("Pads: FX – Echo-Out, Brake, Backspin, Build/Sweep, Censor (halten), Loop/Schlag → Pad")
                 else onHint?.invoke(if (padMode == 0) "Pads: Hot Cues, Beat-Jump und Loops je Deck" else "Pads: Sampler – die 12 Pads der App (leeres Pad antippen = Audio laden, spielt synchron ab dem Startpunkt), darunter Transport, ACID, DRUM, Laden, Mikro, Tap")
             }
         }
@@ -2117,6 +2137,32 @@ class DjView(context: Context) : View(context) {
         val dd = Dj.decks[k]
         if (!dd.loaded()) {
             if (down) onLoad?.invoke(k)
+            return
+        }
+        if (padMode == 3) {
+            if (row == 1 && j == 2) { Dj.censorOn(dd, down); return }
+            if (!down) return
+            when {
+                row == 0 && j == 0 -> { Dj.echoOut(dd); onHint?.invoke(if (dd.echoReq) "ECHO OUT ${"AB"[k]}: Track stoppt, das Echo läuft im Takt aus" else "Echo ${"AB"[k]} aus") }
+                row == 0 -> { Dj.brake(dd, j == 2); if (!dd.playing) onHint?.invoke("Deck ${"AB"[k]} läuft nicht") }
+                row == 1 -> {
+                    Dj.toggleSweep(dd, j + 1)
+                    onHint?.invoke(when {
+                        dd.sweepMode == 0 -> "Filter zurück – Drop!"
+                        j == 0 -> "BUILD ${"AB"[k]}: Hochpass steigt über ${dd.sweepBars.toInt()} Takte – nochmal tippen = Drop"
+                        else -> "SWEEP ${"AB"[k]}: Tiefpass schließt über ${dd.sweepBars.toInt()} Takte – nochmal tippen = auf"
+                    })
+                }
+                row == 2 && j < 2 -> {
+                    val one = j == 1
+                    onHint?.invoke(if (one) "Schlag → Pad …" else "Loop → Pad …")
+                    Thread {
+                        val p = Dj.grabToPad(dd, 4f, one)
+                        post { onHint?.invoke(if (p < 0) "Kein freies Pad (1–12) oder kein Tempo" else if (one) "⚡ Pad ${p + 1}: Schlag aus Deck ${"AB"[k]} – unter SAMPLER spielen" else "Pad ${p + 1}: Loop aus Deck ${"AB"[k]}, im Takt gewarpt – unter SAMPLER starten") }
+                    }.start()
+                }
+                else -> { Dj.stopAllFx(dd); onHint?.invoke("Alle Effekte Deck ${"AB"[k]} aus") }
+            }
             return
         }
         if (padMode == 2) {
