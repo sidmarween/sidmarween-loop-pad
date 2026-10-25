@@ -217,10 +217,45 @@ object Warp {
      * [pre] = Audio direkt VOR x[0] im Original (bei Song-Ausschnitten): das Loop-Ende blendet hinein,
      * damit der Übergang Ende → Anfang ohne Knacks ist. Ohne [pre] gilt x als nahtloser Loop.
      */
-    fun stretchBeats(x: FloatArray, outLen: Int, sr: Int, bars: Float, pre: FloatArray? = null): FloatArray {
+    /**
+     * Wie [stretchBeats], aber für ganze Songs speichersparend: in Stücken zu 8 Takten gedehnt und direkt
+     * in das Ergebnis geschrieben. Passt das Tempo schon, wird gar nicht kopiert.
+     */
+    fun stretchBeatsLong(x: FloatArray, outLen: Int, sr: Int, bars: Float, pre: FloatArray? = null): FloatArray {
+        val n = x.size
+        if (n < sr * 60 || bars < 16f || outLen <= 1) return stretchBeats(x, outLen, sr, bars, pre)
+        if (abs(n.toDouble() / outLen - 1.0) < 0.0015) return seamEnd(if (n == outLen) x else x.copyOf(outLen), pre, sr)
+        val out = FloatArray(outLen)
+        val chunk = 8f
+        var b0 = 0f
+        val ramp = max(16, sr / 1000)
+        while (b0 < bars - 1e-3f) {
+            val b1 = min(bars, b0 + chunk)
+            val s0 = (b0 / bars * n).toInt()
+            val s1 = min(n, (b1 / bars * n).toInt())
+            val o0 = (b0.toDouble() / bars * outLen).toInt()
+            val o1 = min(outLen, (b1.toDouble() / bars * outLen).toInt())
+            if (s1 - s0 > 1 && o1 - o0 > 1) {
+                val seg = x.copyOfRange(s0, s1)
+                val segPre = if (s0 > 0) x.copyOfRange(max(0, s0 - sr / 20), s0) else pre
+                val r = stretchBeats(seg, o1 - o0, sr, b1 - b0, segPre, seam = false)
+                val len = min(r.size, o1 - o0)
+                for (j in 0 until len) {
+                    var g = 1f
+                    if (o0 > 0 && j < ramp) g = (j + 1f) / (ramp + 1f)
+                    if (o1 < outLen && j >= len - ramp) g *= (len - j).toFloat() / (ramp + 1f)
+                    out[o0 + j] = r[j] * g
+                }
+            }
+            b0 = b1
+        }
+        return seamEnd(out, pre, sr)
+    }
+
+    fun stretchBeats(x: FloatArray, outLen: Int, sr: Int, bars: Float, pre: FloatArray? = null, seam: Boolean = true): FloatArray {
         val n = x.size
         if (outLen <= 1 || n < 2) return FloatArray(max(1, outLen))
-        if (abs(n.toDouble() / outLen - 1.0) < 0.0015) return seamEnd(fitLen(x, outLen), pre, sr)
+        if (abs(n.toDouble() / outLen - 1.0) < 0.0015) return fitLen(x, outLen).let { if (seam) seamEnd(it, pre, sr) else it }
         var slices = max(1, (bars * 16f).roundToInt()).coerceAtMost(4096)
         // Stücke nicht kürzer als ~45 ms (dann 1/8, 1/4 …)
         while (slices > 1 && n / slices < sr * 0.045) slices /= 2
@@ -244,7 +279,7 @@ object Warp {
         val out = FloatArray(outLen)
         assemble(high, bounds, cutsHi, slices, outLen, sr, pre != null, hit[0], out)
         assemble(low, bounds, cutsLo, slices, outLen, sr, pre != null, hit0Lo, out)
-        return seamEnd(out, pre, sr)
+        return if (seam) seamEnd(out, pre, sr) else out
     }
 
     /** Stücke zwischen den Schnitten dehnen und genau auf ihre Rasterplätze legen (addiert in [out]). */

@@ -146,7 +146,10 @@ object AudioFiles {
             c.configure(fmt, null, null, 0)
             c.start()
 
-            val list = FloatList(rate * 4)
+            // Länge vorab schätzen: kein mehrfaches Verdoppeln des Puffers (spart bei Songs viel Speicher)
+            val durUs = try { if (fmt.containsKey(MediaFormat.KEY_DURATION)) fmt.getLong(MediaFormat.KEY_DURATION) else 0L } catch (e: Exception) { 0L }
+            val est = if (durUs > 0) (durUs * rate / 1_000_000L + rate).coerceAtMost(rate.toLong() * maxSeconds + rate) else rate * 4L
+            val list = FloatList(est.toInt().coerceAtLeast(rate))
             val info = MediaCodec.BufferInfo()
             var inputDone = false
             var outputDone = false
@@ -209,7 +212,8 @@ object AudioFiles {
                 }
             }
             if (list.size == 0) throw IllegalStateException("Datei enthält kein Audio")
-            return resample(list.toArray(), rate, targetRate)
+            if (rate == targetRate) return if (list.size == list.data.size) list.data else list.toArray()
+            return resample(list.data, list.size, rate, targetRate)
         } finally {
             try { codec?.stop() } catch (ignored: Exception) {}
             try { codec?.release() } catch (ignored: Exception) {}
@@ -217,15 +221,18 @@ object AudioFiles {
         }
     }
 
-    private fun resample(src: FloatArray, from: Int, to: Int): FloatArray {
-        if (from == to || src.isEmpty()) return src
-        val outLen = (src.size.toLong() * to / from).toInt()
+    private fun resample(src: FloatArray, from: Int, to: Int): FloatArray = resample(src, src.size, from, to)
+
+    private fun resample(src: FloatArray, n: Int, from: Int, to: Int): FloatArray {
+        if (from == to || n == 0) return if (n == src.size) src else src.copyOf(n)
+        val outLen = (n.toLong() * to / from).toInt()
         val out = FloatArray(outLen)
         val step = from.toDouble() / to
         for (i in 0 until outLen) {
             val p = i * step
             val i0 = p.toInt()
-            val i1 = min(i0 + 1, src.size - 1)
+            if (i0 >= n) break
+            val i1 = min(i0 + 1, n - 1)
             val fr = (p - i0).toFloat()
             out[i] = src[i0] + (src[i1] - src[i0]) * fr
         }

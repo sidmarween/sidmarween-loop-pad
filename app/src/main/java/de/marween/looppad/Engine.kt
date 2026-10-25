@@ -4542,13 +4542,14 @@ object Engine {
             val o = if (o0 > 0) max(0, Warp.onsetStart(src, o0, sampleRate) - sampleRate / 3000) else 0
             val want = (info.bars * 240.0 / info.bpm * sampleRate).toLong().toInt()
             val e = min(src.size, o + max(2, want))
-            src.copyOfRange(o, e).let { if (it.size < want) it.copyOf(want) else it }
+            if (o == 0 && e == src.size && src.size >= want) src
+            else src.copyOfRange(o, e).let { if (it.size < want) it.copyOf(want) else it }
         } else src
         // Audio vor dem Schnitt: das Loop-Ende blendet hinein (kein Knacks, keine Lücke auf der Eins)
         val bodyStart = if (info.cut) (info.offset.coerceIn(0, max(0, src.size - 2)).let { if (it > 0) max(0, Warp.onsetStart(src, it, sampleRate) - sampleRate / 3000) else 0 }) else 0
         val pre = preIn ?: if (info.cut && bodyStart > 0) src.copyOfRange(max(0, bodyStart - sampleRate / 20), bodyStart) else null
         // BEATS-Warp: jeder Schlag landet exakt auf seinem 1/16-Platz (vorher WSOLA: bis zu ~20 ms daneben = Holpern)
-        val data = Warp.stretchBeats(body, target, sampleRate, info.bars, pre)
+        val data = Warp.stretchBeatsLong(body, target, sampleRate, info.bars, pre)
         val loop = Loop(data)
         loop.src = body
         loop.srcPre = pre
@@ -4581,7 +4582,7 @@ object Engine {
                 if (m <= 0L) return@Thread
                 val target = max(64L, (l.warpBars * m).toLong()).toInt()
                 if (target == l.data.size) continue
-                val data = Warp.stretchBeats(src, target, sampleRate, l.warpBars, l.srcPre)
+                val data = Warp.stretchBeatsLong(src, target, sampleRate, l.warpBars, l.srcPre)
                 if (gen != warpGen) return@Thread
                 val nl = cloneLoop(l, data)
                 nl.muted = l.muted

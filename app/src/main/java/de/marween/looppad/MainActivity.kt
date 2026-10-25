@@ -4210,7 +4210,14 @@ class MainActivity : Activity() {
                 val rate = Engine.sampleRate
                 Thread {
                     try {
-                        val samples = AudioFiles.decode(this, uri, rate, Engine.MAX_IMPORT_SECONDS)
+                        // so viel laden, wie der freie Speicher sicher hergibt (Song + Kopie fürs Tempo + Analyse)
+                        System.gc()
+                        val rt = Runtime.getRuntime()
+                        val free = rt.maxMemory() - (rt.totalMemory() - rt.freeMemory())
+                        val secs = (free / (rate * 4.0 * 3.6)).toInt().coerceIn(30, Engine.MAX_IMPORT_SECONDS)
+                        val samples = AudioFiles.decode(this, uri, rate, secs)
+                        if (samples.size >= rate.toLong() * secs - rate && secs < Engine.MAX_IMPORT_SECONDS)
+                            runOnUiThread { hint("Speicher knapp: auf ${secs / 60}:${String.format(Locale.GERMANY, "%02d", secs % 60)} min gekürzt – andere Pads leeren gibt mehr Platz") }
                         if (Engine.padOneShot[pad]) {
                             Engine.importLoop(pad, samples)
                             runOnUiThread { toast("Pad ${pad + 1}: Import fertig") }
