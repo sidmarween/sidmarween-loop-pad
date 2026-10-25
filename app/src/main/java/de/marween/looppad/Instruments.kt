@@ -129,6 +129,12 @@ object InstState {
         /** Halten: der Schritt verlängert die Note des vorigen Schritts. */
         val tie = BooleanArray(MAX)
         val vel = FloatArray(MAX) { 1f }
+        /** Akkord je Note: 0 = Akkord-Einstellung der Spur, k > 0 = synChordIv[k − 1]. */
+        val chd = IntArray(MAX)
+        /** Arpeggiator: 0 aus, 1 auf, 2 ab, 3 auf-ab, 4 zufällig · Rate 0 = 1/8, 1 = 1/16, 2 = 1/32 · Oktaven 1–3. */
+        @Volatile var arp = 0
+        @Volatile var arpRate = 1
+        @Volatile var arpOct = 1
         @Volatile var len = 16
         @Volatile var on = true
         @Volatile var fx = true
@@ -151,7 +157,7 @@ object InstState {
         fun volNow() = volAuto.let { if (it.isNaN()) vol else it }
         fun clear() {
             java.util.Arrays.fill(gate, false); java.util.Arrays.fill(tie, false)
-            java.util.Arrays.fill(semi, 0); java.util.Arrays.fill(vel, 1f)
+            java.util.Arrays.fill(semi, 0); java.util.Arrays.fill(vel, 1f); java.util.Arrays.fill(chd, 0)
         }
         fun hasNotes() = (0 until len).any { gate[it] }
         fun soundDefaults(kind: Int) {
@@ -170,6 +176,8 @@ object InstState {
             j.put("len", len); j.put("on", on); j.put("fx", fx); j.put("oct", oct); j.put("wave", wave); j.put("chord", chord)
             j.put("cut", cut.toDouble()); j.put("res", res.toDouble()); j.put("atk", atk.toDouble()); j.put("rel", rel.toDouble())
             j.put("vol", vol.toDouble()); j.put("detune", detune.toDouble()); j.put("env", env.toDouble())
+            j.put("chd", JSONArray().apply { chd.forEach { put(it) } })
+            j.put("arp", arp); j.put("arpRate", arpRate); j.put("arpOct", arpOct)
             return j
         }
         fun fromJson(j: JSONObject) {
@@ -182,6 +190,8 @@ object InstState {
             oct = j.optInt("oct", 0); wave = j.optInt("wave", 2); chord = j.optInt("chord", 0)
             cut = j.optDouble("cut", 0.55).toFloat(); res = j.optDouble("res", 0.25).toFloat(); atk = j.optDouble("atk", 0.05).toFloat()
             rel = j.optDouble("rel", 0.35).toFloat(); vol = j.optDouble("vol", 0.6).toFloat(); detune = j.optDouble("detune", 0.35).toFloat(); env = j.optDouble("env", 0.4).toFloat()
+            j.optJSONArray("chd")?.let { a -> for (k in 0 until min(MAX, a.length())) chd[k] = a.optInt(k) }
+            arp = j.optInt("arp", 0); arpRate = j.optInt("arpRate", 1); arpOct = j.optInt("arpOct", 1)
         }
     }
 
@@ -196,6 +206,12 @@ object InstState {
     val synGate: BooleanArray get() = syn.gate
     val synTie: BooleanArray get() = syn.tie
     val synVel: FloatArray get() = syn.vel
+    val synChd: IntArray get() = syn.chd
+    var synArp: Int get() = syn.arp; set(v) { syn.arp = v }
+    var synArpRate: Int get() = syn.arpRate; set(v) { syn.arpRate = v }
+    var synArpOct: Int get() = syn.arpOct; set(v) { syn.arpOct = v }
+    val arpNames = arrayOf("AUS", "AUF", "AB", "AUF-AB", "ZUFALL")
+    val arpRates = arrayOf("1/8", "1/16", "1/32")
     var synLen: Int get() = syn.len; set(v) { syn.len = v }
     var synOn: Boolean get() = syn.on; set(v) { syn.on = v }
     var synFx: Boolean get() = syn.fx; set(v) { syn.fx = v }
@@ -211,7 +227,9 @@ object InstState {
     var synEnv: Float get() = syn.env; set(v) { syn.env = v }
     var synCutMod: Float get() = syn.cutMod; set(v) { syn.cutMod = v }
     val synWaveNames = arrayOf("SAW", "SQR", "SUPER", "PLUCK", "GLOCKE")
-    val synChordNames = arrayOf("EINZELN", "DUR", "MOLL", "SUS4", "DUR7", "MOLL7", "OKTAVE")
+    val synChordNames = arrayOf("EINZELN", "DUR", "MOLL", "SUS4", "DUR7", "MOLL7", "OKTAVE", "VERM.")
+    /** Kurzname hinter dem Grundton (C, Cm, C7 …). */
+    val chordSuffix = arrayOf("", "", "m", "sus4", "7", "m7", "8", "°")
     // ---------------------------------------------------------------- Tonleiter (Piano-Roll: Hervorheben + Einrasten)
     @Volatile var scaleType = 0
     @Volatile var scaleRoot = 0
@@ -235,7 +253,83 @@ object InstState {
         return s
     }
 
-    val synChordIv = arrayOf(intArrayOf(0), intArrayOf(0, 4, 7), intArrayOf(0, 3, 7), intArrayOf(0, 5, 7), intArrayOf(0, 4, 7, 10), intArrayOf(0, 3, 7, 10), intArrayOf(0, 12))
+    val synChordIv = arrayOf(intArrayOf(0), intArrayOf(0, 4, 7), intArrayOf(0, 3, 7), intArrayOf(0, 5, 7), intArrayOf(0, 4, 7, 10), intArrayOf(0, 3, 7, 10), intArrayOf(0, 12), intArrayOf(0, 3, 6))
+
+    /** Akkord-Intervalle einer Note (eigener Akkord der Note oder der Spur). */
+    fun chordOf(t: SynTrack, k: Int): IntArray {
+        val c = t.chd[k]
+        return if (c > 0) synChordIv[(c - 1).coerceIn(0, synChordIv.size - 1)] else synChordIv[t.chord.coerceIn(0, synChordIv.size - 1)]
+    }
+
+    // ---------------------------------------------------------------- Akkordfolgen
+
+    class Progression(val name: String, val minor: Boolean, val degrees: IntArray, val quality: IntArray? = null)
+    /** quality: Index in synChordIv (überschreibt den leitereigenen Akkord). */
+    val progressions = listOf(
+        Progression("Pop  I – V – vi – IV", false, intArrayOf(0, 4, 5, 3)),
+        Progression("Gefühlvoll  vi – IV – I – V", false, intArrayOf(5, 3, 0, 4)),
+        Progression("50er  I – vi – IV – V", false, intArrayOf(0, 5, 3, 4)),
+        Progression("Rock  I – IV – V – IV", false, intArrayOf(0, 3, 4, 3)),
+        Progression("Jazz  ii7 – V7 – I – I", false, intArrayOf(1, 4, 0, 0), intArrayOf(5, 4, 1, 1)),
+        Progression("Moll-Pop  i – VI – III – VII", true, intArrayOf(0, 5, 2, 6)),
+        Progression("Deep House  i – VII – VI – VII", true, intArrayOf(0, 6, 5, 6)),
+        Progression("Dunkel  i – iv – v – i", true, intArrayOf(0, 3, 4, 0)),
+        Progression("Andalusisch  i – VII – VI – V", true, intArrayOf(0, 6, 5, 4), intArrayOf(2, 1, 1, 1)),
+        Progression("Trance  i – VI – VII – v", true, intArrayOf(0, 5, 6, 4))
+    )
+    private val MAJ = intArrayOf(0, 2, 4, 5, 7, 9, 11)
+    private val MIN = intArrayOf(0, 2, 3, 5, 7, 8, 10)
+    private val MAJ_Q = intArrayOf(1, 2, 2, 1, 1, 2, 7)
+    private val MIN_Q = intArrayOf(2, 7, 1, 2, 2, 1, 1)
+    val rhythmNames = arrayOf("Gehalten (Flächen)", "Viertel", "Achtel", "Offbeat (House-Pumpen)", "Stabs (1 + 2+ + 4)")
+
+    /** Name eines Akkords der Folge in Tonart [root] (z. B. „Am“). */
+    fun progChordName(pr: Progression, i: Int, root: Int): String {
+        val d = pr.degrees[i]
+        val sc = if (pr.minor) MIN else MAJ
+        val q = pr.quality?.get(i) ?: (if (pr.minor) MIN_Q else MAJ_Q)[d]
+        return scaleNoteNames[Math.floorMod(root + sc[d], 12)] + chordSuffix[q]
+    }
+
+    /**
+     * Akkordfolge in die aktuelle Synth-Spur schreiben: [root] = Grundton der Tonart, [steps] Schritte je Akkord
+     * (16 = 1 Takt, 8 = ½ Takt), [rhythm] siehe [rhythmNames]. Setzt Länge und Tonleiter passend.
+     */
+    fun writeProgression(pr: Progression, root: Int, steps: Int, rhythm: Int) {
+        val t = syn
+        t.clear()
+        val sc = if (pr.minor) MIN else MAJ
+        val n = pr.degrees.size
+        val total = (n * steps).coerceIn(16, MAX)
+        t.len = total
+        var prevRoot = Int.MIN_VALUE
+        for (i in 0 until n) {
+            val s0 = i * steps
+            if (s0 >= MAX) break
+            val d = pr.degrees[i]
+            val q = pr.quality?.get(i) ?: (if (pr.minor) MIN_Q else MAJ_Q)[d]
+            // Grundton nahe am vorigen (keine großen Sprünge), Bereich etwa G3 … F#4
+            var r = Math.floorMod(root + sc[d], 12)
+            if (r > 6) r -= 12
+            if (prevRoot != Int.MIN_VALUE && abs(r - prevRoot) > 7) r += if (r < prevRoot) 12 else -12
+            prevRoot = r
+            fun note(at: Int, len: Int, v: Float) {
+                if (at >= MAX) return
+                for (k in at until min(MAX, at + max(1, len))) {
+                    t.gate[k] = true; t.tie[k] = k != at; t.semi[k] = r; t.chd[k] = q + 1; t.vel[k] = v
+                }
+            }
+            when (rhythm) {
+                0 -> note(s0, steps, 0.9f)
+                1 -> { var k = 0; while (k < steps) { note(s0 + k, 3, if (k % 16 == 0) 1f else 0.8f); k += 4 } }
+                2 -> { var k = 0; while (k < steps) { note(s0 + k, 1, if (k % 4 == 0) 0.95f else 0.7f); k += 2 } }
+                3 -> { var k = 2; while (k < steps) { note(s0 + k, 2, 0.9f); k += 4 } }
+                else -> { for (k in intArrayOf(0, 6, 12)) if (k < steps) note(s0 + k, 2, if (k == 0) 1f else 0.85f) }
+            }
+        }
+        scaleRoot = Math.floorMod(root, 12)
+        if (scaleType == 0) scaleType = if (pr.minor) 2 else 1
+    }
 
     fun synClear() = syn.clear()
 
@@ -287,7 +381,7 @@ object InstState {
     }
 
     /** Die gerade gespielten/bearbeiteten Arrays je Instrument. */
-    private fun liveInts(inst: Int): Array<IntArray> = when (inst) { 0 -> arrayOf(acidSemi); 1 -> drumSteps; else -> arrayOf(trk(inst).semi) }
+    private fun liveInts(inst: Int): Array<IntArray> = when (inst) { 0 -> arrayOf(acidSemi); 1 -> drumSteps; else -> arrayOf(trk(inst).semi, trk(inst).chd) }
     private fun liveBools(inst: Int): Array<BooleanArray> = when (inst) { 0 -> arrayOf(acidGate, acidAcc, acidSlide, acidTie); 1 -> emptyArray(); else -> arrayOf(trk(inst).gate, trk(inst).tie) }
     private fun liveFloats(inst: Int): Array<FloatArray> = when (inst) { 0 -> arrayOf(acidVel); 1 -> drumVel; else -> arrayOf(trk(inst).vel) }
     fun instLen(inst: Int): Int = when (inst) { 0 -> acidLen; 1 -> drumLen; else -> trk(inst).len }
@@ -690,7 +784,7 @@ class DrumMachine(private val sr: Int) {
  * Spielt Einzeltöne oder Akkorde.
  */
 class PolySynth(private val sr: Int, private val t: InstState.SynTrack) {
-    private class Ev(val frame: Long, val on: Boolean, val semi: Int, val vel: Float, val tag: Int)
+    private class Ev(val frame: Long, val on: Boolean, val semi: Int, val vel: Float, val tag: Int, val iv: IntArray? = null)
 
     private class Voice {
         var active = false
@@ -718,8 +812,8 @@ class PolySynth(private val sr: Int, private val t: InstState.SynTrack) {
     private fun hz(semi: Int): Double = 440.0 * 2.0.pow((60 + 12 * t.oct + semi - 69) / 12.0)
 
     /** frame < 0 = sofort. [tag] verbindet An und Aus (z. B. Schritt oder Finger). */
-    fun queue(frame: Long, on: Boolean, semi: Int, vel: Float, tag: Int) {
-        synchronized(lock) { queue.add(Ev(frame, on, semi, vel, tag)) }
+    fun queue(frame: Long, on: Boolean, semi: Int, vel: Float, tag: Int, iv: IntArray? = null) {
+        synchronized(lock) { queue.add(Ev(frame, on, semi, vel, tag, iv)) }
     }
 
     fun allOff() {
@@ -728,7 +822,7 @@ class PolySynth(private val sr: Int, private val t: InstState.SynTrack) {
     }
 
     private fun apply(e: Ev) {
-        val iv = InstState.synChordIv[t.chord.coerceIn(0, InstState.synChordIv.size - 1)]
+        val iv = e.iv ?: InstState.synChordIv[t.chord.coerceIn(0, InstState.synChordIv.size - 1)]
         if (!e.on) {
             for (v in voices) if (v.active && v.tag == e.tag && v.gate) { v.gate = false; v.stage = 2 }
             return

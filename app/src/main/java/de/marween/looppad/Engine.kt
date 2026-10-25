@@ -181,12 +181,16 @@ object Engine {
             if (!t.on) continue
             val sl = t.len.coerceIn(1, InstState.MAX)
             val k = Math.floorMod(n, sl.toLong()).toInt()
+            if (t.arp != 0) {
+                arpStep(t, sy, k, sl, f, stepLen)
+                continue
+            }
             if (t.gate[k] && !(t.tie[k] && t.gate[Math.floorMod(k - 1, sl)])) {
                 // Länge: so viele Schritte, wie danach gehalten werden
                 var len = 1
                 while (len < sl && t.gate[(k + len) % sl] && t.tie[(k + len) % sl]) len++
                 val tag = 1000 + k
-                sy.queue(f, true, t.semi[k], t.vel[k], tag)
+                sy.queue(f, true, t.semi[k], t.vel[k], tag, InstState.chordOf(t, k))
                 sy.queue(f + stepLen * len - stepLen / 8, false, 0, 0f, tag)
             }
         }
@@ -197,6 +201,39 @@ object Engine {
                 val x = st.drumSteps[v][ds]
                 if (x > 0 && !st.drumMute[v]) d.trigger(v, (f - w).toInt(), x == 2, st.drumVel[v][ds])
             }
+        }
+    }
+
+    private val ARP_ONE = intArrayOf(0)
+
+    /** Arpeggiator: solange eine Note (bzw. ein Akkord) gehalten wird, ihre Töne nacheinander spielen. */
+    private fun arpStep(t: InstState.SynTrack, sy: PolySynth, k: Int, sl: Int, f: Long, stepLen: Long) {
+        if (!t.gate[k]) return
+        // Kopf der Note, die diesen Schritt abdeckt
+        var h = k
+        var guard = 0
+        while (t.tie[h] && t.gate[Math.floorMod(h - 1, sl)] && guard < sl) { h = Math.floorMod(h - 1, sl); guard++ }
+        val pos = Math.floorMod(k - h, sl)
+        val iv = InstState.chordOf(t, h)
+        val oct = t.arpOct.coerceIn(1, 3)
+        val tones = IntArray(iv.size * oct) { iv[it % iv.size] + 12 * (it / iv.size) }
+        java.util.Arrays.sort(tones)
+        val nT = tones.size
+        // Ticks in diesem Schritt: 1/8 jeden zweiten Schritt, 1/16 einmal, 1/32 zweimal
+        val subs = when (t.arpRate) { 0 -> if (pos % 2 == 0) 1 else 0; 2 -> 2; else -> 1 }
+        val tickLen = when (t.arpRate) { 0 -> stepLen * 2; 2 -> stepLen / 2; else -> stepLen }
+        for (sub in 0 until subs) {
+            val ti = when (t.arpRate) { 0 -> pos / 2; 2 -> pos * 2 + sub; else -> pos }
+            val idx = when (t.arp) {
+                2 -> nT - 1 - ti % nT
+                3 -> if (nT <= 1) 0 else { val m = ti % (2 * nT - 2); if (m < nT) m else 2 * nT - 2 - m }
+                4 -> { var x = (ti * 1103515245 + h * 12345 + 7) and 0x7fffffff; x = x xor (x ushr 13); x % nT }
+                else -> ti % nT
+            }
+            val at = f + sub * tickLen
+            val tag = 3000 + k * 2 + sub
+            sy.queue(at, true, t.semi[h] + tones[idx], t.vel[h] * (if (ti == 0) 1f else 0.85f), tag, ARP_ONE)
+            sy.queue(at + tickLen * 3 / 4, false, 0, 0f, tag)
         }
     }
 
@@ -4611,7 +4648,8 @@ class InstSnap(
     val synSemi: IntArray = IntArray(InstState.MAX), val synGate: BooleanArray = BooleanArray(InstState.MAX),
     val synTie: BooleanArray = BooleanArray(InstState.MAX), val synVel: FloatArray = FloatArray(InstState.MAX) { 1f }, val synLen: Int = 16,
     /** Synth-Spur, zu der die syn*-Daten gehören. */
-    val synTrack: Int = 0
+    val synTrack: Int = 0,
+    val synChd: IntArray = IntArray(InstState.MAX)
 ) {
     fun restore() {
         val st = InstState
@@ -4635,11 +4673,12 @@ class InstSnap(
         System.arraycopy(synGate, 0, t.gate, 0, min(synGate.size, InstState.MAX))
         System.arraycopy(synTie, 0, t.tie, 0, min(synTie.size, InstState.MAX))
         System.arraycopy(synVel, 0, t.vel, 0, min(synVel.size, InstState.MAX))
+        System.arraycopy(synChd, 0, t.chd, 0, min(synChd.size, InstState.MAX))
         t.len = synLen.coerceIn(16, InstState.MAX)
     }
 
     fun copy() = InstSnap(semi.copyOf(), gate.copyOf(), acc.copyOf(), slide.copyOf(), Array(drums.size) { drums[it].copyOf() }, tie.copyOf(), acidLen, drumLen, acidVel.copyOf(), Array(drumVel.size) { drumVel[it].copyOf() },
-        synSemi.copyOf(), synGate.copyOf(), synTie.copyOf(), synVel.copyOf(), synLen, synTrack)
+        synSemi.copyOf(), synGate.copyOf(), synTie.copyOf(), synVel.copyOf(), synLen, synTrack, synChd.copyOf())
 
     fun toJson(): org.json.JSONObject {
         val j = org.json.JSONObject()
@@ -4657,6 +4696,7 @@ class InstSnap(
         j.put("synVel", org.json.JSONArray().apply { synVel.forEach { put(it.toDouble()) } })
         j.put("synLen", synLen)
         j.put("synTrack", synTrack)
+        j.put("synChd", org.json.JSONArray().apply { synChd.forEach { put(it) } })
         return j
     }
 
@@ -4667,7 +4707,7 @@ class InstSnap(
                 st.acidSemi.copyOf(), st.acidGate.copyOf(), st.acidAcc.copyOf(), st.acidSlide.copyOf(),
                 Array(InstState.DV) { st.drumSteps[it].copyOf() }, st.acidTie.copyOf(), st.acidLen, st.drumLen,
                 st.acidVel.copyOf(), Array(InstState.DV) { st.drumVel[it].copyOf() },
-                st.synSemi.copyOf(), st.synGate.copyOf(), st.synTie.copyOf(), st.synVel.copyOf(), st.synLen, st.synCur
+                st.synSemi.copyOf(), st.synGate.copyOf(), st.synTie.copyOf(), st.synVel.copyOf(), st.synLen, st.synCur, st.synChd.copyOf()
             )
         }
 
@@ -4681,7 +4721,7 @@ class InstSnap(
             }
             val sv = FloatArray(n) { 1f }.also { a -> j.optJSONArray("synVel")?.let { for (i in 0 until min(n, it.length())) a[i] = it.optDouble(i, 1.0).toFloat() } }
             return InstSnap(ia("semi"), ba("gate"), ba("acc"), ba("slide"), dr, ba("tie"), j.optInt("acidLen", 16), j.optInt("drumLen", 16),
-                synSemi = ia("synSemi"), synGate = ba("synGate"), synTie = ba("synTie"), synVel = sv, synLen = j.optInt("synLen", 16), synTrack = j.optInt("synTrack", 0))
+                synSemi = ia("synSemi"), synGate = ba("synGate"), synTie = ba("synTie"), synVel = sv, synLen = j.optInt("synLen", 16), synTrack = j.optInt("synTrack", 0), synChd = ia("synChd"))
         }
     }
 }

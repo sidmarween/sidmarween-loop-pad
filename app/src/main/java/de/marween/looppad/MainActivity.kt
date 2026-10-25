@@ -172,6 +172,7 @@ class MainActivity : Activity() {
         pads.onInstMidi = { k -> showInstMidi(k) }
         pads.onInstPresets = { k -> showInstPresets(k) }
         pads.onInstScale = { showScaleMenu() }
+        pads.onInstChords = { showChordProgression() }
         pads.onLaunchQuantChanged = {
             prefs.edit().putInt("launchIdx", Engine.launchIdx).apply()
             hint(if (Engine.LAUNCH_Q[Engine.launchIdx] <= 0f) "Start-Raster SOFORT: Loops starten/stoppen beim Antippen"
@@ -1651,7 +1652,7 @@ class MainActivity : Activity() {
 
     private fun showSynthPresets() {
         val genres = InstPresets.SYNTHS.map { it.genre }.distinct()
-        val items = listOf("🎲 Zufallsmelodie") + genres.map { g -> "$g (${InstPresets.SYNTHS.count { it.genre == g }})" } + listOf("📥 Eigene MIDI-Datei laden …")
+        val items = listOf("🎲 Zufallsmelodie", "🎼 Akkordfolge erzeugen (Pop, House, Trance …)") + genres.map { g -> "$g (${InstPresets.SYNTHS.count { it.genre == g }})" } + listOf("📥 Eigene MIDI-Datei laden …")
         ui()
             .setTitle("🎹 SYNTH · Presets")
             .setItems(items.toTypedArray()) { _, w ->
@@ -1662,8 +1663,9 @@ class MainActivity : Activity() {
                         hint("🎲 Neue Zufallsmelodie – nochmal für eine andere")
                     }
                     w == items.size - 1 -> showInstMidi(3)
+                    w == 1 -> showChordProgression()
                     else -> {
-                        val g = genres[w - 1]
+                        val g = genres[w - 2]
                         val list = InstPresets.SYNTHS.filter { it.genre == g }
                         ui().setTitle(g)
                             .setItems(list.map { "${it.name} · ${it.bpm} BPM" }.toTypedArray()) { _, i ->
@@ -2939,6 +2941,34 @@ class MainActivity : Activity() {
 
     // ================================================================ Tonleiter (Piano-Roll)
 
+    /** Akkordfolge: Folge → Tonart → Länge je Akkord → Rhythmus, dann in die aktuelle SYNTH-Spur schreiben. */
+    private fun showChordProgression() {
+        val st = InstState
+        val root = st.scaleRoot
+        val prs = st.progressions
+        val labels = prs.map { pr ->
+            val ch = (0 until pr.degrees.size).joinToString(" – ") { st.progChordName(pr, it, root) }
+            pr.name + "\n   " + ch
+        }.toTypedArray()
+        ui().setTitle("🎼 Akkordfolge (SYNTH ${st.synCur + 1}) · Grundton ${st.scaleNoteNames[root]}")
+            .setItems(labels) { _, w ->
+                val pr = prs[w]
+                ui().setTitle("Grundton der Tonart").setItems(st.scaleNoteNames.map { it + if (pr.minor) "-Moll" else "-Dur" }.toTypedArray()) { _, r ->
+                    ui().setTitle("Länge je Akkord").setItems(arrayOf("1 Takt (Folge = ${pr.degrees.size} Takte)", "½ Takt (Folge = ${pr.degrees.size / 2} Takte)")) { _, l ->
+                        ui().setTitle("Rhythmus").setItems(st.rhythmNames) { _, rh ->
+                            Engine.pushPatternUndo("Akkordfolge")
+                            st.writeProgression(pr, r, if (l == 0) 16 else 8, rh)
+                            pads.invalidate()
+                            val ch = (0 until pr.degrees.size).joinToString(" – ") { st.progChordName(pr, it, r) }
+                            hint("🎼 $ch in SYNTH ${st.synCur + 1} – Tipp: ARP an für eine Tonfolge, andere Spur für Bass")
+                        }.show()
+                    }.show()
+                }.show()
+            }
+            .setNegativeButton("Abbrechen", null)
+            .show()
+    }
+
     private fun showScaleMenu() {
         val st = InstState
         val items = arrayOf(
@@ -2979,16 +3009,28 @@ class MainActivity : Activity() {
 
     private fun showCoupling() {
         if (Link.hosting) { showHostPanel(); return }
-        ui().setTitle("📡 Handys koppeln")
-            .setMessage("Mehrere Handys mit Marv PAD arbeiten zusammen: EIN Handy macht den Klang (Host), die anderen werden zu Bedienfeldern – z. B. Mixer auf dem einen, Pads auf dem anderen.\n\n" +
-                "WLAN: alle Handys im selben WLAN oder im Hotspot eines der Handys (schnellste Verbindung).\n" +
-                "Bluetooth: Handys vorher in den Android-Einstellungen koppeln.")
-            .setItems(arrayOf(
-                "🔊 Dieses Handy macht den Klang (Host)",
-                "📱 Dieses Handy wird Bedienfeld für ein anderes"
-            )) { _, w -> if (w == 0) withBt { startHosting() } else withBt { showRemoteConnect() } }
+        val d = resources.displayMetrics.density
+        fun px(v: Float) = (v * d).toInt()
+        val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(px(18f), px(6f), px(18f), px(6f)) }
+        var dlg: AlertDialog? = null
+        fun big(label: String, act: () -> Unit) = box.addView(Button(this).apply {
+            isAllCaps = false; text = label; textSize = 16f
+            setPadding(px(12f), px(14f), px(12f), px(14f))
+            setOnClickListener { dlg?.dismiss(); act() }
+        }, LinearLayout.LayoutParams(-1, -2).apply { topMargin = px(8f) })
+        big("🔊 HANDY A: Dieses Handy macht den Klang (Host)") { withBt { startHosting() } }
+        big("📱 HANDY B: Dieses Handy wird Bedienfeld") { withBt { showRemoteConnect() } }
+        box.addView(TextView(this).apply {
+            textSize = 13f; setTextColor(0xFFBBBBBB.toInt()); setPadding(0, px(14f), 0, 0)
+            text = "Erst auf Handy A „Klang (Host)“ wählen, dann auf Handy B „Bedienfeld“.\n\n" +
+                "WLAN: beide im selben WLAN – am sichersten im Hotspot von Handy A.\n" +
+                "Bluetooth: Handys vorher in den Android-Einstellungen koppeln."
+        })
+        dlg = ui().setTitle("📡 Handys koppeln")
+            .setView(android.widget.ScrollView(this).apply { addView(box) })
             .setNegativeButton("Schließen", null)
-            .show()
+            .create()
+        dlg.show()
     }
 
     private fun startHosting() {

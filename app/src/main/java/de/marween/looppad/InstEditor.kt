@@ -53,6 +53,8 @@ class InstEditor(private val host: View) {
     var onPresets: ((Int) -> Unit)? = null
     /** Tonleiter wählen (Piano-Roll). */
     var onScale: (() -> Unit)? = null
+    /** Akkordfolge erzeugen (SYNTH). */
+    var onChords: (() -> Unit)? = null
 
     private val d = host.resources.displayMetrics.density
     private fun dp(v: Float) = v * d
@@ -115,7 +117,8 @@ class InstEditor(private val host: View) {
     private var pendingFit = false
     private val sel = HashSet<Int>()
     private var insert = -1
-    private class AClip(val rel: Int, val semi: Int, val len: Int, val acc: Boolean, val slide: Boolean, val vel: Float = 1f)
+    private class AClip(val rel: Int, val semi: Int, val len: Int, val acc: Boolean, val slide: Boolean, val vel: Float = 1f, val chd: Int = 0)
+    private fun aChd(h: Int): Int = if (kind == 3) InstState.synChd[h] else 0
     private class DClip(val voice: Int, val rel: Int, val v: Int, val vel: Float = 1f)
     private var aClip: List<AClip> = emptyList()
     private var dClip: List<DClip> = emptyList()
@@ -232,7 +235,7 @@ class InstEditor(private val host: View) {
         }
     }
 
-    private fun aSet(h: Int, semi: Int, n: Int, acc: Boolean, slide: Boolean, vel: Float = 1f) {
+    private fun aSet(h: Int, semi: Int, n: Int, acc: Boolean, slide: Boolean, vel: Float = 1f, chd: Int = 0) {
         val st = InstState
         if (h < 0 || h >= len) return
         val e = min(len, h + max(1, n))
@@ -255,6 +258,7 @@ class InstEditor(private val host: View) {
             aAcc[k] = k == h && acc
             aSlide[k] = false
             aVel[k] = vel
+            if (kind == 3) InstState.synChd[k] = chd
         }
         aSlide[e - 1] = slide
     }
@@ -573,6 +577,17 @@ class InstEditor(private val host: View) {
                     stroke.strokeWidth = dp(if (s) 2f else 1f)
                     stroke.color = Color.WHITE
                     c.drawRoundRect(tmp, dp(3f), dp(3f), stroke)
+                    // Akkordtöne (SYNTH) blass darüber
+                    if (kind == 3) {
+                        val iv = InstState.chordOf(InstState.syn, k)
+                        for (o in iv) if (o != 0) {
+                            val rr = topSemi - (semi + o)
+                            if (rr < 0 || rr >= rows) continue
+                            val yy = grid.top + rr * rh
+                            fill.color = Color.argb(70, Color.red(acc), Color.green(acc), Color.blue(acc))
+                            c.drawRoundRect(x0 + dp(1f), yy + dp(2f), x1 - dp(1f), yy + rh - dp(2f), dp(3f), dp(3f), fill)
+                        }
+                    }
                     if (aSlide[k + n - 1]) {
                         // Slide: Pfeil zum nächsten Ton
                         stroke.strokeWidth = dp(2f)
@@ -583,7 +598,8 @@ class InstEditor(private val host: View) {
                         text.textSize = min(dp(8.5f), rh * 0.7f)
                         text.color = Color.BLACK
                         text.textAlign = Paint.Align.LEFT
-                        c.drawText(names[Math.floorMod(semi, 12)] + (if (aAcc[k]) " A" else ""), tmp.left + dp(3f), tmp.centerY() + text.textSize * 0.36f, text)
+                        val cs = if (kind == 3 && InstState.synChd[k] > 0) InstState.chordSuffix[(InstState.synChd[k] - 1).coerceIn(0, InstState.chordSuffix.size - 1)] else ""
+                        c.drawText(names[Math.floorMod(semi, 12)] + cs + (if (aAcc[k]) " A" else ""), tmp.left + dp(3f), tmp.centerY() + text.textSize * 0.36f, text)
                         text.textAlign = Paint.Align.CENTER
                     }
                 }
@@ -780,6 +796,14 @@ class InstEditor(private val host: View) {
             Toggle({ if (st.synOn) "● AN" else "○ AUS" }, { st.synOn }, { st.synOn = !st.synOn }),
             Toggle({ "KLANG: " + st.synWaveNames[st.synWave] }, { false }, { st.synWave = (st.synWave + 1) % st.synWaveNames.size }),
             Toggle({ "AKKORD: " + st.synChordNames[st.synChord] }, { st.synChord != 0 }, { st.synChord = (st.synChord + 1) % st.synChordNames.size }),
+            Toggle({ "🎼 AKKORDFOLGE" }, { false }, { onChords?.invoke() }),
+            Toggle({ "ARP: " + st.arpNames[st.synArp] }, { st.synArp != 0 }, { st.synArp = (st.synArp + 1) % st.arpNames.size; onHint?.invoke(if (st.synArp == 0) "Arpeggiator aus" else "Arpeggiator ${st.arpNames[st.synArp]}: gehaltene Noten/Akkorde laufen als Tonfolge") }),
+            Toggle({ "ARP " + st.arpRates[st.synArpRate.coerceIn(0, 2)] + " · ${st.synArpOct} OKT" }, { st.synArp != 0 }, {
+                // 1/8·1 → 1/16·1 → 1/32·1 → 1/8·2 … → 1/32·3
+                var r = st.synArpRate + 1; var o = st.synArpOct
+                if (r > 2) { r = 0; o = if (o >= 3) 1 else o + 1 }
+                st.synArpRate = r; st.synArpOct = o
+            }),
             Toggle({ "FX-BUS" }, { st.synFx }, { st.synFx = !st.synFx }),
             Toggle({ "SKALA: " + st.scaleLabel() }, { st.scaleType != 0 }, { onScale?.invoke() }),
             Toggle({ "🎲 ZUFALL" }, { false }, { Engine.pushPatternUndo("SYNTH Zufall"); st.synRandom() })
@@ -807,15 +831,20 @@ class InstEditor(private val host: View) {
         c.drawRoundRect(a, dp(8f), dp(8f), fill)
         val tg = toggles()
         toggleRects.clear()
-        val tw = (a.width() - dp(16f) - (tg.size - 1) * dp(6f)) / tg.size
+        val per = if (tg.size > 5) (tg.size + 1) / 2 else tg.size
+        val tRows = (tg.size + per - 1) / per
+        val tw = (a.width() - dp(16f) - (per - 1) * dp(6f)) / per
         for (i in tg.indices) {
-            val r = RectF(a.left + dp(8f) + i * (tw + dp(6f)), a.top + dp(8f), a.left + dp(8f) + i * (tw + dp(6f)) + tw, a.top + dp(40f))
+            val cI = i % per
+            val rI = i / per
+            val y0 = a.top + dp(8f) + rI * dp(38f)
+            val r = RectF(a.left + dp(8f) + cI * (tw + dp(6f)), y0, a.left + dp(8f) + cI * (tw + dp(6f)) + tw, y0 + dp(32f))
             toggleRects.add(r)
             btn(c, r, tg[i].label(), tg[i].on(), acc)
         }
         val sl = sliders()
         sliderRects.clear()
-        val top = a.top + dp(50f)
+        val top = a.top + dp(10f) + tRows * dp(38f)
         val h = min(dp(44f), (a.bottom - dp(8f) - top) / sl.size)
         for (i in sl.indices) {
             val r = RectF(a.left + dp(10f), top + i * h, a.right - dp(10f), top + (i + 1) * h - dp(6f))
@@ -1259,7 +1288,7 @@ class InstEditor(private val host: View) {
             D_RESIZE -> if (mel) {
                 val end = max(dHead + 1, colAt(x) + 1)
                 if (first && !newNote) Engine.pushPatternUndo("ACID Notenlänge")
-                aSet(dHead, aSemi[dHead], end - dHead, aAcc[dHead], aSlide[dHead + aLen(dHead) - 1], aVel[dHead])
+                aSet(dHead, aSemi[dHead], end - dHead, aAcc[dHead], aSlide[dHead + aLen(dHead) - 1], aVel[dHead], aChd(dHead))
             }
             D_MOVE -> {
                 if (first) Engine.pushPatternUndo("Noten verschieben")
@@ -1369,12 +1398,12 @@ class InstEditor(private val host: View) {
         val st = InstState
         val wasSel = dHead in sel
         val heads = if (sel.isNotEmpty() && wasSel) sel.toList() else listOf(dHead)
-        val notes = heads.filter { aHead(it) }.map { h -> AClip(h, aSemi[h], aLen(h), aAcc[h], aSlide[h + aLen(h) - 1], aVel[h]) }
+        val notes = heads.filter { aHead(it) }.map { h -> AClip(h, aSemi[h], aLen(h), aAcc[h], aSlide[h + aLen(h) - 1], aVel[h], aChd(h)) }
         for (n in notes) aDelete(n.rel)
         val newHeads = ArrayList<Int>()
         for (n in notes) {
             val nh = Math.floorMod(n.rel + dc, len)
-            aSet(nh, InstState.snapScale(n.semi + dr, dr).coerceIn(SEMI_MIN, SEMI_MAX), min(n.len, len - nh), n.acc, n.slide, n.vel)
+            aSet(nh, InstState.snapScale(n.semi + dr, dr).coerceIn(SEMI_MIN, SEMI_MAX), min(n.len, len - nh), n.acc, n.slide, n.vel, n.chd)
             newHeads.add(nh)
         }
         sel.clear()
@@ -1559,7 +1588,7 @@ class InstEditor(private val host: View) {
             val heads = sel.filter { aHead(it) }.sorted()
             if (heads.isEmpty()) return
             val s0 = heads.first()
-            aClip = heads.map { h -> AClip(h - s0, aSemi[h], aLen(h), aAcc[h], aSlide[h + aLen(h) - 1], aVel[h]) }
+            aClip = heads.map { h -> AClip(h - s0, aSemi[h], aLen(h), aAcc[h], aSlide[h + aLen(h) - 1], aVel[h], aChd(h)) }
             val end = heads.maxOf { it + aLen(it) }
             clipSpan = ((end - s0 + 3) / 4) * 4
             insert = (s0 + clipSpan).let { if (it >= len) 0 else it }
@@ -1585,7 +1614,7 @@ class InstEditor(private val host: View) {
             for (n in aClip) {
                 val h = at + n.rel
                 if (h >= len) continue
-                aSet(h, n.semi, min(n.len, len - h), n.acc, n.slide, n.vel)
+                aSet(h, n.semi, min(n.len, len - h), n.acc, n.slide, n.vel, n.chd)
                 sel.add(h)
             }
         } else {
@@ -1613,12 +1642,12 @@ class InstEditor(private val host: View) {
         Engine.pushPatternUndo("Quantisieren")
         if (mel) {
             val heads = (if (sel.isNotEmpty()) sel.toList() else (0 until len).filter { aHead(it) }).filter { aHead(it) }.sorted()
-            val notes = heads.map { h -> AClip(h, aSemi[h], aLen(h), aAcc[h], aSlide[h + aLen(h) - 1], aVel[h]) }
+            val notes = heads.map { h -> AClip(h, aSemi[h], aLen(h), aAcc[h], aSlide[h + aLen(h) - 1], aVel[h], aChd(h)) }
             for (n in notes) aDelete(n.rel)
             sel.clear()
             for (n in notes) {
                 val nh = (Math.round(n.rel / q.toFloat()) * q) % len
-                aSet(nh, n.semi, max(1, min(n.len, len - nh)), n.acc, n.slide, n.vel)
+                aSet(nh, n.semi, max(1, min(n.len, len - nh)), n.acc, n.slide, n.vel, n.chd)
                 sel.add(nh)
             }
         } else {
