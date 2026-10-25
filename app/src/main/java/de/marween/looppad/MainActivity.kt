@@ -41,7 +41,10 @@ class MainActivity : Activity() {
     private var askedOnce = false
 
     /** Die aktive Oberfläche: Pads oder DJ-Controller. */
-    private fun mainView(): View = if (djMode) dj else pads
+    private fun mainView(): View = remoteView ?: if (djMode) dj else pads
+
+    /** Fernbedienungs-Modus: dieses Handy steuert ein anderes (kein eigener Klang). */
+    private var remoteView: RemoteView? = null
 
     private fun switchMode(toDj: Boolean) {
         if (toDj == djMode && mainView().parent != null) return
@@ -465,7 +468,7 @@ class MainActivity : Activity() {
 
     override fun onStart() {
         super.onStart()
-        ensureStarted()
+        if (remoteView == null) ensureStarted()
     }
 
     /** Dateiauswahl läuft: Audio nicht anhalten (Musik spielt weiter, während man eine Datei wählt). */
@@ -493,12 +496,14 @@ class MainActivity : Activity() {
         // Während einer Dateiauswahl oder wenn im DJ-Modus ein Deck läuft, spielt die Musik weiter
         val djPlaying = djMode && (Dj.decks[0].playing || Dj.decks[1].playing)
         // läuft eine Set-Aufnahme, bleibt das Audio an
-        if (!pickerOpen && !djPlaying && !SetRecorder.recording) Engine.stop()
+        if (!pickerOpen && !djPlaying && !SetRecorder.recording && !Link.hosting) Engine.stop()
         super.onStop()
     }
 
     override fun onDestroy() {
         if (isFinishing) {
+            Link.stopHost()
+            Link.disconnect()
             SetRecorder.stop()
             Engine.stop()
         }
@@ -536,6 +541,7 @@ class MainActivity : Activity() {
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == REQ_BT) { btAfter?.invoke(); btAfter = null; return }
         if (requestCode != REQ_MIC) return
         if (grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
             ensureStarted()
@@ -2213,6 +2219,7 @@ class MainActivity : Activity() {
             "🎙 Aufnahme & Wiedergabe" to { showMenuGroup(1) },
             "🎨 Aussehen: Designs, Schriften, Ansicht" to { showMenuGroup(2) },
             "🔌 Audio, Latenz & MIDI" to { showMenuGroup(3) },
+            (if (Link.hosting) "📡 Handys gekoppelt (${Link.clients.size}) – Vorlagen & Verteilung" else "📡 Handys koppeln (WLAN / Bluetooth)") to { showCoupling() },
             "ℹ Hilfe & Info" to { showMenuGroup(4) },
             (if (djMode) "▦ Zurück zum Pad-Modus" else "🎧 DJ-Modus (zwei Decks, Crossfader)") to { switchMode(!djMode) }
         )
@@ -2917,6 +2924,7 @@ class MainActivity : Activity() {
 
     @Deprecated("Zurück-Taste")
     override fun onBackPressed() {
+        if (remoteView != null) { leaveRemote(); return }
         if (Dj.gigMode) {
             confirm("Gig läuft", "Wirklich zurück? Die Musik spielt weiter, solange ein Deck läuft.") {
                 @Suppress("DEPRECATION")
@@ -2926,6 +2934,216 @@ class MainActivity : Activity() {
         }
         @Suppress("DEPRECATION")
         super.onBackPressed()
+    }
+
+    // ================================================================ Handys koppeln
+
+    private var btAfter: (() -> Unit)? = null
+
+    /** Bluetooth-Erlaubnis (ab Android 12) holen, danach [then] – ohne Erlaubnis läuft es eben nur über WLAN. */
+    private fun withBt(then: () -> Unit) {
+        if (android.os.Build.VERSION.SDK_INT >= 31 &&
+            checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) {
+            btAfter = then
+            requestPermissions(arrayOf(Manifest.permission.BLUETOOTH_CONNECT), REQ_BT)
+        } else then()
+    }
+
+    private fun btAllowed() = android.os.Build.VERSION.SDK_INT < 31 ||
+        checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED
+
+    private fun showCoupling() {
+        if (Link.hosting) { showHostPanel(); return }
+        ui().setTitle("📡 Handys koppeln")
+            .setMessage("Mehrere Handys mit Marv PAD arbeiten zusammen: EIN Handy macht den Klang (Host), die anderen werden zu Bedienfeldern – z. B. Mixer auf dem einen, Pads auf dem anderen.\n\n" +
+                "WLAN: alle Handys im selben WLAN oder im Hotspot eines der Handys (schnellste Verbindung).\n" +
+                "Bluetooth: Handys vorher in den Android-Einstellungen koppeln.")
+            .setItems(arrayOf(
+                "🔊 Dieses Handy macht den Klang (Host)",
+                "📱 Dieses Handy wird Bedienfeld für ein anderes"
+            )) { _, w -> if (w == 0) withBt { startHosting() } else withBt { showRemoteConnect() } }
+            .setNegativeButton("Schließen", null)
+            .show()
+    }
+
+    private fun startHosting() {
+        ensureStarted()
+        Link.onClientsChanged = {
+            runOnUiThread {
+                hostRefresh?.invoke()
+                if (Link.clients.size > lastClientCount && Link.clients.size >= 1) {
+                    hint("📡 Handy ${Link.clients.size + 1} gekoppelt – Vorlage wählen: Menü → 📡 Handys gekoppelt")
+                }
+                lastClientCount = Link.clients.size
+            }
+        }
+        Link.onHostHint = { m -> runOnUiThread { hint(m) } }
+        Link.onHostSurface = { h -> runOnUiThread { if (h.startsWith("DJ")) switchMode(true) else if (h == "Pads") switchMode(false) } }
+        Link.startHost(this, btAllowed())
+        showHostPanel()
+    }
+
+    private var lastClientCount = 0
+    private var hostRefresh: (() -> Unit)? = null
+
+    /** Wie viele Handys eine Vorlage nutzt (dieses + gekoppelte). */
+    private fun presetPhones(p: Link.Preset): Int = 1 + Regex("Handy \\d").findAll(p.name).count()
+
+    private fun showHostPanel() {
+        val d = resources.displayMetrics.density
+        fun px(v: Float) = (v * d).toInt()
+        val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(px(18f), px(8f), px(18f), px(4f)) }
+        val info = TextView(this).apply { textSize = 13f; setTextColor(0xFFCCCCCC.toInt()) }
+        box.addView(info)
+        val list = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        box.addView(list)
+        var dlg: AlertDialog? = null
+        fun build() {
+            val ips = Link.localIps().joinToString(" · ")
+            val n = Link.clients.size
+            val pr = Link.PRESETS.getOrNull(Link.currentPreset)
+            info.text = "Host läuft: ${Link.deviceName(this)}\n" +
+                "WLAN-Adresse: ${ips.ifEmpty { "– (kein WLAN/Hotspot)" }}\n" +
+                (if (btAllowed()) "Bluetooth: bereit\n" else "Bluetooth: keine Erlaubnis (nur WLAN)\n") +
+                "\nGekoppelt: $n ${if (n == 1) "Handy" else "Handys"}" +
+                (if (pr != null) "\nVorlage: ${pr.name}" else "") +
+                (if (n == 0) "\n\nAuf dem anderen Handy: Menü → 📡 Handys koppeln → Bedienfeld." else "")
+            list.removeAllViews()
+            for ((k, c) in Link.clients.withIndex()) {
+                list.addView(Button(this).apply {
+                    isAllCaps = false
+                    text = "Handy ${k + 2}: ${c.name}${if (c.viaBt) " (BT)" else ""}\n→ ${Link.SURFACE_NAMES[c.surface.coerceIn(0, 5)]}   ✎"
+                    setOnClickListener {
+                        ui().setTitle("Handy ${k + 2} zeigt …")
+                            .setItems(Link.SURFACE_NAMES) { _, w -> Link.setSurface(c, w) }
+                            .show()
+                    }
+                })
+            }
+        }
+        build()
+        hostRefresh = { build() }
+        dlg = ui().setTitle("📡 Handys gekoppelt")
+            .setView(android.widget.ScrollView(this).apply { addView(box) })
+            .setPositiveButton("🧩 Vorlagen", null)
+            .setNeutralButton("Host beenden") { _, _ ->
+                Link.stopHost(); lastClientCount = 0; toast("Kopplung beendet")
+            }
+            .setNegativeButton("Fertig", null)
+            .create()
+        dlg.setOnShowListener {
+            dlg.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener { showPresets() }
+        }
+        dlg.setOnDismissListener { hostRefresh = null }
+        dlg.show()
+    }
+
+    /** Vorlagen: wie die Steuerung auf die Handys verteilt wird – passende zur Anzahl zuerst. */
+    private fun showPresets() {
+        val have = Link.clients.size + 1
+        val order = Link.PRESETS.indices.sortedWith(compareBy({ if (presetPhones(Link.PRESETS[it]) == have) 0 else if (presetPhones(Link.PRESETS[it]) < have) 1 else 2 }, { it }))
+        val labels = order.map { i ->
+            val p = Link.PRESETS[i]
+            val need = presetPhones(p)
+            val mark = when {
+                need == have -> "✓ "
+                need < have -> "◦ "
+                else -> "⚠ "
+            }
+            val extra = if (need > have) "  (braucht $need Handys, $have gekoppelt)" else "  ($need Handys)"
+            (if (i == Link.currentPreset) "● " else mark) + p.name + extra
+        }.toTypedArray()
+        ui().setTitle("🧩 Vorlage: Steuerung verteilen ($have ${if (have == 1) "Handy" else "Handys"})")
+            .setItems(labels) { _, w ->
+                val i = order[w]
+                Link.applyPreset(i)
+                toast("Vorlage: " + Link.PRESETS[i].name)
+            }
+            .setNegativeButton("Zurück", null)
+            .show()
+    }
+
+    private fun showRemoteConnect() {
+        val d = resources.displayMetrics.density
+        fun px(v: Float) = (v * d).toInt()
+        val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(px(18f), px(8f), px(18f), px(4f)) }
+        val status = TextView(this).apply { textSize = 13f; setTextColor(0xFFCCCCCC.toInt()); text = "Suche Marv-PAD-Hosts im WLAN …" }
+        box.addView(status)
+        val list = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        box.addView(list)
+        var dlg: AlertDialog? = null
+        fun connecting(name: String) { status.text = "Verbinde mit $name …"; list.isEnabled = false }
+        val done: (String?) -> Unit = { err ->
+            runOnUiThread {
+                if (err == null) { dlg?.dismiss(); Link.stopDiscover(this); enterRemote() }
+                else status.text = "❌ $err\nHost gestartet? Gleiches WLAN? Nochmal versuchen."
+            }
+        }
+        fun build() {
+            list.removeAllViews()
+            for ((name, ip) in Link.found) list.addView(Button(this).apply {
+                isAllCaps = false; text = "📶 $name\n$ip"
+                setOnClickListener { connecting(name); Link.connectTcp(this@MainActivity, ip, Link.PORT, done) }
+            })
+            if (btAllowed()) for (dev in Link.bondedDevices(this)) list.addView(Button(this).apply {
+                isAllCaps = false
+                @Suppress("MissingPermission")
+                val nm = try { dev.name } catch (e: SecurityException) { null } ?: dev.address
+                text = "🔵 $nm (Bluetooth)"
+                setOnClickListener { connecting(nm); Link.connectBt(this@MainActivity, dev, done) }
+            })
+            list.addView(Button(this).apply {
+                isAllCaps = false; text = "⌨ Adresse eingeben (steht am Host)"
+                setOnClickListener {
+                    val ed = EditText(this@MainActivity).apply { hint = "z. B. 192.168.43.1"; inputType = android.text.InputType.TYPE_CLASS_TEXT }
+                    ui().setTitle("Adresse des Hosts").setView(ed)
+                        .setPositiveButton("Verbinden") { _, _ ->
+                            val ip = ed.text.toString().trim()
+                            if (ip.isNotEmpty()) { connecting(ip); Link.connectTcp(this@MainActivity, ip, Link.PORT, done) }
+                        }.setNegativeButton("Abbrechen", null).show()
+                }
+            })
+            if (Link.found.isNotEmpty()) status.text = "Gefunden – antippen zum Verbinden:"
+        }
+        build()
+        Link.discover(this) { runOnUiThread { build() } }
+        dlg = ui().setTitle("📱 Als Bedienfeld verbinden")
+            .setView(android.widget.ScrollView(this).apply { addView(box) })
+            .setNegativeButton("Abbrechen") { _, _ -> Link.stopDiscover(this) }
+            .create()
+        dlg.show()
+    }
+
+    /** Dieses Handy wird Bedienfeld: eigener Klang aus, Oberfläche vom Host. */
+    private fun enterRemote() {
+        Dj.decks.forEach { if (it.playing) it.playing = false }
+        Engine.stop()
+        pads.closeFocus()
+        val rv = RemoteView(this)
+        rv.onLeave = { leaveRemote() }
+        remoteView = rv
+        Link.onClientEvent = { ev ->
+            runOnUiThread {
+                if (ev == "lost" && remoteView != null) toast("📡 Verbindung zum Host getrennt")
+            }
+        }
+        requestedOrientation = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_SENSOR
+        setContentView(rv)
+        hideSystemBars()
+        rv.requestApplyInsets()
+        toast("📡 Verbunden – oben die Oberfläche wählen, ✕ beendet")
+    }
+
+    private fun leaveRemote() {
+        Link.onClientEvent = null
+        Link.disconnect()
+        remoteView = null
+        applyDjOrientation()
+        val v = mainView()
+        setContentView(v)
+        hideSystemBars()
+        v.requestApplyInsets()
+        ensureStarted()
     }
 
     // ================================================================ DJ-Sammlung (Crates, Verlauf, Analyse, Vorschläge)
@@ -4247,5 +4465,6 @@ class MainActivity : Activity() {
         private const val REQ_LIB_OUT = 21
         private const val REQ_COL_TREE = 22
         private const val REQ_COL_FILES = 23
+        private const val REQ_BT = 24
     }
 }
