@@ -73,14 +73,26 @@ object Link {
         @Volatile var lastSent = 0L
         private val lock = Any()
 
-        fun send(line: String) {
-            if (!alive) return
+        /** Senden läuft immer über einen eigenen Thread (Netzwerk im UI-Thread verbietet Android). */
+        private val outQ = java.util.concurrent.LinkedBlockingQueue<String>()
+        private val writer = Thread {
             try {
-                synchronized(lock) {
-                    out.write((line + "\n").toByteArray(Charsets.UTF_8))
+                while (alive) {
+                    val first = outQ.poll(500, java.util.concurrent.TimeUnit.MILLISECONDS) ?: continue
+                    val sb = StringBuilder(first).append('\n')
+                    // was schon wartet, gleich mitschicken (ein Paket statt vieler)
+                    while (sb.length < 64_000) { val nx = outQ.poll() ?: break; sb.append(nx).append('\n') }
+                    out.write(sb.toString().toByteArray(Charsets.UTF_8))
                     out.flush()
                 }
             } catch (e: Exception) { close() }
+        }.apply { isDaemon = true; name = "MarvLink-send"; start() }
+
+        fun send(line: String) {
+            if (!alive) return
+            // Stau (z. B. langsames Bluetooth): alte Zustände verwerfen, Befehle behalten
+            if (outQ.size > 200) outQ.removeIf { it.startsWith("S ") }
+            outQ.offer(line)
         }
 
         private val rd by lazy { BufferedReader(InputStreamReader(inp, Charsets.UTF_8), 8192) }
