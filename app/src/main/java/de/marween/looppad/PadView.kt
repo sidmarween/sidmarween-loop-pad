@@ -3111,6 +3111,27 @@ class PadView(context: Context) : View(context) {
             drawSceneTile(canvas, i, cols)
             return
         }
+        val lp = Engine.padLoadProg[i]
+        if (lp >= 0f) {
+            // Lade-Fortschritt: abgedunkelt, Balken unten, Prozent + was gerade passiert
+            fillPaint.shader = null
+            fillPaint.color = alpha(Color.BLACK, 0.62f)
+            canvas.drawRoundRect(r, radius, radius, fillPaint)
+            val bh = max(dp(6f), r.height() * 0.07f)
+            tmpRect.set(r.left + dp(8f), r.bottom - bh - dp(8f), r.right - dp(8f), r.bottom - dp(8f))
+            fillPaint.color = alpha(Color.WHITE, 0.18f)
+            canvas.drawRoundRect(tmpRect, bh / 2, bh / 2, fillPaint)
+            fillPaint.color = cols[2]
+            canvas.drawRoundRect(tmpRect.left, tmpRect.top, tmpRect.left + tmpRect.width() * lp.coerceIn(0.02f, 1f), tmpRect.bottom, bh / 2, bh / 2, fillPaint)
+            textPaint.color = Color.WHITE
+            textPaint.textSize = min(dp(22f), r.width() * 0.2f)
+            canvas.drawText("${(lp * 100).toInt()} %", r.centerX(), r.centerY() + textPaint.textSize * 0.2f, textPaint)
+            textPaint.textSize = min(dp(11f), r.width() * 0.1f)
+            textPaint.color = alpha(Color.WHITE, 0.8f)
+            canvas.drawText(fitLabel(textPaint, "⏳ " + Engine.padLoadText[i], r.width() - dp(10f), textPaint.textSize, dp(7f)), r.centerX(), r.centerY() + textPaint.textSize * 1.9f, textPaint)
+            postInvalidateOnAnimation()
+            return
+        }
         val has = Engine.hasLoop(i)
         if (volPad == i && volShow > 0f && has) {
             val g = Engine.padGain(i)

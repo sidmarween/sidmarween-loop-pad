@@ -83,6 +83,8 @@ object Dj {
         @Volatile var lufs = Float.NaN
         @Volatile var agFactor = 1f
         @Volatile var loading = false
+        /** Lade-Fortschritt 0..1, -1 = lädt nicht. */
+        @Volatile var loadProg = -1f
         /** Eintrag der DJ-Bibliothek (für das Speichern geänderter Cue-Punkte). */
         @Volatile var libId: String? = null
         /** Eintrag der Sammlung ([TrackDb]). */
@@ -1029,6 +1031,7 @@ object Dj {
                     }
                     c.releaseOutputBuffer(oi, false)
                     if ((info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0) outputDone = true
+                    if (durUs > 0) LoadProgress.report(info.presentationTimeUs.toFloat() / durUs)
                 }
             }
             if (frames < 2) throw IllegalStateException("Datei enthält kein Audio")
@@ -1120,6 +1123,7 @@ object Dj {
                     }
                     c.releaseOutputBuffer(oi, false)
                     if ((info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0) outputDone = true
+                    if (durUs > 0) LoadProgress.report(info.presentationTimeUs.toFloat() / durUs)
                 }
             }
             if (frames < 2) throw IllegalStateException("Datei enthält kein Audio")

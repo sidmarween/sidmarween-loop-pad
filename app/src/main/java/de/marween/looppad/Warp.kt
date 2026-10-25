@@ -248,6 +248,7 @@ object Warp {
                 }
             }
             b0 = b1
+            LoadProgress.report(b0 / bars)
         }
         return seamEnd(out, pre, sr)
     }

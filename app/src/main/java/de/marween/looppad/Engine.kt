@@ -742,6 +742,10 @@ object Engine {
     /** Effekt je Pad an/aus (true = Pad läuft durch den Effekt). */
     val padFx = BooleanArray(PADS) { true }
 
+    /** Lade-Fortschritt je Pad (0..1, -1 = lädt nicht) und was gerade passiert. */
+    val padLoadProg = FloatArray(PADS) { -1f }
+    val padLoadText = Array(PADS) { "" }
+
     /** SELECT in der Pad-Ansicht: nur dieses Pad läuft durch die Effekt-Fläche (-1 = wie eingestellt). */
     @Volatile var fxOnlyPad = -1
 
@@ -4586,6 +4590,8 @@ object Engine {
         val bodyStart = if (info.cut) (info.offset.coerceIn(0, max(0, src.size - 2)).let { if (it > 0) max(0, Warp.onsetStart(src, it, sampleRate) - sampleRate / 3000) else 0 }) else 0
         val pre = preIn ?: if (info.cut && bodyStart > 0) src.copyOfRange(max(0, bodyStart - sampleRate / 20), bodyStart) else null
         // BEATS-Warp: jeder Schlag landet exakt auf seinem 1/16-Platz (vorher WSOLA: bis zu ~20 ms daneben = Holpern)
+        padLoadText[p] = "ins Raster"
+        LoadProgress.stage(0.7f, 1f)
         val data = Warp.stretchBeatsLong(body, target, sampleRate, info.bars, pre)
         val loop = Loop(data)
         loop.src = body

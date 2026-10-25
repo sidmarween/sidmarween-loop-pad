@@ -796,7 +796,7 @@ class DjView(context: Context) : View(context) {
         c.drawText("AB"[k].toString(), ln.left + dp(2f), ln.top + dp(11f), mono)
         mono.color = ink
         val title = when {
-            dd.loading -> "Lädt …"
+            dd.loading -> if (dd.loadProg >= 0f) "Lädt … ${(dd.loadProg * 100).toInt()} %" + (if (dd.loadProg >= 0.86f) " · Analyse" else "") else "Lädt …"
             dd.loaded() -> dd.title
             else -> "⏏ antippen: Track laden (MP3/WAV)"
         }
@@ -806,6 +806,16 @@ class DjView(context: Context) : View(context) {
         } else ""
         mono.textAlign = Paint.Align.RIGHT
         c.drawText(info, ln.right - dp(2f), ln.top + dp(11f), mono)
+        if (dd.loading && dd.loadProg >= 0f) {
+            // Ladebalken quer über die Wellenform-Fläche
+            fill.shader = null
+            val by = wave.centerY()
+            fill.color = Color.argb(60, 255, 255, 255)
+            c.drawRoundRect(wave.left + dp(10f), by - dp(4f), wave.right - dp(10f), by + dp(4f), dp(4f), dp(4f), fill)
+            fill.color = col
+            c.drawRoundRect(wave.left + dp(10f), by - dp(4f), wave.left + dp(10f) + (wave.width() - dp(20f)) * dd.loadProg.coerceIn(0.02f, 1f), by + dp(4f), dp(4f), dp(4f), fill)
+            postInvalidateOnAnimation()
+        }
         var iw = mono.measureText(info) + dp(8f)
         // Tonart (Camelot) – Farbe zeigt, ob sie zum anderen Deck passt
         keyHit[k].setEmpty()

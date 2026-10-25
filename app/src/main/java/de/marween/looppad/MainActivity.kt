@@ -689,10 +689,27 @@ class MainActivity : Activity() {
         } catch (ignored: Exception) {}
     }
 
+    /** Lade-Fortschritt am Pad anzeigen, solange [block] läuft. */
+    private fun <T> padProgress(p: Int, block: () -> T): T {
+        Engine.padLoadText[p] = "lädt"
+        try {
+            return LoadProgress.run({ Engine.padLoadProg[p] = it }) { block() }
+        } finally { Engine.padLoadProg[p] = -1f }
+    }
+
+    /** Lade-Fortschritt im DJ-Deck: Dekodieren bis 85 %, danach Analyse. */
+    private fun deckDecode(dd: Dj.Deck, get: () -> Dj.Track): Dj.Track {
+        val t = LoadProgress.run({ dd.loadProg = it * 0.85f }) { get() }
+        dd.loadProg = 0.9f
+        return t
+    }
+
     /** Datei auf ein Pad laden – mit Auto-Beatmatch (einmal analysiert, dann gemerkt) oder im Original-Tempo. */
     private fun clipToPad(p: Int, data: FloatArray, rate: Int, name: String?): String {
         if (!Engine.autoBeatmatch) return Engine.importFree(p, data)
         val key = beatKey(name, data)
+        Engine.padLoadText[p] = "Tempo-Analyse"
+        LoadProgress.stage(0.6f, 0.7f)
         val info = cachedInfo(key) ?: Warp.analyze(data, rate, name).also { saveInfo(key, it) }
         return Engine.importClip(p, data, info)
     }
@@ -1465,7 +1482,9 @@ class MainActivity : Activity() {
         dd.loading = true
         Thread {
             try {
+                dd.loadProg = 0.3f
                 val data = AudioFiles.decodeFile(it.file, Engine.sampleRate, 600)
+                dd.loadProg = 0.8f
                 val r = Engine.sampleRate.toDouble()
                 Dj.load(dd, Dj.fromMono(data, Engine.sampleRate), it.title, it.bpm)
                 dd.grid = it.grid * r
@@ -1478,7 +1497,7 @@ class MainActivity : Activity() {
             } catch (e: Throwable) {
                 runOnUiThread { toast("Laden fehlgeschlagen: ${e.message ?: e}") }
             } finally {
-                dd.loading = false
+                dd.loading = false; dd.loadProg = -1f
             }
         }.start()
     }
@@ -1631,12 +1650,12 @@ class MainActivity : Activity() {
                                 dd.loading = true
                                 Thread {
                                     try {
-                                        val t = Dj.decode(this, Uri.fromFile(f))
+                                        val t = deckDecode(dd) { Dj.decode(this, Uri.fromFile(f)) }
                                         Dj.load(dd, t, f.nameWithoutExtension, null)
                                         runOnUiThread { hint("Deck A: ${f.nameWithoutExtension}"); switchMode(true) }
                                     } catch (e: Throwable) {
                                         runOnUiThread { toast("Laden fehlgeschlagen: ${e.message ?: e}") }
-                                    } finally { dd.loading = false }
+                                    } finally { dd.loading = false; dd.loadProg = -1f }
                                 }.start()
                             }
                             else -> confirm("Set löschen?", f.name) { f.delete() }
@@ -3528,7 +3547,7 @@ class MainActivity : Activity() {
         hint("Deck ${"AB"[k]}: lade ${t.title} …")
         Thread {
             try {
-                val tr = Dj.decode(this, Uri.parse(t.uri))
+                val tr = deckDecode(dd) { Dj.decode(this, Uri.parse(t.uri)) }
                 Dj.load(dd, tr, t.title, if (t.bpm > 0f) t.bpm else Warp.bpmFromName(t.title))
                 val r = dd.srcRate.toDouble()
                 if (t.analyzed || t.bpm > 0f) {
@@ -3560,7 +3579,7 @@ class MainActivity : Activity() {
                 t.missing = true
                 runOnUiThread { toast("Laden fehlgeschlagen: ${e.message ?: e}") }
             } finally {
-                dd.loading = false
+                dd.loading = false; dd.loadProg = -1f
             }
         }.start()
     }
@@ -3739,7 +3758,9 @@ class MainActivity : Activity() {
         dd.loading = true
         Thread {
             try {
+                dd.loadProg = 0.2f
                 val data = get()
+                dd.loadProg = 0.7f
                 val rate = Engine.sampleRate
                 // kurze Loops: Tempo wie beim Pad-Import (Länge + Rhythmus), lange Tracks: eigene Analyse
                 val nameBpm = Warp.bpmFromName("$title ${file ?: ""}") ?: if (data.size < rate * 30) Warp.analyze(data, rate, title).bpm else null
@@ -3748,7 +3769,7 @@ class MainActivity : Activity() {
             } catch (e: Throwable) {
                 runOnUiThread { toast("Laden fehlgeschlagen: ${e.message ?: e}") }
             } finally {
-                dd.loading = false
+                dd.loading = false; dd.loadProg = -1f
             }
         }.start()
     }
@@ -3760,7 +3781,7 @@ class MainActivity : Activity() {
         hint("Deck ${"AB"[k]}: lade $name …")
         Thread {
             try {
-                val t = Dj.decode(this, uri)
+                val t = deckDecode(dd) { Dj.decode(this, uri) }
                 Dj.load(dd, t, name.substringBeforeLast('.'), Warp.bpmFromName(name))
                 runOnUiThread { hint(String.format(Locale.GERMANY, "Deck %s: %s · %.1f BPM · %s", "AB"[k], name, dd.bpm, Dj.fmt(dd.seconds()))) }
             } catch (e: OutOfMemoryError) {
@@ -3768,7 +3789,7 @@ class MainActivity : Activity() {
             } catch (e: Throwable) {
                 runOnUiThread { toast("Laden fehlgeschlagen: ${e.message ?: e}") }
             } finally {
-                dd.loading = false
+                dd.loading = false; dd.loadProg = -1f
             }
         }.start()
     }
@@ -4251,7 +4272,8 @@ class MainActivity : Activity() {
                 toast("Importiere …")
                 val rate = Engine.sampleRate
                 Thread {
-                    try {
+                    try { padProgress(pad) {
+                        LoadProgress.stage(0f, 0.6f)
                         // so viel laden, wie der freie Speicher sicher hergibt (Song + Kopie fürs Tempo + Analyse)
                         System.gc()
                         val rt = Runtime.getRuntime()
@@ -4268,7 +4290,7 @@ class MainActivity : Activity() {
                             val desc = clipToPad(pad, samples, rate, name)
                             runOnUiThread { hint("Pad ${pad + 1}: ${name ?: "Datei"} · $desc · antippen startet ihn auf der Eins") }
                         }
-                    } catch (e: OutOfMemoryError) {
+                    } } catch (e: OutOfMemoryError) {
                         runOnUiThread { toast("Datei zu lang für den Speicher – bitte kürzeren Song oder Ausschnitt wählen") }
                     } catch (e: Exception) {
                         runOnUiThread { toast("Import fehlgeschlagen: ${e.message ?: e}") }

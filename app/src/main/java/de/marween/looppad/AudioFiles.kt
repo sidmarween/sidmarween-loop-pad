@@ -209,6 +209,7 @@ object AudioFiles {
                     }
                     c.releaseOutputBuffer(oi, false)
                     if ((info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0) outputDone = true
+                    if (durUs > 0) LoadProgress.report(info.presentationTimeUs.toFloat() / durUs)
                 }
             }
             if (list.size == 0) throw IllegalStateException("Datei enthält kein Audio")
