@@ -77,6 +77,11 @@ object Dj {
         /** Wellenform-Übersicht: Pegel und Bass-Anteil je [BIN] Frames. */
         @Volatile var peaks: ByteArray = ByteArray(0)
         @Volatile var lows: ByteArray = ByteArray(0)
+        @Volatile var mids: ByteArray = ByteArray(0)
+        @Volatile var highs: ByteArray = ByteArray(0)
+        /** Gemessene Lautheit (LUFS-ähnlich) und daraus die Auto-Gain-Verstärkung. */
+        @Volatile var lufs = Float.NaN
+        @Volatile var agFactor = 1f
         @Volatile var loading = false
         /** Eintrag der DJ-Bibliothek (für das Speichern geänderter Cue-Punkte). */
         @Volatile var libId: String? = null
@@ -236,7 +241,7 @@ object Dj {
                     d.fL.hp(sr, fc, 1.1); d.fR.hp(sr, fc, 1.1)
                 }
             }
-            val g = gainOf(d.gain)
+            val g = gainOf(d.gain) * (if (autoGain) d.agFactor else 1f)
             var peak = 0f
             for (i in 0 until n) {
                 var l = bl[i]
@@ -838,52 +843,10 @@ object Dj {
 
     /** Track ins Deck laden: Wellenform, Tempo und Beat-Raster bestimmen. */
     fun load(d: Deck, t: Track, title: String, nameBpm: Float?) {
-        val bins = (t.len + BIN - 1) / BIN
-        val pk = ByteArray(bins)
-        val lw = ByteArray(bins)
-        var lpState = 0f
-        val a = (1.0 - exp(-2 * PI * 180.0 / t.rate)).toFloat()
-        // Mono-Hüllkurve für die Tempo-Analyse (10-ms-Raster)
-        val hop = max(1, t.rate / 200)
-        val env = FloatArray(t.len / hop + 1)
-        val envLo = FloatArray(t.len / hop + 1)
-        val envHi = FloatArray(t.len / hop + 1)
-        var hiLp = 0f
-        val a4 = (1.0 - exp(-2 * PI * 4000.0 / t.rate)).toFloat()
-        var maxPk = 1e-6f
-        val pkF = FloatArray(bins)
-        val lwF = FloatArray(bins)
-        for (bi in 0 until bins) {
-            var m = 0f
-            var sAll = 0f
-            var sLow = 0f
-            val f0 = bi * BIN
-            val f1 = min(t.len, f0 + BIN)
-            for (f in f0 until f1) {
-                val v = if (t.ch == 2) (t.data[2 * f] + t.data[2 * f + 1]) / 65536f else t.data[f] / 32768f
-                lpState += a * (v - lpState)
-                val av = abs(v)
-                if (av > m) m = av
-                sAll += av
-                sLow += abs(lpState)
-                env[f / hop] += v * v
-                envLo[f / hop] += lpState * lpState
-                hiLp += a4 * (v - hiLp)
-                val hv = v - hiLp
-                envHi[f / hop] += hv * hv
-            }
-            pkF[bi] = m
-            lwF[bi] = if (sAll > 1e-6f) (sLow / sAll).coerceIn(0f, 1f) else 0f
-            if (m > maxPk) maxPk = m
-        }
-        for (bi in 0 until bins) {
-            pk[bi] = (min(1f, pkF[bi] / maxPk) * 255f).toInt().toByte()
-            lw[bi] = (lwF[bi] * 255f).toInt().toByte()
-        }
-        val on = onsetEnv(envLo, envHi, t.rate.toDouble() / hop)
-        val det = detectBpm(on, t.rate.toDouble() / hop)
+        val w = waveOf(t.data, t.ch, t.len, t.rate)
+        val det = detectBpm(w.onset, w.fps)
         val bpm = nameBpm ?: det.first
-        val grid = findGrid(on, t.rate.toDouble() / hop, bpm) * hop
+        val grid = findGrid(w.onset, w.fps, bpm) * (t.rate / w.fps)
         d.playing = false
         d.sync = false
         d.loopOn = false
@@ -891,8 +854,10 @@ object Dj {
         d.ch = t.ch
         d.len = t.len
         d.srcRate = t.rate
-        d.peaks = pk
-        d.lows = lw
+        d.peaks = w.peaks
+        d.lows = w.lows
+        d.mids = w.mids
+        d.highs = w.highs
         d.title = title
         d.bpm = bpm
         d.grid = grid
@@ -908,57 +873,123 @@ object Dj {
         d.gReset = true
         d.rollBeats = 0f
         d.slipTrack = false
+        d.lufs = w.lufs
+        d.agFactor = agOf(w.lufs)
         d.data = t.data
         analyzePhrase(d)
         detectKeyAsync(d)
     }
 
-    class Wave(val peaks: ByteArray, val lows: ByteArray, val env: FloatArray, val fps: Double, val onset: FloatArray)
+    // ---------------------------------------------------------------- Auto-Gain
 
-    /** Wellenform-Übersicht und Hüllkurve (für Tempo/Raster) eines Tracks. */
+    /** Auto-Gain: alle Tracks auf gleiche Lautheit (Ziel [targetLufs]). */
+    @Volatile var autoGain = true
+    @Volatile var targetLufs = -10f
+    /** Wellenform nach Frequenzen färben (Bass rot, Mitten grün, Höhen blau). */
+    @Volatile var colorWave = true
+
+    /** Verstärkung für eine gemessene Lautheit (begrenzt auf −12 … +9 dB). */
+    fun agOf(lufs: Float): Float {
+        if (lufs.isNaN() || lufs < -60f) return 1f
+        val db = (targetLufs - lufs).coerceIn(-12f, 9f)
+        return Math.pow(10.0, db / 20.0).toFloat()
+    }
+
+    fun setTargetLufs(v: Float) {
+        targetLufs = v
+        for (d in decks) d.agFactor = agOf(d.lufs)
+    }
+
+    class Wave(val peaks: ByteArray, val lows: ByteArray, val env: FloatArray, val fps: Double, val onset: FloatArray,
+               val mids: ByteArray = ByteArray(0), val highs: ByteArray = ByteArray(0), val lufs: Float = Float.NaN)
+
+    /**
+     * Wellenform-Übersicht (Pegel + Anteile Bass/Mitten/Höhen je [BIN] Frames), Hüllkurve für
+     * Tempo/Raster und Lautheit (wie LUFS: Höhen leicht betont, Bass unter ~60 Hz gedämpft,
+     * 400-ms-Blöcke, leise Stellen ausgeblendet).
+     */
     fun waveOf(data: ShortArray, ch: Int, len: Int, rate: Int): Wave {
         val bins = (len + BIN - 1) / BIN
         val pk = ByteArray(bins)
         val lw = ByteArray(bins)
+        val md = ByteArray(bins)
+        val hg = ByteArray(bins)
         var lpState = 0f
         val a = (1.0 - exp(-2 * PI * 180.0 / rate)).toFloat()
+        val a25 = (1.0 - exp(-2 * PI * 2500.0 / rate)).toFloat()
+        var lp25 = 0f
         val hop = max(1, rate / 200)
         val env = FloatArray(len / hop + 1)
         val envLo = FloatArray(len / hop + 1)
         val envHi = FloatArray(len / hop + 1)
         var hiLp = 0f
         val a4 = (1.0 - exp(-2 * PI * 4000.0 / rate)).toFloat()
+        // Lautheit: Hochpass 60 Hz + Höhen-Anhebung (grob wie K-Filter)
+        val a60 = (1.0 - exp(-2 * PI * 60.0 / rate)).toFloat()
+        var lp60 = 0f
+        val a15 = (1.0 - exp(-2 * PI * 1500.0 / rate)).toFloat()
+        var lp15 = 0f
+        val blk = (rate * 0.4).toInt().coerceAtLeast(1)
+        val blocks = DoubleArray(len / blk + 1)
         var maxPk = 1e-6f
         val pkF = FloatArray(bins)
-        val lwF = FloatArray(bins)
         for (bi in 0 until bins) {
             var m = 0f
-            var sAll = 0f
             var sLow = 0f
+            var sMid = 0f
+            var sHigh = 0f
             val f0 = bi * BIN
             val f1 = min(len, f0 + BIN)
             for (f in f0 until f1) {
                 val v = if (ch == 2) (data[2 * f] + data[2 * f + 1]) / 65536f else data[f] / 32768f
                 lpState += a * (v - lpState)
+                lp25 += a25 * (v - lp25)
                 val av = abs(v)
                 if (av > m) m = av
-                sAll += av
                 sLow += abs(lpState)
+                sMid += abs(lp25 - lpState)
+                sHigh += abs(v - lp25)
                 env[f / hop] += v * v
                 envLo[f / hop] += lpState * lpState
                 hiLp += a4 * (v - hiLp)
                 val hv = v - hiLp
                 envHi[f / hop] += hv * hv
+                lp60 += a60 * (v - lp60)
+                val x1 = v - lp60
+                lp15 += a15 * (x1 - lp15)
+                val kw = x1 + 0.6f * (x1 - lp15)
+                blocks[f / blk] += (kw * kw).toDouble()
             }
             pkF[bi] = m
-            lwF[bi] = if (sAll > 1e-6f) (sLow / sAll).coerceIn(0f, 1f) else 0f
+            // Höhen werden optisch etwas verstärkt (sie haben wenig Energie, sind aber gut zu sehen)
+            val tot = sLow + sMid + 1.6f * sHigh
+            if (tot > 1e-6f) {
+                lw[bi] = (sLow / tot * 255f).toInt().coerceIn(0, 255).toByte()
+                md[bi] = (sMid / tot * 255f).toInt().coerceIn(0, 255).toByte()
+                hg[bi] = (1.6f * sHigh / tot * 255f).toInt().coerceIn(0, 255).toByte()
+            }
             if (m > maxPk) maxPk = m
         }
-        for (bi in 0 until bins) {
-            pk[bi] = (min(1f, pkF[bi] / maxPk) * 255f).toInt().toByte()
-            lw[bi] = (lwF[bi] * 255f).toInt().toByte()
+        for (bi in 0 until bins) pk[bi] = (min(1f, pkF[bi] / maxPk) * 255f).toInt().toByte()
+        // Lautheit: Blöcke über −70 und relativ −10 dB zum Mittel (BS.1770-artig)
+        var lufs = Float.NaN
+        run {
+            val nb = blocks.size - 1
+            if (nb >= 1) {
+                val l = DoubleArray(nb) { blocks[it] / blk }
+                fun lu(x: Double) = -0.691 + 10 * Math.log10(max(1e-12, x))
+                var s1 = 0.0; var c1 = 0
+                for (x in l) if (lu(x) > -70) { s1 += x; c1++ }
+                if (c1 > 0) {
+                    val rel = lu(s1 / c1) - 10
+                    var s2 = 0.0; var c2 = 0
+                    for (x in l) if (lu(x) > rel) { s2 += x; c2++ }
+                    if (c2 > 0) lufs = lu(s2 / c2).toFloat()
+                }
+            }
         }
-        return Wave(pk, lw, env, rate.toDouble() / hop, onsetEnv(envLo, envHi, rate.toDouble() / hop))
+        // Bass-Anteil für ältere Anzeigen: wie bisher (Anteil an der Summe)
+        return Wave(pk, lw, env, rate.toDouble() / hop, onsetEnv(envLo, envHi, rate.toDouble() / hop), md, hg, lufs)
     }
 
     /** Tempo und Beat-Raster neu erkennen (Frames). [keepBpm] = nur das Raster neu legen. */
@@ -1040,6 +1071,8 @@ object Dj {
         val r = ratio
         d.peaks = w.peaks
         d.lows = w.lows
+        d.mids = w.mids
+        d.highs = w.highs
         d.grid = d.grid * r
         d.cuePoint = d.cuePoint * r
         for (h in 0..3) if (d.hot[h] >= 0) d.hot[h] = d.hot[h] * r

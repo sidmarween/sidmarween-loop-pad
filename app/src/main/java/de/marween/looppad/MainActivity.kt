@@ -176,6 +176,9 @@ class MainActivity : Activity() {
         // DJ-Controller
         dj = DjView(this)
         dj.skinIdx = prefs.getInt("djSkin", 15)
+        Dj.autoGain = prefs.getBoolean("djAutoGain", true)
+        Dj.colorWave = prefs.getBoolean("djColorWave", true)
+        Dj.setTargetLufs(prefs.getFloat("djTargetLufs", -10f))
         dj.onLoad = { k -> showDeckLoad(k) }
         dj.onMenu = { showMainMenu() }
         dj.onTempo = { showTempo() }
@@ -2606,14 +2609,38 @@ class MainActivity : Activity() {
             "💿 DJ-Bibliothek (mit Cue-Punkten)"
         )
         if (dd.loaded()) items.add(0, "〰 Im Wave-Editor öffnen (Startpunkt, Hot Cues, Raster, Warp/Sync)")
+        fun agTxt(d: Dj.Deck): String = if (!d.loaded() || d.lufs.isNaN()) "–" else String.format(Locale.GERMANY, "%+.1f dB", 20 * Math.log10(d.agFactor.toDouble()))
         if (dd.loaded()) {
             items.add(String.format(Locale.GERMANY, "🎚 Tempo/Raster korrigieren (%.1f BPM)", dd.bpm))
             items.add("⏏ Auswerfen")
             items.add(if (dd.libId != null) "💾 Cue-Punkte in der DJ-Bibliothek speichern" else "💿 Track mit Cue-Punkten in die DJ-Bibliothek")
         }
+        val agIdx = items.size
+        items.add(if (Dj.autoGain) String.format(Locale.GERMANY, "🔊 Auto-Gain AN (Ziel %.0f LUFS · A %s · B %s) – antippen = aus", Dj.targetLufs, agTxt(Dj.decks[0]), agTxt(Dj.decks[1])) else "🔈 Auto-Gain AUS – antippen = alle Tracks gleich laut")
+        items.add("🎯 Auto-Gain-Ziel ändern (jetzt ${Dj.targetLufs.toInt()} LUFS)")
+        items.add(if (Dj.colorWave) "🌈 Wellenform farbig (Bass rot · Mitten grün · Höhen blau) – antippen = Deck-Farbe" else "〰 Wellenform in Deck-Farbe – antippen = farbig nach Frequenzen")
         ui()
             .setTitle("Deck ${"AB"[k]} laden")
             .setItems(items.toTypedArray()) { _, w0 ->
+                if (w0 == agIdx) {
+                    Dj.autoGain = !Dj.autoGain
+                    getSharedPreferences("marvpad", MODE_PRIVATE).edit().putBoolean("djAutoGain", Dj.autoGain).apply()
+                    hint(if (Dj.autoGain) "Auto-Gain an: alle Tracks auf ${Dj.targetLufs.toInt()} LUFS" else "Auto-Gain aus")
+                    return@setItems
+                }
+                if (w0 == agIdx + 1) {
+                    val opts = intArrayOf(-6, -8, -9, -10, -12, -14)
+                    ui().setTitle("Auto-Gain: Ziel-Lautheit").setItems(opts.map { "$it LUFS" + when (it) { -8 -> " (laut, Club)"; -10 -> " (Standard)"; -14 -> " (leise, viel Reserve)"; else -> "" } }.toTypedArray()) { _, i ->
+                        Dj.setTargetLufs(opts[i].toFloat())
+                        getSharedPreferences("marvpad", MODE_PRIVATE).edit().putFloat("djTargetLufs", Dj.targetLufs).apply()
+                    }.show()
+                    return@setItems
+                }
+                if (w0 == agIdx + 2) {
+                    Dj.colorWave = !Dj.colorWave
+                    getSharedPreferences("marvpad", MODE_PRIVATE).edit().putBoolean("djColorWave", Dj.colorWave).apply()
+                    return@setItems
+                }
                 if (dd.loaded() && w0 == 0) {
                     dj.openEditor(k)
                     return@setItems

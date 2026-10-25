@@ -695,7 +695,8 @@ class DjView(context: Context) : View(context) {
                     val bi = (f / Dj.BIN).toInt().coerceIn(0, pk.size - 1)
                     val v = (pk[bi].toInt() and 0xFF) / 255f
                     val lo = (lw[bi].toInt() and 0xFF) / 255f
-                    stroke.color = if (f < pos) alpha(blend(highCol, lowCol, lo), 0.55f) else blend(highCol, lowCol, lo)
+                    val wc = if (Dj.colorWave && dd.mids.size == pk.size) bandColor(lo, (dd.mids[bi].toInt() and 0xFF) / 255f, (dd.highs[bi].toInt() and 0xFF) / 255f) else blend(highCol, lowCol, lo)
+                    stroke.color = if (f < pos) alpha(wc, 0.55f) else wc
                     val a = max(dp(0.5f), v * hh)
                     c.drawLine(x, cy - a, x, cy + a, stroke)
                 }
@@ -751,7 +752,8 @@ class DjView(context: Context) : View(context) {
                 val bi = (i.toLong() * pk.size / n).toInt().coerceIn(0, pk.size - 1)
                 val v = (pk[bi].toInt() and 0xFF) / 255f
                 val f = bi.toDouble() * Dj.BIN
-                stroke.color = if (f < pos) alpha(col, 0.45f) else alpha(blend(col, Color.WHITE, 0.4f), 0.9f)
+                val oc = if (Dj.colorWave && dd.mids.size == pk.size) bandColor((lw[bi].toInt() and 0xFF) / 255f, (dd.mids[bi].toInt() and 0xFF) / 255f, (dd.highs[bi].toInt() and 0xFF) / 255f) else blend(col, Color.WHITE, 0.4f)
+                stroke.color = if (f < pos) alpha(oc, 0.45f) else alpha(oc, 0.9f)
                 val a = v * ov.height() / 2f
                 c.drawLine(ov.left + i, ov.centerY() - a, ov.left + i, ov.centerY() + a, stroke)
             }
@@ -779,6 +781,16 @@ class DjView(context: Context) : View(context) {
             c.drawText("LOOP ${beatsLabel(dd.loopBeats)}", wave.right - dp(2f), wave.top + dp(9f), mono)
             mono.textAlign = Paint.Align.LEFT
         }
+    }
+
+    /** Farbe aus den Frequenzanteilen: Bass rot, Mitten grün, Höhen blau (wie Serato/Rekordbox RGB). */
+    private fun bandColor(lo: Float, mid: Float, hi: Float): Int {
+        val r = lo * 1.25f + mid * 0.15f
+        val g = mid * 1.1f + lo * 0.12f + hi * 0.25f
+        val b = hi * 1.25f + mid * 0.2f
+        val m = max(1e-3f, max(r, max(g, b)))
+        val k = 255f / m
+        return Color.rgb((r * k * 0.95f + 12).toInt().coerceIn(0, 255), (g * k * 0.92f + 12).toInt().coerceIn(0, 255), (b * k + 12).toInt().coerceIn(0, 255))
     }
 
     private val keyHit = arrayOf(RectF(), RectF())
