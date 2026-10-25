@@ -2600,8 +2600,10 @@ class MainActivity : Activity() {
     // ================================================================ DJ: Tracks laden
 
     private fun showDeckLoad(k: Int) {
+        TrackDb.load(this)
         val dd = Dj.decks[k]
         val items = arrayListOf(
+            "💿 Sammlung – Crates, Verlauf, Vorschläge (${TrackDb.all().size})",
             "📂 Datei (MP3, WAV, M4A, OGG …)",
             "📚 Bibliothek (Loops & eigene Samples)",
             "🎙 Meine Aufnahmen",
@@ -2613,7 +2615,7 @@ class MainActivity : Activity() {
         if (dd.loaded()) {
             items.add(String.format(Locale.GERMANY, "🎚 Tempo/Raster korrigieren (%.1f BPM)", dd.bpm))
             items.add("⏏ Auswerfen")
-            items.add(if (dd.libId != null) "💾 Cue-Punkte in der DJ-Bibliothek speichern" else "💿 Track mit Cue-Punkten in die DJ-Bibliothek")
+            items.add(if (dd.libId != null) "💾 Cue-Punkte in der DJ-Bibliothek speichern" else if (dd.colId != null) "💾 Cue-Punkte in der Sammlung speichern" else "💿 Track mit Cue-Punkten in die DJ-Bibliothek")
         }
         val agIdx = items.size
         items.add(if (Dj.autoGain) String.format(Locale.GERMANY, "🔊 Auto-Gain AN (Ziel %.0f LUFS · A %s · B %s) – antippen = aus", Dj.targetLufs, agTxt(Dj.decks[0]), agTxt(Dj.decks[1])) else "🔈 Auto-Gain AUS – antippen = alle Tracks gleich laut")
@@ -2645,13 +2647,15 @@ class MainActivity : Activity() {
                     dj.openEditor(k)
                     return@setItems
                 }
-                val w = if (dd.loaded()) w0 - 1 else w0
+                val w = (if (dd.loaded()) w0 - 1 else w0) - 1
+                if (w == -1) { showCollection(k); return@setItems }
                 when (w) {
                     0 -> {
                         djDeck = k
                         val i = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
                             addCategory(Intent.CATEGORY_OPENABLE)
                             type = "audio/*"
+                            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
                         }
                         try { startActivityForResult(i, REQ_DECK) } catch (e: Exception) { toast("Kein Dateimanager gefunden") }
                     }
@@ -2682,6 +2686,7 @@ class MainActivity : Activity() {
                     4 -> pickDjLib("DJ-Bibliothek → Deck ${"AB"[k]}") { loadDeckLib(k, it) }
                     5 -> fixDeckTempo(k)
                     6 -> {
+                        saveDeckCollection(k)
                         dd.playing = false
                         dd.data = null
                         dd.len = 0
@@ -2693,6 +2698,357 @@ class MainActivity : Activity() {
             }
             .setNegativeButton("Abbrechen", null)
             .show()
+    }
+
+
+    // ================================================================ DJ-Sammlung (Crates, Verlauf, Analyse, Vorschläge)
+
+    private var colSort = 0
+    private var colCrate = ""
+    private var colSuggest = false
+    @Volatile private var colBatch = false
+    private var colRefresh: (() -> Unit)? = null
+    private val SORTS = arrayOf("BPM", "Tonart", "Energie", "Titel", "Neu", "Zuletzt gespielt", "Oft gespielt")
+    private val CRATE_ALL = ""
+    private val CRATE_HISTORY = "\u0001Verlauf"
+    private val CRATE_OPEN = "\u0002Nicht analysiert"
+
+    /** Basis für Vorschläge und Ampel: das andere (laufende) Deck, sonst dieses. */
+    private fun colRef(k: Int): Dj.Deck? {
+        val o = Dj.decks[1 - k]
+        if (o.loaded()) return o
+        val d = Dj.decks[k]
+        return if (d.loaded()) d else null
+    }
+
+    private fun showCollection(k: Int) {
+        TrackDb.load(this)
+        val prefs = getSharedPreferences("marvpad", MODE_PRIVATE)
+        colSort = prefs.getInt("colSort", 0)
+        val dens = resources.displayMetrics.density
+        fun px(v: Float) = (v * dens).toInt()
+        val root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(px(10f), px(4f), px(10f), 0) }
+        val bar1 = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        val scroll1 = android.widget.HorizontalScrollView(this).apply { addView(bar1); isHorizontalScrollBarEnabled = false }
+        fun chip(t: String, on: (Button) -> Unit): Button = Button(this).apply {
+            text = t
+            isAllCaps = false
+            textSize = 12f
+            minHeight = 0; minimumHeight = 0
+            setPadding(px(10f), px(4f), px(10f), px(4f))
+            setOnClickListener { on(this) }
+            bar1.addView(this, LinearLayout.LayoutParams(-2, px(38f)).apply { rightMargin = px(4f) })
+        }
+        val search = EditText(this).apply { hint = "🔎 Suchen (Titel)"; textSize = 14f; isSingleLine = true }
+        val info = TextView(this).apply { textSize = 11f; setTextColor(Color.argb(190, 200, 200, 200)); setPadding(px(4f), px(2f), 0, px(2f)) }
+        val list = android.widget.ListView(this)
+        root.addView(scroll1)
+        root.addView(search)
+        root.addView(info)
+        root.addView(list, LinearLayout.LayoutParams(-1, (resources.displayMetrics.heightPixels * 0.55f).toInt()))
+        var rows: List<Pair<TrackDb.Track, Double?>> = emptyList()
+        var dlg: AlertDialog? = null
+        val adapter = object : android.widget.BaseAdapter() {
+            override fun getCount() = rows.size
+            override fun getItem(p: Int) = rows[p]
+            override fun getItemId(p: Int) = p.toLong()
+            override fun getView(p: Int, cv: View?, parent: android.view.ViewGroup): View {
+                val tv = (cv as? TextView) ?: TextView(this@MainActivity).apply { setPadding(px(6f), px(7f), px(6f), px(7f)); textSize = 14f }
+                val (t, sc) = rows[p]
+                val ref = colRef(k)
+                val rk = ref?.effKey() ?: -1
+                val sb = android.text.SpannableStringBuilder()
+                val t0 = sb.length
+                sb.append(if (t.missing) "⚠ " else "").append(t.title)
+                sb.setSpan(android.text.style.StyleSpan(Typeface.BOLD), t0, sb.length, 0)
+                sb.append("\n")
+                val meta = sb.length
+                if (t.analyzed || t.bpm > 0f) sb.append(String.format(Locale.GERMANY, "%.1f BPM", t.bpm)) else sb.append("– BPM")
+                sb.append("  ")
+                val ks = sb.length
+                sb.append(if (t.key >= 0) Keys.camelot(t.key) + " " + Keys.name(t.key) else "?")
+                val kc = if (ref != null) Keys.compat(rk, t.key) else -1
+                val col = when (kc) { 0, 1 -> Color.rgb(70, 220, 110); 2 -> Color.rgb(250, 190, 40); 3 -> Color.rgb(255, 90, 90); else -> Color.rgb(170, 170, 170) }
+                sb.setSpan(android.text.style.ForegroundColorSpan(col), ks, sb.length, 0)
+                if (t.energy > 0) sb.append("  ⚡").append(t.energy.toString())
+                if (t.seconds > 0) sb.append("  ").append(Dj.fmt(t.seconds))
+                if (t.plays > 0) sb.append("  ▶").append(t.plays.toString())
+                if (ref != null && t.bpm > 0f && ref.bpm > 0f) {
+                    val d = TrackDb.bpmDiff(ref.effBpm(), t.bpm)
+                    if (d < 20) sb.append(String.format(Locale.GERMANY, "  Δ%.1f %%", d))
+                }
+                if (sc != null) sb.append("  ✨")
+                if (t.crates.isNotEmpty()) sb.append("  📁").append(t.crates.joinToString(","))
+                sb.setSpan(android.text.style.RelativeSizeSpan(0.82f), meta, sb.length, 0)
+                tv.text = sb
+                return tv
+            }
+        }
+        list.adapter = adapter
+        lateinit var sortBtn: Button
+        lateinit var crateBtn: Button
+        lateinit var sugBtn: Button
+        lateinit var anaBtn: Button
+        fun refresh() {
+            val q = search.text.toString().trim().lowercase()
+            val all = TrackDb.all()
+            val ref = colRef(k)
+            val base: List<TrackDb.Track> = when (colCrate) {
+                CRATE_ALL -> all
+                CRATE_HISTORY -> TrackDb.history().reversed().mapNotNull { h -> TrackDb.byId(h.id) }.distinct()
+                CRATE_OPEN -> all.filter { !it.analyzed }
+                else -> all.filter { colCrate in it.crates }
+            }.filter { q.isEmpty() || it.title.lowercase().contains(q) }
+            rows = if (colSuggest && ref != null) {
+                val en = TrackDb.byId(ref.colId)?.energy ?: 0
+                base.mapNotNull { t -> if (t.id == ref.colId) null else TrackDb.score(t, ref.effBpm(), ref.effKey(), en)?.let { t to it } }.sortedBy { it.second }.map { it.first to it.second }
+            } else {
+                val l = when (colSort) {
+                    0 -> base.sortedWith(compareBy({ it.bpm <= 0f }, { it.bpm }))
+                    1 -> base.sortedWith(compareBy({ it.key < 0 }, { Keys.camelotNum(it.key) }, { if (Keys.isMinor(it.key)) 0 else 1 }, { it.bpm }))
+                    2 -> base.sortedWith(compareBy({ it.energy <= 0 }, { -it.energy }, { it.bpm }))
+                    3 -> base.sortedBy { it.title.lowercase() }
+                    4 -> base.sortedByDescending { it.added }
+                    5 -> base.sortedByDescending { it.lastPlayed }
+                    else -> base.sortedByDescending { it.plays }
+                }
+                if (colCrate == CRATE_HISTORY) base.map { it to null } else l.map { it to null }
+            }
+            adapter.notifyDataSetChanged()
+            val open = all.count { !it.analyzed }
+            sortBtn.text = "⇅ ${SORTS[colSort]}"
+            crateBtn.text = "📁 " + when (colCrate) { CRATE_ALL -> "Alle (${all.size})"; CRATE_HISTORY -> "Verlauf"; CRATE_OPEN -> "Nicht analysiert"; else -> colCrate }
+            sugBtn.text = if (colSuggest) "✨ Vorschläge AN" else "✨ Vorschläge"
+            anaBtn.text = if (colBatch) "■ Analyse stoppen" else "⟳ Analysieren ($open)"
+            info.text = when {
+                all.isEmpty() -> "Noch leer – „＋ Ordner“ fügt einen ganzen Musik-Ordner hinzu (Tempo, Tonart, Lautheit und Energie werden einmal analysiert und gespeichert)."
+                colSuggest && ref == null -> "Vorschläge: erst einen Track in ein Deck laden"
+                colSuggest -> String.format(Locale.GERMANY, "✨ %d passende Tracks zu Deck %s (%.1f BPM · %s): Tempo ±6 %%, harmonische Tonart, ähnliche Energie", rows.size, "AB"[ref!!.idx], ref.effBpm(), Keys.camelot(ref.effKey()))
+                else -> "${rows.size} Tracks" + (if (open > 0) " · $open noch nicht analysiert" else "") + if (ref != null) " · Farbe der Tonart = passt zu Deck ${"AB"[ref.idx]}" else ""
+            }
+        }
+        colRefresh = { runOnUiThread { refresh() } }
+        chip("＋ Ordner") { pickCollectionFolder() }
+        chip("＋ Dateien") { pickCollectionFiles() }
+        anaBtn = chip("⟳ Analysieren") { if (colBatch) colBatch = false else startBatchAnalysis(); refresh() }
+        crateBtn = chip("📁 Alle") {
+            val cr = TrackDb.crates()
+            val labels = listOf("Alle Tracks", "🕘 Verlauf", "⟳ Nicht analysiert") + cr.map { "📁 $it" } + listOf("＋ Neue Crate …", "✎ Crates verwalten …")
+            ui().setTitle("Crate").setItems(labels.toTypedArray()) { _, w ->
+                when {
+                    w == 0 -> colCrate = CRATE_ALL
+                    w == 1 -> colCrate = CRATE_HISTORY
+                    w == 2 -> colCrate = CRATE_OPEN
+                    w < 3 + cr.size -> colCrate = cr[w - 3]
+                    w == 3 + cr.size -> askName("", "Name der Crate (z. B. „Warm-up“, „Peak Time“)") { n -> TrackDb.addCrate(n.trim()); TrackDb.save(this); colCrate = n.trim(); refresh() }
+                    else -> manageCrates { refresh() }
+                }
+                refresh()
+            }.show()
+        }
+        sortBtn = chip("⇅ BPM") {
+            ui().setTitle("Sortieren nach").setItems(SORTS) { _, w -> colSort = w; colSuggest = false; prefs.edit().putInt("colSort", w).apply(); refresh() }.show()
+        }
+        sugBtn = chip("✨ Vorschläge") { colSuggest = !colSuggest; refresh() }
+        chip("📤 Tracklist") { shareTracklist() }
+        search.addTextChangedListener(object : android.text.TextWatcher {
+            override fun afterTextChanged(e: android.text.Editable?) { refresh() }
+            override fun beforeTextChanged(a: CharSequence?, b: Int, c: Int, d: Int) {}
+            override fun onTextChanged(a: CharSequence?, b: Int, c: Int, d: Int) {}
+        })
+        list.setOnItemClickListener { _, _, pos, _ ->
+            val t = rows.getOrNull(pos)?.first ?: return@setOnItemClickListener
+            dlg?.dismiss()
+            loadDeckCollection(k, t)
+        }
+        list.setOnItemLongClickListener { _, _, pos, _ ->
+            val t = rows.getOrNull(pos)?.first ?: return@setOnItemLongClickListener true
+            trackActions(t, k) { refresh() }
+            true
+        }
+        refresh()
+        dlg = ui().setTitle("💿 Sammlung → Deck ${"AB"[k]}").setView(root).setNegativeButton("Schließen", null).create()
+        dlg.setOnDismissListener { colRefresh = null }
+        dlg.show()
+    }
+
+    private fun trackActions(t: TrackDb.Track, k: Int, done: () -> Unit) {
+        val items = arrayOf("▶ In Deck A laden", "▶ In Deck B laden", "📁 Crates zuordnen …", "⟳ Neu analysieren", "✎ Titel ändern", "🗑 Aus der Sammlung entfernen")
+        ui().setTitle(t.title).setItems(items) { _, w ->
+            when (w) {
+                0 -> loadDeckCollection(0, t)
+                1 -> loadDeckCollection(1, t)
+                2 -> {
+                    val cr = TrackDb.crates()
+                    if (cr.isEmpty()) { askName("", "Erste Crate anlegen") { n -> TrackDb.addCrate(n.trim()); t.crates.add(n.trim()); TrackDb.save(this); done() }; return@setItems }
+                    val checked = BooleanArray(cr.size) { cr[it] in t.crates }
+                    ui().setTitle("Crates für „${t.title}“").setMultiChoiceItems(cr.toTypedArray(), checked) { _, i, on -> if (on) t.crates.add(cr[i]) else t.crates.remove(cr[i]) }
+                        .setPositiveButton("OK") { _, _ -> TrackDb.save(this); done() }
+                        .setNeutralButton("＋ Neue") { _, _ -> askName("", "Name der Crate") { n -> TrackDb.addCrate(n.trim()); t.crates.add(n.trim()); TrackDb.save(this); done() } }
+                        .show()
+                }
+                3 -> {
+                    hint("Analysiere „${t.title}“ …")
+                    Thread {
+                        try { TrackDb.analyze(this, t); TrackDb.save(this); runOnUiThread { hint(String.format(Locale.GERMANY, "%s: %.1f BPM · %s · Energie %d", t.title, t.bpm, Keys.camelot(t.key), t.energy)); done() } }
+                        catch (e: Throwable) { t.missing = true; runOnUiThread { toast("Analyse fehlgeschlagen: ${e.message ?: e}") } }
+                    }.start()
+                }
+                4 -> askName(t.title, "Titel") { n -> t.title = n.trim().ifEmpty { t.title }; TrackDb.save(this); done() }
+                else -> confirm("Aus der Sammlung entfernen?", "„${t.title}“ – die Datei selbst bleibt erhalten.") { TrackDb.remove(t); TrackDb.save(this); done() }
+            }
+        }.show()
+    }
+
+    private fun manageCrates(done: () -> Unit) {
+        val cr = TrackDb.crates()
+        if (cr.isEmpty()) { toast("Noch keine Crates"); return }
+        ui().setTitle("Crates verwalten").setItems(cr.map { n -> "📁 $n (${TrackDb.all().count { n in it.crates }})" }.toTypedArray()) { _, i ->
+            val n = cr[i]
+            ui().setTitle(n).setItems(arrayOf("✎ Umbenennen", "🗑 Löschen (Tracks bleiben in der Sammlung)")) { _, w ->
+                if (w == 0) askName(n, "Neuer Name") { nn -> TrackDb.renameCrate(n, nn.trim()); if (colCrate == n) colCrate = nn.trim(); TrackDb.save(this); done() }
+                else confirm("Crate löschen?", n) { TrackDb.deleteCrate(n); if (colCrate == n) colCrate = CRATE_ALL; TrackDb.save(this); done() }
+            }.show()
+        }.show()
+    }
+
+    private fun shareTracklist() {
+        val h = TrackDb.history()
+        if (h.isEmpty()) { toast("Verlauf ist leer"); return }
+        val df = SimpleDateFormat("dd.MM. HH:mm", Locale.GERMANY)
+        val txt = StringBuilder("Tracklist – Marv PAD\n\n")
+        var day = ""
+        for ((i, p) in h.withIndex()) {
+            val d = df.format(Date(p.at))
+            if (d.substring(0, 6) != day) { day = d.substring(0, 6); txt.append("\n").append(day).append("\n") }
+            txt.append(String.format(Locale.GERMANY, "%2d. %s  %s  (%.0f BPM · %s)\n", i + 1, d.substring(7), p.title, p.bpm, Keys.camelot(p.key)))
+        }
+        val opts = arrayOf("📤 Teilen", "🗑 Verlauf leeren")
+        ui().setTitle("Verlauf (${h.size} Tracks)").setItems(opts) { _, w ->
+            if (w == 0) {
+                val i = Intent(Intent.ACTION_SEND).apply { type = "text/plain"; putExtra(Intent.EXTRA_TEXT, txt.toString()); putExtra(Intent.EXTRA_SUBJECT, "Tracklist") }
+                try { startActivity(Intent.createChooser(i, "Tracklist teilen")) } catch (e: Exception) { toast("Teilen nicht möglich") }
+            } else confirm("Verlauf leeren?", "Die Tracks bleiben in der Sammlung.") { TrackDb.clearHistory(); TrackDb.save(this) }
+        }.show()
+    }
+
+    private fun pickCollectionFolder() {
+        val i = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).apply {
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
+        }
+        try { startActivityForResult(i, REQ_COL_TREE) } catch (e: Exception) { toast("Kein Dateimanager gefunden") }
+    }
+
+    private fun pickCollectionFiles() {
+        val i = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = "audio/*"
+            putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
+        }
+        try { startActivityForResult(i, REQ_COL_FILES) } catch (e: Exception) { toast("Kein Dateimanager gefunden") }
+    }
+
+    private fun addToCollection(uris: List<Pair<Uri, String>>) {
+        TrackDb.load(this)
+        var n = 0
+        for ((u, name) in uris) if (TrackDb.add(u, name).second) n++
+        TrackDb.save(this)
+        hint(if (n > 0) "💿 $n Tracks in der Sammlung – Analyse läuft im Hintergrund" else "Alle Tracks waren schon in der Sammlung")
+        colRefresh?.invoke()
+        if (n > 0) startBatchAnalysis()
+    }
+
+    /** Ordner-Analyse: alle noch nicht analysierten Tracks nacheinander im Hintergrund. */
+    private fun startBatchAnalysis() {
+        if (colBatch) return
+        colBatch = true
+        Thread {
+            var done = 0
+            try {
+                while (colBatch) {
+                    val t = TrackDb.all().firstOrNull { !it.analyzed && !it.missing } ?: break
+                    try {
+                        TrackDb.analyze(this, t)
+                    } catch (e: OutOfMemoryError) {
+                        t.missing = true
+                    } catch (e: Throwable) {
+                        t.missing = true
+                    }
+                    done++
+                    if (done % 3 == 0) TrackDb.save(this)
+                    colRefresh?.invoke()
+                    if (done % 10 == 0) runOnUiThread { hint("Analyse: $done Tracks fertig …") }
+                }
+            } finally {
+                colBatch = false
+                TrackDb.save(this)
+                colRefresh?.invoke()
+                val left = TrackDb.all().count { !it.analyzed && !it.missing }
+                if (done > 0) runOnUiThread { hint("⟳ Analyse fertig: $done Tracks" + if (left > 0) " · $left offen" else "") }
+            }
+        }.start()
+    }
+
+    /** Track aus der Sammlung ins Deck – mit gespeichertem Raster, Tonart, Phrasen und Cue-Punkten. */
+    private fun loadDeckCollection(k: Int, t: TrackDb.Track) {
+        val dd = Dj.decks[k]
+        saveDeckCollection(k)
+        dd.loading = true
+        hint("Deck ${"AB"[k]}: lade ${t.title} …")
+        Thread {
+            try {
+                val tr = Dj.decode(this, Uri.parse(t.uri))
+                Dj.load(dd, tr, t.title, if (t.bpm > 0f) t.bpm else Warp.bpmFromName(t.title))
+                val r = dd.srcRate.toDouble()
+                if (t.analyzed || t.bpm > 0f) {
+                    dd.grid = t.grid * r
+                    dd.barOffset = t.barOffset
+                    dd.phraseOff = t.phraseOff
+                }
+                if (t.key >= 0) { dd.keyGen++; dd.key = t.key; dd.keyConf = t.keyConf }
+                if (t.cue >= 0) { dd.cuePoint = t.cue * r; dd.seekTo = dd.cuePoint } else { dd.cuePoint = dd.grid; dd.seekTo = dd.grid }
+                for (h in 0..3) dd.hot[h] = if (t.hot[h] >= 0) t.hot[h] * r else -1.0
+                dd.colId = t.id
+                t.missing = false
+                if (!t.analyzed) {
+                    // erste Werte aus dem Deck übernehmen, die volle Analyse folgt im Hintergrund
+                    t.bpm = dd.bpm
+                    t.grid = dd.grid / r
+                    t.lufs = dd.lufs
+                    t.seconds = dd.seconds()
+                }
+                TrackDb.played(t)
+                TrackDb.save(this)
+                runOnUiThread { hint(String.format(Locale.GERMANY, "Deck %s: %s · %.1f BPM · %s", "AB"[k], t.title, dd.bpm, Keys.camelot(dd.key))) }
+            } catch (e: SecurityException) {
+                t.missing = true
+                runOnUiThread { toast("Kein Zugriff mehr auf „${t.title}“ – Ordner bitte neu hinzufügen") }
+            } catch (e: OutOfMemoryError) {
+                runOnUiThread { toast("Track zu groß für den Speicher") }
+            } catch (e: Throwable) {
+                t.missing = true
+                runOnUiThread { toast("Laden fehlgeschlagen: ${e.message ?: e}") }
+            } finally {
+                dd.loading = false
+            }
+        }.start()
+    }
+
+    /** Geänderte Cue-Punkte, Raster und Tonart eines Sammlungs-Tracks speichern. */
+    private fun saveDeckCollection(k: Int) {
+        val dd = Dj.decks[k]
+        val t = TrackDb.byId(dd.colId) ?: return
+        if (!dd.loaded()) return
+        val r = dd.srcRate.toDouble()
+        t.cue = dd.cuePoint / r
+        for (h in 0..3) t.hot[h] = if (dd.hot[h] >= 0) dd.hot[h] / r else -1.0
+        t.bpm = dd.bpm
+        t.grid = dd.grid / r
+        if (dd.key >= 0) { t.key = dd.key; t.keyConf = dd.keyConf }
+        t.barOffset = dd.barOffset
+        t.phraseOff = dd.phraseOff
+        TrackDb.save(this)
     }
 
     /** Tonart eines Decks: Keylock, Key-Shift, harmonisch an das andere Deck anpassen, von Hand setzen. */
@@ -2742,7 +3098,7 @@ class MainActivity : Activity() {
                     dd.keyGen++
                     dd.key = order[i]
                     dd.keyConf = 1f
-                    if (dd.libId != null) saveDeckToLib(k)
+                    if (dd.libId != null || dd.colId != null) saveDeckToLib(k)
                 }.show()
         }
         items.add("ℹ Camelot-Rad: Nachbarn (±1) und A↔B mischen sich harmonisch"); acts.add {
@@ -2756,6 +3112,7 @@ class MainActivity : Activity() {
     /** Cue-Punkte des Decks in der DJ-Bibliothek sichern (bzw. den Track neu aufnehmen). */
     private fun saveDeckToLib(k: Int) {
         val dd = Dj.decks[k]
+        if (dd.colId != null && dd.libId == null) { saveDeckCollection(k); hint("💾 Cue-Punkte in der Sammlung gespeichert"); return }
         val r = dd.srcRate.toDouble()
         val hot = DoubleArray(4) { if (dd.hot[it] >= 0) dd.hot[it] / r else -1.0 }
         val id = dd.libId
@@ -3252,6 +3609,29 @@ class MainActivity : Activity() {
             if (uris.isNotEmpty()) importLibraryUris(uris)
             return
         }
+        if (requestCode == REQ_COL_FILES || requestCode == REQ_COL_TREE) {
+            if (resultCode != RESULT_OK || data == null) return
+            if (requestCode == REQ_COL_TREE) {
+                val tree = data.data ?: return
+                try { contentResolver.takePersistableUriPermission(tree, Intent.FLAG_GRANT_READ_URI_PERMISSION) } catch (ignored: Exception) {}
+                hint("Lese Ordner …")
+                Thread {
+                    val found = TrackDb.scanTree(this, tree)
+                    runOnUiThread { if (found.isEmpty()) toast("Keine Audiodateien gefunden") else addToCollection(found) }
+                }.start()
+            } else {
+                val uris = ArrayList<Pair<Uri, String>>()
+                val clip = data.clipData
+                val list = ArrayList<Uri>()
+                if (clip != null) for (q in 0 until clip.itemCount) clip.getItemAt(q).uri?.let { list.add(it) } else data.data?.let { list.add(it) }
+                for (u in list) {
+                    try { contentResolver.takePersistableUriPermission(u, Intent.FLAG_GRANT_READ_URI_PERMISSION) } catch (ignored: Exception) {}
+                    uris.add(u to (displayName(u) ?: "Track").substringBeforeLast('.'))
+                }
+                addToCollection(uris)
+            }
+            return
+        }
         val uri = data?.data
         if (resultCode != RESULT_OK || uri == null) return
         val pad = menuPad
@@ -3270,7 +3650,18 @@ class MainActivity : Activity() {
                     }
                 }.start()
             }
-            REQ_DECK -> loadDeckUri(djDeck, uri)
+            REQ_DECK -> {
+                // Datei landet automatisch in der Sammlung (dauerhafter Zugriff, Analyse im Hintergrund)
+                var inCol: TrackDb.Track? = null
+                try {
+                    contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    TrackDb.load(this)
+                    val (t, isNew) = TrackDb.add(uri, (displayName(uri) ?: "Track").substringBeforeLast('.'))
+                    if (isNew) TrackDb.save(this)
+                    inCol = t
+                } catch (ignored: Exception) {}
+                if (inCol != null) loadDeckCollection(djDeck, inCol) else loadDeckUri(djDeck, uri)
+            }
             REQ_MIDI_OUT -> writeMidi(uri)
             REQ_MIDI_IN -> readMidi(uri)
             REQ_INST_OUT -> writeInstMidi(uri)
@@ -3589,5 +3980,7 @@ class MainActivity : Activity() {
         private const val REQ_SET = 19
         private const val REQ_LIB_IN = 20
         private const val REQ_LIB_OUT = 21
+        private const val REQ_COL_TREE = 22
+        private const val REQ_COL_FILES = 23
     }
 }

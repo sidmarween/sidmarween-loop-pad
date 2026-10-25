@@ -85,6 +85,8 @@ object Dj {
         @Volatile var loading = false
         /** Eintrag der DJ-Bibliothek (für das Speichern geänderter Cue-Punkte). */
         @Volatile var libId: String? = null
+        /** Eintrag der Sammlung ([TrackDb]). */
+        @Volatile var colId: String? = null
 
         /** Abspielposition (Frames der Quelle) – nur der Mischer-Thread schreibt, die Oberfläche liest. */
         @Volatile var pos = 0.0
@@ -834,6 +836,96 @@ object Dj {
         }
     }
 
+    /**
+     * Für die Analyse: dekodiert sparsam als Mono, über 32 kHz auf die halbe Rate gemittelt
+     * (10 Minuten ≈ 29 MB statt 115 MB).
+     */
+    fun decodeMono(context: Context, uri: Uri, maxSeconds: Int): Track {
+        val ex = MediaExtractor()
+        var codec: MediaCodec? = null
+        try {
+            ex.setDataSource(context, uri, null)
+            var track = -1
+            var fmt: MediaFormat? = null
+            for (i in 0 until ex.trackCount) {
+                val f = ex.getTrackFormat(i)
+                if (f.getString(MediaFormat.KEY_MIME)?.startsWith("audio/") == true) { track = i; fmt = f; break }
+            }
+            if (track < 0 || fmt == null) throw IllegalStateException("Keine Audiospur gefunden")
+            ex.selectTrack(track)
+            var rate = fmt.getInteger(MediaFormat.KEY_SAMPLE_RATE)
+            var inCh = fmt.getInteger(MediaFormat.KEY_CHANNEL_COUNT)
+            var dec = if (rate > 32000) 2 else 1
+            val durUs = if (fmt.containsKey(MediaFormat.KEY_DURATION)) fmt.getLong(MediaFormat.KEY_DURATION) else 0L
+            val maxFrames = rate.toLong() * maxSeconds / dec
+            var cap = (if (durUs > 0) min(maxFrames, durUs * rate / 1_000_000L / dec + rate) else rate * 60L / dec).toInt()
+            var buf = ShortArray(cap)
+            var frames = 0
+            var acc = 0f
+            var accN = 0
+            var floatPcm = false
+            val c = MediaCodec.createDecoderByType(fmt.getString(MediaFormat.KEY_MIME)!!)
+            codec = c
+            c.configure(fmt, null, null, 0)
+            c.start()
+            val info = MediaCodec.BufferInfo()
+            var inputDone = false
+            var outputDone = false
+            var started = false
+            while (!outputDone) {
+                if (!inputDone) {
+                    val ii = c.dequeueInputBuffer(10_000)
+                    if (ii >= 0) {
+                        val ib = c.getInputBuffer(ii)!!
+                        val sz = ex.readSampleData(ib, 0)
+                        if (sz < 0) { c.queueInputBuffer(ii, 0, 0, 0, MediaCodec.BUFFER_FLAG_END_OF_STREAM); inputDone = true }
+                        else { c.queueInputBuffer(ii, 0, sz, ex.sampleTime, 0); ex.advance() }
+                    }
+                }
+                val oi = c.dequeueOutputBuffer(info, 10_000)
+                if (oi == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
+                    val of = c.outputFormat
+                    val nr = of.getInteger(MediaFormat.KEY_SAMPLE_RATE)
+                    if (nr != rate && !started) { rate = nr; dec = if (rate > 32000) 2 else 1 }
+                    inCh = of.getInteger(MediaFormat.KEY_CHANNEL_COUNT)
+                    if (of.containsKey(MediaFormat.KEY_PCM_ENCODING)) floatPcm = of.getInteger(MediaFormat.KEY_PCM_ENCODING) == AudioFormat.ENCODING_PCM_FLOAT
+                } else if (oi >= 0) {
+                    val ob = c.getOutputBuffer(oi)
+                    if (ob != null && info.size > 0) {
+                        started = true
+                        ob.position(info.offset)
+                        ob.limit(info.offset + info.size)
+                        val b = ob.slice().order(ByteOrder.LITTLE_ENDIAN)
+                        val fb = if (floatPcm) b.asFloatBuffer() else null
+                        val sb = if (!floatPcm) b.asShortBuffer() else null
+                        val nf = (if (floatPcm) fb!!.remaining() else sb!!.remaining()) / max(1, inCh)
+                        for (f in 0 until nf) {
+                            var v = 0f
+                            for (k in 0 until min(2, inCh)) v += if (floatPcm) fb!!.get(f * inCh + k) else sb!!.get(f * inCh + k) / 32768f
+                            acc += v / min(2, inCh)
+                            accN++
+                            if (accN < dec) continue
+                            if (frames >= maxFrames) break
+                            if (frames >= cap) { cap = min(maxFrames.toInt(), cap + cap / 2 + rate); buf = buf.copyOf(cap) }
+                            buf[frames++] = ((acc / accN).coerceIn(-1f, 1f) * 32767f).toInt().toShort()
+                            acc = 0f
+                            accN = 0
+                        }
+                        if (frames >= maxFrames) outputDone = true
+                    }
+                    c.releaseOutputBuffer(oi, false)
+                    if ((info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0) outputDone = true
+                }
+            }
+            if (frames < 2) throw IllegalStateException("Datei enthält kein Audio")
+            return Track(buf.copyOf(frames), 1, frames, rate / dec)
+        } finally {
+            try { codec?.stop() } catch (ignored: Exception) {}
+            try { codec?.release() } catch (ignored: Exception) {}
+            ex.release()
+        }
+    }
+
     /** Mono-Float (z. B. Pad, Bibliothek, Aufnahme) als Track. */
     fun fromMono(x: FloatArray, rate: Int): Track {
         val s = ShortArray(x.size)
@@ -867,6 +959,7 @@ object Dj {
         d.seekTo = grid
         d.pitch = 0f
         d.libId = null
+        d.colId = null
         d.key = -1
         d.keyConf = 0f
         d.keyShift = 0
