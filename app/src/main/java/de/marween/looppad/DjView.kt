@@ -2132,7 +2132,7 @@ class DjView(context: Context) : View(context) {
                 row == 0 && j == 2 -> Dj.beatJump(dd, dd.jumpBars)
                 row == 0 -> {
                     val opts = floatArrayOf(0.25f, 0.5f, 1f, 2f, 4f, 8f, 16f, 32f)
-                    dd.jumpBars = opts[(opts.indexOf(dd.jumpBars) + 1).coerceAtLeast(0) % opts.size]
+                    dd.jumpBars = opts[(opts.indexOfFirst { it == dd.jumpBars } + 1).coerceAtLeast(0) % opts.size]
                     onHint?.invoke("Beat Jump Deck ${"AB"[k]}: ${barsLabel(dd.jumpBars)}")
                 }
                 else -> {
