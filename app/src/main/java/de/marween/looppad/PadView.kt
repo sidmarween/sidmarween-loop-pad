@@ -2051,7 +2051,7 @@ class PadView(context: Context) : View(context) {
     private val drPanel = RectF()
     private val drLine = RectF()
     private val drBtns = Array(12) { RectF() }
-    private val QUANTS = intArrayOf(0, 4, 8, 16, 32)
+    private val QUANTS = intArrayOf(0, 2, 4, 8, 12, 16, 24, 32)
     private val DBARS = intArrayOf(1, 2, 4, 8)
 
     private fun drumActive(): Boolean = focus == 1 && drumMode
@@ -2066,7 +2066,12 @@ class PadView(context: Context) : View(context) {
         invalidate()
     }
 
-    private fun quantName(q: Int): String = if (q <= 0) "FREI" else "1/$q"
+    private fun quantName(q: Int): String = when {
+        q <= 0 -> "FREI"
+        q == 12 -> "1/8T"
+        q == 24 -> "1/16T"
+        else -> "1/$q"
+    }
 
     private fun layoutDrumPanel() {
         val r = drPanel
@@ -2192,11 +2197,11 @@ class PadView(context: Context) : View(context) {
         val sel = selPad
         val labels = arrayOf(
             if (rec) "■ REC" else "● REC", if (Engine.seqPlaying) "■ STOPP" else "▶ PLAY", if (Engine.metronome) "♩ KLICK AN" else "♩ KLICK",
-            "RASTER ${quantName(Engine.rollQuant)}", "LÄNGE $bars T", "↶ UNDO",
+            if (Engine.rollQuant > 0) "AUTO-Q ${quantName(Engine.rollQuant)}" else "AUTO-Q AUS", "LÄNGE $bars T", "↶ UNDO",
             "🥁 DRUMSET", if (drumVelPos) "ANSCHLAG: HÖHE" else "ANSCHLAG: FEST", if (Engine.countIn) "EINZÄHLEN AN" else "EINZÄHLEN AUS",
-            if (sel >= 0) "⌫ PAD ${sel + 1}" else "⌫ PAD", "⌫ ALLE", "🎹 NOTEN"
+            "⌗ QUANT. ${quantName(if (Engine.rollQuant > 0) Engine.rollQuant else 16)}", "⌫ LEEREN", "🎹 NOTEN"
         )
-        val on = booleanArrayOf(rec, Engine.seqPlaying, Engine.metronome, false, false, false, false, drumVelPos, Engine.countIn, false, false, false)
+        val on = booleanArrayOf(rec, Engine.seqPlaying, Engine.metronome, Engine.rollQuant > 0, false, false, false, drumVelPos, Engine.countIn, false, false, false)
         for (i in 0 until 12) {
             smallBtn(canvas, drBtns[i], labels[i], on[i], cols)
             if (i == 0 && rec) {
@@ -2250,7 +2255,8 @@ class PadView(context: Context) : View(context) {
             3 -> {
                 val k = (QUANTS.indexOf(Engine.rollQuant) + 1) % QUANTS.size
                 Engine.rollQuant = QUANTS[k]
-                hint(if (QUANTS[k] == 0) "Raster FREI: Anschläge bleiben genau so, wie gespielt" else "Raster 1/${QUANTS[k]}: Anschläge rasten ein")
+                hint(if (QUANTS[k] == 0) "AUTO-Q aus: Anschläge bleiben genau so, wie gespielt (⌗ QUANT. zieht sie später aufs Raster)"
+                else "AUTO-Q ${quantName(QUANTS[k])}: jeder Anschlag rastet beim Aufnehmen auf ${quantName(QUANTS[k])} ein" + if (QUANTS[k] == 12 || QUANTS[k] == 24) " (Triolen)" else "")
             }
             4 -> {
                 val k = (DBARS.indexOf(Engine.drumBars).coerceAtLeast(0) + 1) % DBARS.size
@@ -2261,8 +2267,12 @@ class PadView(context: Context) : View(context) {
             6 -> onDrumKit?.invoke()
             7 -> { drumVelPos = !drumVelPos; hint(if (drumVelPos) "Anschlag nach Höhe: oben im Pad = laut, unten = leise" else "Anschlag fest: immer volle Lautstärke") }
             8 -> { Engine.countIn = !Engine.countIn; hint(if (Engine.countIn) "Vor der Aufnahme 1 Takt einzählen" else "Aufnahme startet sofort") }
-            9 -> if (sel() >= 0) { Engine.clearHits(sel()); hint("Spur von Pad ${sel() + 1} geleert") } else hint("Erst ein Pad antippen")
-            10 -> { Engine.clearHits(-1); hint("Alle Drum-Spuren geleert – ↶ UNDO holt sie zurück") }
+            9 -> {
+                val q = if (Engine.rollQuant > 0) Engine.rollQuant else 16
+                val n = Engine.quantizeHits(q)
+                hint(if (n == 0) "Noch keine eingespielten Schläge" else "⌗ $n Schläge auf ${quantName(q)} gezogen – ↶ UNDO macht es rückgängig")
+            }
+            10 -> onDrumClear?.invoke(sel())
             11 -> if (sel() >= 0 && Engine.hasLoop(sel())) { closeFocus(); openKeyboard(sel()) } else hint("Erst ein Pad antippen")
         }
         return true
@@ -2968,6 +2978,8 @@ class PadView(context: Context) : View(context) {
     var onImportMenu: ((Int) -> Unit)? = null
     /** Drumset-Auswahl öffnen (Drum-Modus). */
     var onDrumKit: (() -> Unit)? = null
+    /** Drum-Spuren leeren (Auswahl: gewähltes Pad oder alle). */
+    var onDrumClear: ((Int) -> Unit)? = null
     var onPadFxEditor: ((Int) -> Unit)? = null
     private var fxBadgePointer = -1
     private var fxBadgePad = -1
@@ -6278,10 +6290,10 @@ class PadView(context: Context) : View(context) {
     private val mxRaster = RectF()
     private val mxQuant = RectF()
     private val mxClear = RectF()
-    private val rasterSteps = intArrayOf(0, 4, 8, 16, 32)
+    private val rasterSteps = intArrayOf(0, 2, 4, 8, 12, 16, 24, 32)
     private var mxRows = 24
 
-    private fun rasterLabel(): String = if (Engine.rollQuant <= 0) "frei" else "1/${Engine.rollQuant}"
+    private fun rasterLabel(): String = if (Engine.rollQuant <= 0) "frei" else quantName(Engine.rollQuant)
 
     private fun layoutMatrix() = layoutKeyboard()
 

@@ -897,6 +897,35 @@ object Engine {
         for (p in 0 until PADS) if (isOneShot(p) && (loops.get(p) != null || noteCount(p) > 0)) fitRollBars(p, bars)
     }
 
+    /** Eingespielte Anschläge nachträglich aufs Raster ziehen (q Teilungen pro Takt, z. B. 2, 4, 8, 12, 16). Liefert die Anzahl. */
+    fun quantizeHits(q: Int, strength: Float = 1f): Int {
+        if (q <= 0) return 0
+        pushPatternUndo("Drums quantisieren 1/$q")
+        var n = 0
+        synchronized(notesLock) {
+            for (p in 0 until PADS) {
+                if (!isOneShot(p) || notes[p].isEmpty()) continue
+                val bars = rollBars[p].toDouble()
+                for (ev in notes[p]) {
+                    var t = ev.pos + (qPos(ev.pos, q) - ev.pos) * strength
+                    if (t >= bars) t -= bars
+                    if (t < 0) t += bars
+                    ev.pos = t
+                    n++
+                }
+                // doppelte Schläge auf derselben Stelle zusammenfassen (lauterer bleibt)
+                val keep = HashMap<Long, NoteEv>()
+                for (ev in notes[p]) {
+                    val k = kotlin.math.round(ev.pos * 1024).toLong()
+                    val o = keep[k]
+                    if (o == null || ev.vel > o.vel) keep[k] = ev
+                }
+                notes[p].retainAll { keep.containsValue(it) }
+            }
+        }
+        return n
+    }
+
     /** Eingespielte Anschläge löschen (ein Pad oder alle ⚡-Pads). */
     fun clearHits(p: Int) {
         pushPatternUndo(if (p >= 0) "Drum-Spur Pad ${p + 1} leeren" else "Alle Drum-Spuren leeren")

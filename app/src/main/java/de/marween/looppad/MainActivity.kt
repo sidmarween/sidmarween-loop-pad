@@ -144,6 +144,13 @@ class MainActivity : Activity() {
         pads.statusColors = prefs.getBoolean("statusColors", true)
         pads.onImportMenu = { p -> showImportMenu(p) }
         pads.onDrumKit = { showDrumKits() }
+        pads.onDrumClear = { p ->
+            val items = ArrayList<String>()
+            val acts = ArrayList<() -> Unit>()
+            if (p >= 0) { items.add("⌫ Spur von Pad ${p + 1} leeren"); acts.add { Engine.clearHits(p); hint("Spur von Pad ${p + 1} geleert – ↶ UNDO holt sie zurück") } }
+            items.add("⌫ Alle Drum-Spuren leeren"); acts.add { Engine.clearHits(-1); hint("Alle Drum-Spuren geleert – ↶ UNDO holt sie zurück") }
+            ui().setTitle("Drum-Spuren leeren").setItems(items.toTypedArray()) { _, w -> acts[w]() }.setNegativeButton("Abbrechen", null).show()
+        }
         pads.onPadFxEditor = { p -> showPadFxEditor(p) }
         pads.onEditorSave = { p, data, slices, cues -> showEditorSave(p, data, slices, cues) }
         pads.onRollIo = { p -> showRollIo(p) }
