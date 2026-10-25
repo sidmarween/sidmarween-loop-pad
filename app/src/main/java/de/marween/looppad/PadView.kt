@@ -6088,7 +6088,7 @@ class PadView(context: Context) : View(context) {
         }
         var gridTop = inner.bottom + dp(8f)
         if (songView) {
-            row(arrayOf(mxBars, mxRaster, mxQuant, mxClear), inner)
+            row(arrayOf(mxMode, mxBars, mxRaster, mxQuant, mxClear), inner)
             for (r in mxEditBtns) r.setEmpty()
         } else {
             // Zeile 1: Länge, Raster, Werkzeug, Zoom, Leeren · Zeile 2: Bearbeiten
@@ -7025,7 +7025,164 @@ class PadView(context: Context) : View(context) {
         return r to bar
     }
 
+    // ---------------------------------------------------------------- Automation (im Song)
+
+    private var autoView = false
+    private var autoLane = 0
+    private var autoErase = false
+    private var autoLastIdx = -1
+    private var autoLastV = 0f
+
+    private fun autoIdx(x: Float): Int {
+        val g = mxGrid
+        val perPage = SONG_COLS * Engine.AUTO_RES
+        val i = songPage * perPage + ((x - g.left) / g.width() * perPage).toInt().coerceIn(0, perPage - 1)
+        return i.coerceIn(0, Engine.songBars * Engine.AUTO_RES - 1)
+    }
+
+    private fun autoPaint(x: Float, y: Float) {
+        val g = mxGrid
+        val idx = autoIdx(x)
+        val v = (1f - (y - g.top) / g.height()).coerceIn(0f, 1f)
+        val a = Engine.auto[autoLane]
+        if (autoLastIdx < 0 || autoLastIdx == idx) a[idx] = if (autoErase) Float.NaN else v
+        else {
+            val st = if (autoLastIdx < idx) 1 else -1
+            var i = autoLastIdx
+            while (true) {
+                val t = (i - autoLastIdx).toFloat() / (idx - autoLastIdx)
+                a[i] = if (autoErase) Float.NaN else autoLastV + (v - autoLastV) * t
+                if (i == idx) break
+                i += st
+            }
+        }
+        autoLastIdx = idx
+        autoLastV = v
+    }
+
+    private fun autoTouchDown(id: Int, x: Float, y: Float): Boolean {
+        when {
+            mxRaster.contains(x, y) -> { autoErase = !autoErase; hint(if (autoErase) "⌫ Radierer: über die Linie wischen löscht sie dort (Regler gilt wieder)" else "✎ Zeichnen: Finger über die Fläche ziehen = Verlauf malen"); return true }
+            mxQuant.contains(x, y) -> {
+                Engine.autoRec = !Engine.autoRec
+                hint(if (Engine.autoRec) "● XY-Aufnahme: im Song-Modus ▶ und auf der Effekt-Fläche spielen – die Bewegung wird in FX X / FX Y geschrieben" else "XY-Aufnahme aus")
+                return true
+            }
+            mxClear.contains(x, y) -> { Engine.autoClearLane(autoLane); hint("${Engine.AUTO_NAMES[autoLane]}: Automation gelöscht"); return true }
+            kbPiano.contains(x, y) -> {
+                autoLane = ((y - kbPiano.top) / (kbPiano.height() / Engine.AUTO_LANES)).toInt().coerceIn(0, Engine.AUTO_LANES - 1)
+                hint("${Engine.AUTO_NAMES[autoLane]}: ${Engine.AUTO_HELP[autoLane]} · wirkt im Song-Modus")
+                performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+                return true
+            }
+            mxGrid.contains(x, y) -> {
+                autoLastIdx = -1
+                autoPaint(x, y)
+                songPaintPointer = id
+                return true
+            }
+        }
+        return false
+    }
+
+    private fun drawAuto(canvas: Canvas, cols: IntArray) {
+        smallBtn(canvas, mxRaster, if (autoErase) "⌫ RADIERER" else "✎ ZEICHNEN", autoErase, cols)
+        smallBtn(canvas, mxQuant, "● XY-AUFN.", Engine.autoRec, intArrayOf(cols[0], cols[1], Color.rgb(225, 40, 50)))
+        smallBtn(canvas, mxClear, "SPUR LEEREN", false, cols)
+        val k = kbPiano
+        val g = mxGrid
+        val n = Engine.AUTO_LANES
+        val rh = k.height() / n
+        for (l in 0 until n) {
+            tmpRect.set(k.left, k.top + l * rh + dp(1f), k.right, k.top + (l + 1) * rh - dp(1f))
+            val sel = l == autoLane
+            fillPaint.color = if (sel) cols[2] else blend(cols[0], cols[1], 0.08f)
+            canvas.drawRoundRect(tmpRect, dp(4f), dp(4f), fillPaint)
+            textPaint.textAlign = Paint.Align.LEFT
+            textPaint.textSize = min(dp(10f), rh * 0.3f)
+            textPaint.color = if (sel) Color.WHITE else alpha(cols[1], 0.8f)
+            canvas.drawText(fitLabel(textPaint, Engine.AUTO_NAMES[l], tmpRect.width() - dp(12f), textPaint.textSize, dp(6f)), tmpRect.left + dp(4f), tmpRect.centerY() + textPaint.textSize * 0.36f, textPaint)
+            if (Engine.autoLaneUsed(l)) {
+                fillPaint.color = Color.rgb(255, 200, 60)
+                canvas.drawCircle(tmpRect.right - dp(5f), tmpRect.top + dp(5f), dp(2.5f), fillPaint)
+            }
+            textPaint.textAlign = Paint.Align.CENTER
+        }
+        fillPaint.color = Color.rgb(24, 25, 31)
+        canvas.drawRect(g, fillPaint)
+        val colW = g.width() / SONG_COLS
+        for (c in 0..SONG_COLS) {
+            val bar = songPage * SONG_COLS + c
+            val x0 = g.left + c * colW
+            if (c < SONG_COLS && bar >= Engine.songBars) {
+                fillPaint.color = Color.argb(150, 0, 0, 0)
+                canvas.drawRect(x0, g.top, x0 + colW, g.bottom, fillPaint)
+            }
+            strokePaint.strokeWidth = dp(if (bar % 4 == 0) 1.2f else 0.5f)
+            strokePaint.color = Color.argb(if (bar % 4 == 0) 110 else 40, 255, 255, 255)
+            canvas.drawLine(x0, g.top, x0, g.bottom, strokePaint)
+            if (c < SONG_COLS && (bar % 4 == 0 || colW > dp(18f))) {
+                textPaint.textSize = dp(8.5f); textPaint.color = alpha(cols[1], 0.6f); textPaint.textAlign = Paint.Align.LEFT
+                canvas.drawText("${bar + 1}", x0 + dp(2f), g.top - dp(2f), textPaint)
+                textPaint.textAlign = Paint.Align.CENTER
+            }
+        }
+        strokePaint.strokeWidth = dp(0.5f)
+        strokePaint.color = Color.argb(35, 255, 255, 255)
+        for (q in 1..3) canvas.drawLine(g.left, g.top + g.height() * q / 4, g.right, g.top + g.height() * q / 4, strokePaint)
+        // Linie der gewählten Spur (Lücken = Regler gilt)
+        val a = Engine.auto[autoLane]
+        val perPage = SONG_COLS * Engine.AUTO_RES
+        val dx = g.width() / perPage
+        val base = songPage * perPage
+        val col = PAT_COLS[autoLane % PAT_COLS.size]
+        val path = android.graphics.Path()
+        val fillPath = android.graphics.Path()
+        var open = false
+        var startX = 0f
+        var lastX = 0f
+        for (i in 0 until perPage) {
+            val idx = base + i
+            val v = if (idx < a.size) a[idx] else Float.NaN
+            val x = g.left + (i + 0.5f) * dx
+            if (v.isNaN()) {
+                if (open) { fillPath.lineTo(lastX, g.bottom); fillPath.lineTo(startX, g.bottom); fillPath.close(); open = false }
+                continue
+            }
+            val y = g.bottom - v * g.height()
+            if (!open) { path.moveTo(x, y); fillPath.moveTo(x, y); startX = x; open = true } else { path.lineTo(x, y); fillPath.lineTo(x, y) }
+            lastX = x
+        }
+        if (open) { fillPath.lineTo(lastX, g.bottom); fillPath.lineTo(startX, g.bottom); fillPath.close() }
+        fillPaint.color = Color.argb(60, Color.red(col), Color.green(col), Color.blue(col))
+        canvas.drawPath(fillPath, fillPaint)
+        strokePaint.strokeWidth = dp(2.2f)
+        strokePaint.color = col
+        canvas.drawPath(path, strokePaint)
+        // Abspielpunkt
+        val pos = Engine.autoPos
+        if (pos >= 0f && pos >= base && pos < base + perPage) {
+            val x = g.left + (pos - base) * dx
+            strokePaint.strokeWidth = dp(1.5f); strokePaint.color = Color.WHITE
+            canvas.drawLine(x, g.top, x, g.bottom, strokePaint)
+        }
+        textPaint.textAlign = Paint.Align.LEFT
+        textPaint.textSize = dp(10f)
+        textPaint.color = alpha(cols[1], 0.75f)
+        canvas.drawText(Engine.AUTO_NAMES[autoLane] + (if (!Engine.songMode) " · wirkt nur im SONG-MODUS" else ""), g.left + dp(4f), g.top + dp(12f), textPaint)
+        textPaint.textAlign = Paint.Align.CENTER
+        strokePaint.strokeWidth = dp(1f)
+        strokePaint.color = alpha(cols[1], 0.4f)
+        canvas.drawRect(g, strokePaint)
+    }
+
     private fun songTouchDown(id: Int, x: Float, y: Float): Boolean {
+        if (mxMode.contains(x, y)) {
+            autoView = !autoView
+            hint(if (autoView) "〰 Automation: links Spur wählen, rechts Verlauf malen (Filter, Effekt, Lautstärke über die Takte) – läuft im Song-Modus" else "▦ Song-Matrix")
+            return true
+        }
+        if (autoView && autoTouchDown(id, x, y)) return true
         when {
             mxBars.contains(x, y) -> {
                 val opts = intArrayOf(4, 8, 16, 32, 64)
@@ -7085,12 +7242,19 @@ class PadView(context: Context) : View(context) {
     }
 
     private fun songPaint(x: Float, y: Float) {
+        if (autoView) { if (mxGrid.contains(x, mxGrid.centerY())) autoPaint(x, y.coerceIn(mxGrid.top, mxGrid.bottom)); return }
         val cell = songCell(x, y) ?: return
         val v = if (cell.first >= Engine.ARR_INST) songPaintVal else if (songPaintVal > 0) 1 else 0
         Engine.setArrCell(cell.first, cell.second, v)
     }
 
     private fun drawSong(canvas: Canvas, cols: IntArray) {
+        smallBtn(canvas, mxMode, if (autoView) "▦ SPUREN" else "〰 AUTOM.", autoView, cols)
+        if (autoView) {
+            smallBtn(canvas, mxBars, "${Engine.songBars} TAKTE", false, cols)
+            drawAuto(canvas, cols)
+            return
+        }
         smallBtn(canvas, mxBars, "${Engine.songBars} TAKTE", false, cols)
         smallBtn(canvas, mxRaster, "＋ LIVE", false, cols)
         smallBtn(canvas, mxQuant, "AUS SZENEN", false, cols)

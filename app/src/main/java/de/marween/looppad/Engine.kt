@@ -639,6 +639,14 @@ object Engine {
             }
         }
         if (motStopReq && motionState != MOT_REC) motStopReq = false
+        // Song-Automation der Effekt-Fläche (eigener Finger hat Vorrang)
+        val ax = autoFxX
+        val ay = autoFxY
+        if (!liveTouch && (!ax.isNaN() || !ay.isNaN())) {
+            if (!ax.isNaN()) effX = ax
+            if (!ay.isNaN()) effY = ay
+            effTouch = true
+        }
     }
 
     // ---------------------------------------------------------------- Effekt-Ziel
@@ -2112,6 +2120,7 @@ object Engine {
             val w = written
             updateLead(w, block)
             sceneTick(w, block)
+            autoTick(w)
             runSequencer(w, block)
             runRepeat(w, block)
             val mlen = masterLen
@@ -2358,7 +2367,7 @@ object Engine {
                 writeOutRing(out, w, block)
             }
             processResampleTakes(w, block, fxEngaged)
-            val vol = knobs[3] * 1.25f
+            val vol = (if (autoMaster.isNaN()) knobs[3] else autoMaster) * 1.25f
             var mpeak = 0f
             // Master-Kette (Stereo): Pads mono + DJ-Decks, dann EQ/Kompressor/Multiband/Sättigung/Breite/Limiter
             for (i in 0 until block) {
@@ -3207,6 +3216,7 @@ object Engine {
         }
         sceneBarCount = 0
         arrBar = 0
+        arrBarStart = start
         arrApplyNow = true
         seqPlaying = true
     }
@@ -3931,6 +3941,7 @@ object Engine {
         val f = origin + k * bar
         if (f >= w + block) return
         arrBar = (arrBar + 1) % max(1, songBars)
+        arrBarStart = f
         if (songMode) {
             applyArr(arrBar)
             return
@@ -3994,6 +4005,92 @@ object Engine {
     @Volatile var songMode = false
     @Volatile var songBars = 16
     @Volatile private var arrBar = 0
+    @Volatile private var arrBarStart = 0L
+
+    // ================================================================ Automation (Song-Modus: Werte über die Zeit)
+
+    const val AUTO_LANES = 8
+    /** Auflösung: 16 Punkte je Takt. */
+    const val AUTO_RES = 16
+    val AUTO_NAMES = arrayOf("FX X", "FX Y", "ACID Cutoff", "SYNTH Cutoff", "ACID Lautst.", "SYNTH Lautst.", "DRUM Lautst.", "MASTER Lautst.")
+    val AUTO_HELP = arrayOf("Effekt-Fläche waagerecht (Effekt ist an, solange die Linie läuft)", "Effekt-Fläche senkrecht", "Filter des ACID-Basses",
+        "Filter des SYNTH", "Lautstärke ACID", "Lautstärke SYNTH", "Lautstärke DRUM 909", "Gesamtlautstärke (Fade-In / Fade-Out)")
+    /** NaN = keine Automation an dieser Stelle (Regler gilt). */
+    val auto = Array(AUTO_LANES) { FloatArray(ARR_MAX * AUTO_RES) { Float.NaN } }
+    /** Live: Bewegungen auf der Effekt-Fläche im Song-Modus in FX X/Y schreiben. */
+    @Volatile var autoRec = false
+    @Volatile var autoFxX = Float.NaN
+        private set
+    @Volatile var autoFxY = Float.NaN
+        private set
+    @Volatile var autoMaster = Float.NaN
+        private set
+    /** Abspielposition im Song in Automationspunkten (für die Anzeige), -1 = steht. */
+    @Volatile var autoPos = -1f
+        private set
+
+    fun autoLaneUsed(l: Int): Boolean = auto[l].any { !it.isNaN() }
+
+    fun autoClearLane(l: Int) { java.util.Arrays.fill(auto[l], Float.NaN) }
+
+    private fun autoAt(l: Int, pos: Float): Float {
+        val a = auto[l]
+        val i = pos.toInt().coerceIn(0, a.size - 1)
+        val v = a[i]
+        if (v.isNaN()) return v
+        val n = a[(i + 1) % a.size]
+        if (n.isNaN()) return v
+        val t = pos - i
+        return v + (n - v) * t
+    }
+
+    private fun autoReset() {
+        autoFxX = Float.NaN; autoFxY = Float.NaN; autoMaster = Float.NaN
+        InstState.acidCutAuto = Float.NaN; InstState.synCutAuto = Float.NaN
+        InstState.acidVolAuto = Float.NaN; InstState.synVolAuto = Float.NaN; InstState.drumVolAuto = Float.NaN
+        autoPos = -1f
+    }
+
+    /** Pro Mischer-Block: Automationswerte an der Song-Position setzen (bzw. XY live aufnehmen). */
+    private fun autoTick(w: Long) {
+        if (!songMode || !seqPlaying) { if (autoPos >= 0f || !autoFxX.isNaN()) autoReset(); return }
+        val bar = seqBar()
+        if (bar <= 0L) return
+        val frac = ((w - arrBarStart).coerceAtLeast(0L).toDouble() / bar).coerceIn(0.0, 0.9999)
+        val pos = (arrBar + frac).toFloat() * AUTO_RES
+        autoPos = pos
+        if (autoRec && liveTouch) {
+            val i = pos.toInt().coerceIn(0, ARR_MAX * AUTO_RES - 1)
+            auto[0][i] = fxX
+            auto[1][i] = fxY
+        }
+        autoFxX = autoAt(0, pos)
+        autoFxY = autoAt(1, pos)
+        InstState.acidCutAuto = autoAt(2, pos)
+        InstState.synCutAuto = autoAt(3, pos)
+        InstState.acidVolAuto = autoAt(4, pos)
+        InstState.synVolAuto = autoAt(5, pos)
+        InstState.drumVolAuto = autoAt(6, pos)
+        autoMaster = autoAt(7, pos)
+    }
+
+    private fun autoToJson(): org.json.JSONArray {
+        val a = org.json.JSONArray()
+        for (l in 0 until AUTO_LANES) {
+            if (!autoLaneUsed(l)) { a.put(org.json.JSONObject.NULL); continue }
+            a.put(org.json.JSONArray().apply { auto[l].forEach { put(if (it.isNaN()) -1 else Math.round(it * 1000)) } })
+        }
+        return a
+    }
+
+    private fun autoFromJson(a: org.json.JSONArray?) {
+        for (l in 0 until AUTO_LANES) autoClearLane(l)
+        if (a == null) return
+        for (l in 0 until min(AUTO_LANES, a.length())) {
+            val r = a.optJSONArray(l) ?: continue
+            for (i in 0 until min(ARR_MAX * AUTO_RES, r.length())) { val v = r.optInt(i, -1); auto[l][i] = if (v < 0) Float.NaN else v / 1000f }
+        }
+    }
     @Volatile private var arrApplyNow = false
 
     /** Aktueller Song-Takt (0-basiert). */
@@ -4047,6 +4144,7 @@ object Engine {
 
     fun arrClear() {
         for (row in arr) java.util.Arrays.fill(row, false)
+        for (l in 0 until AUTO_LANES) autoClearLane(l)
         for (row in arrPat) java.util.Arrays.fill(row, 0)
         java.util.Arrays.fill(arrScene, -1)
     }
@@ -4060,6 +4158,7 @@ object Engine {
         j.put("rows", a)
         j.put("scenes", org.json.JSONArray().apply { arrScene.forEach { put(it) } })
         j.put("pats", org.json.JSONArray().apply { for (row in arrPat) put(String(CharArray(ARR_MAX) { '0' + row[it] })) })
+        j.put("auto", autoToJson())
         return j
     }
 
@@ -4077,6 +4176,7 @@ object Engine {
             }
         }
         j.optJSONArray("scenes")?.let { a -> for (b in 0 until min(ARR_MAX, a.length())) arrScene[b] = a.optInt(b, -1) }
+        autoFromJson(j.optJSONArray("auto"))
         val pa = j.optJSONArray("pats")
         if (pa != null) {
             for (i in 0 until min(InstState.INSTS, pa.length())) {

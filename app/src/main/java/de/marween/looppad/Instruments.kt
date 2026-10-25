@@ -45,6 +45,17 @@ object InstState {
     @Volatile var acidVol = 0.75f
     /** Live-Filter-Modulation vom Touchpad (−1 … +1). */
     @Volatile var acidCutMod = 0f
+    // Song-Automation: NaN = Regler gilt
+    @Volatile var acidCutAuto = Float.NaN
+    @Volatile var synCutAuto = Float.NaN
+    @Volatile var acidVolAuto = Float.NaN
+    @Volatile var synVolAuto = Float.NaN
+    @Volatile var drumVolAuto = Float.NaN
+    fun acidCutNow() = acidCutAuto.let { if (it.isNaN()) acidCut else it }
+    fun synCutNow() = synCutAuto.let { if (it.isNaN()) synCut else it }
+    fun acidVolNow() = acidVolAuto.let { if (it.isNaN()) acidVol else it }
+    fun synVolNow() = synVolAuto.let { if (it.isNaN()) synVol else it }
+    fun drumVolNow() = drumVolAuto.let { if (it.isNaN()) drumVol else it }
 
     /** Zufalls-Linie (Algorithmus nach „Acid Banger“, David Whiting, CC BY 4.0). */
     fun acidRandom() = InstPresets.randomAcid()
@@ -429,7 +440,7 @@ class AcidSynth(private val sr: Int) {
         val accAmt = st.acidAccent * 1.7f
         val drv = 1f + st.acidDrive * 5f
         val res = st.acidRes * 3.95f
-        val vol = st.acidVol * 0.9f
+        val vol = st.acidVolNow() * 0.9f
         val square = st.acidSquare
         for (i in 0 until n) {
             while (ei < evs.size && (evs[ei].frame < 0 || evs[ei].frame <= w + i)) {
@@ -454,7 +465,7 @@ class AcidSynth(private val sr: Int) {
             fenv *= fDec
             accEnv *= accDec
             val accBoost = if (accNow) accEnv * (0.3f + st.acidEnv) * 2.5f * accAmt / 1.02f else 0f
-            val oct = st.acidCut * 7f + (st.acidEnv * 5f) * fenv + accBoost * 2f + st.acidCutMod * 3f
+            val oct = st.acidCutNow() * 7f + (st.acidEnv * 5f) * fenv + accBoost * 2f + st.acidCutMod * 3f
             val fc = min(0.45f * sr, 70f * 2f.pow(oct))
             val g = (1.0 - exp(-2.0 * PI * fc / sr)).toFloat()
             val x = tanh(osc.toFloat() - res * y4)
@@ -531,7 +542,7 @@ class DrumMachine(private val sr: Int) {
                 if (st.drumMute[v]) { vc.active = false; continue }
                 val tune = st.drumTune[v]
                 val dec = st.drumDecay[v]
-                val lvl = st.drumLevel[v] * st.drumVol * vc.acc
+                val lvl = st.drumLevel[v] * st.drumVolNow() * vc.acc
                 for (i in 0 until n) {
                     if (vc.delay > 0) { vc.delay--; continue }
                     val t = vc.t.toFloat() / sr
@@ -700,7 +711,7 @@ class PolySynth(private val sr: Int) {
         val sus = if (wave == 3) 0f else if (wave == 4) 0.0f else 0.8f
         val fDec = exp(-1.0 / ((if (wave == 3) 0.12 else 0.35) * sr)).toFloat()
         val q = 1f - st.synRes * 0.92f
-        val vol = st.synVol * 0.32f
+        val vol = st.synVolNow() * 0.32f
         val spread = st.synDetune
         var ei = 0
         for (i in 0 until n) {
@@ -755,7 +766,7 @@ class PolySynth(private val sr: Int) {
                 }
                 var s = o.toFloat()
                 if (wave != 4) {
-                    val oct = st.synCut * 7.5f + st.synEnv * 4.5f * v.fenv + st.synCutMod * 2.5f
+                    val oct = st.synCutNow() * 7.5f + st.synEnv * 4.5f * v.fenv + st.synCutMod * 2.5f
                     val fc = min(0.42f * sr, 60f * 2f.pow(oct))
                     val g = (2.0 * kotlin.math.sin(PI * fc / sr)).toFloat().coerceAtMost(1.1f)
                     // Chamberlin-SVF (Tiefpass)
