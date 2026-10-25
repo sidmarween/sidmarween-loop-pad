@@ -26,6 +26,9 @@ class Loop(val data: FloatArray) {
     @Volatile var shotStart: Long = Long.MIN_VALUE
     /** Lautstärke des aktuellen Anschlags (Sequenzer-Schritt). */
     @Volatile var shotGain: Float = 1f
+    /** Vorheriger Anschlag (klingt bis zum neuen weiter) und seine Lautstärke. */
+    @Volatile var prevStart: Long = Long.MIN_VALUE
+    @Volatile var prevGain: Float = 1f
     /** Aktuelle Ein/Aus-Blende (nur Mischer-Thread). */
     var fade: Float = 1f
     /** Tonhöhe (Halbtöne) für ONE SHOTS, als Abspielrate. */
@@ -328,6 +331,7 @@ object Engine {
                     if (vel <= 0f) continue
                     val l = loops.get(p)
                     if (l != null && l.oneShot && !l.muted && audible(p)) {
+                        markPrev(l)
                         l.shotGain = vel
                         l.shotStart = f
                     }
@@ -857,14 +861,14 @@ object Engine {
     fun setPadName(p: Int, n: String?) { loops.get(p)?.name = n }
 
     /** Ein Anschlag als Note: Position auf [rollQuant] gerastert, Länge = ganzer Klang (wird nicht abgeschnitten). */
-    private fun recordHit(p: Int, vel: Float, l: Loop) {
+    private fun recordHit(p: Int, vel: Float, l: Loop, touchNanos: Long = 0L) {
         val bar = seqBar()
         if (bar <= 0L) return
         if (rollBars[p] != drumBars) fitRollBars(p, drumBars)
         val origin = seqStart()
         val bars = rollBars[p]
         val loopLen = bar * bars
-        val heard = outClock.frameAt(System.nanoTime(), sampleRate)
+        val heard = heardAtTouch(touchNanos)
         val rel = Math.floorMod(heard - origin, loopLen)
         var pos = qPos(rel.toDouble() / bar, rollQuant)
         if (pos >= bars) pos -= bars
@@ -2103,6 +2107,7 @@ object Engine {
             java.util.Arrays.fill(out, 0f)
             java.util.Arrays.fill(bus, 0f)
             val w = written
+            updateLead(w, block)
             sceneTick(w, block)
             runSequencer(w, block)
             runRepeat(w, block)
@@ -2172,28 +2177,17 @@ object Engine {
                         loop.shotStart = w
                     }
                     var peak = 0f
-                    if (ss != Long.MIN_VALUE && len > 1) {
-                        val rate = loop.rate
-                        val sg = loop.shotGain
-                        val rel = w - ss
-                        val cue = loop.cue.coerceIn(0, max(0, len - 2))
-                        val total = ((len - cue) / rate).toLong()
-                        if (rel + block > 0 && rel < total) {
-                            var i = if (rel < 0) (-rel).toInt() else 0
-                            while (i < block) {
-                                val sp = cue + (rel + i) * rate
-                                val i0 = sp.toInt()
-                                if (i0 >= len - 1) break
-                                val fr = (sp - i0).toFloat()
-                                var v = (d[i0] + (d[i0 + 1] - d[i0]) * fr) * sg * gn
-                                // eigener Startpunkt: ganz kurz einblenden (kein Knacksen)
-                                if (cue > 0 && rel + i < 96) v *= (rel + i) / 96f
-                                val a = abs(v)
-                                if (a > peak) peak = a
-                                dst[i] += v
-                                i++
-                            }
+                    val rate = loop.rate
+                    val cue = loop.cue.coerceIn(0, max(0, len - 2))
+                    val total = ((len - cue) / rate).toLong()
+                    if (len > 1) {
+                        // vorheriger Anschlag klingt bis zum neuen weiter (weich übergeblendet statt hart abgeschnitten)
+                        val ps = loop.prevStart
+                        if (ps != Long.MIN_VALUE && ss != Long.MIN_VALUE) {
+                            if (w - ps < total) peak = max(peak, renderShot(d, len, rate, cue, total, gn, dst, w, block, ps, loop.prevGain, ss))
+                            else loop.prevStart = Long.MIN_VALUE
                         }
+                        if (ss != Long.MIN_VALUE) peak = max(peak, renderShot(d, len, rate, cue, total, gn, dst, w, block, ss, loop.shotGain, Long.MAX_VALUE))
                     }
                     levels[p] = max(peak, levels[p] * 0.88f)
                     continue
@@ -2508,7 +2502,73 @@ object Engine {
     /** Marke: ONE SHOT startet im nächsten berechneten Block (kein abgeschnittener Anschlag). */
     const val SHOT_NOW = Long.MAX_VALUE - 7
 
-    fun padDown(p: Int, velocity: Float = 1f): Boolean {
+    /** Laufenden Anschlag merken, damit er bis zum neuen weiterklingt. */
+    private fun markPrev(l: Loop) {
+        val old = l.shotStart
+        if (old != Long.MIN_VALUE && old != SHOT_NOW) { l.prevStart = old; l.prevGain = l.shotGain }
+    }
+
+    /** Ein ONE-SHOT-Anschlag ab Ausgabe-Frame [st]; ab [cutAt] (absolut) in 64 Samples ausgeblendet. Liefert die Spitze. */
+    private fun renderShot(d: FloatArray, len: Int, rate: Double, cue: Int, total: Long, gn: Float, dst: FloatArray, w: Long, block: Int, st: Long, sg: Float, cutAt: Long): Float {
+        val rel = w - st
+        if (rel + block <= 0 || rel >= total) return 0f
+        var peak = 0f
+        var i = if (rel < 0) (-rel).toInt() else 0
+        while (i < block) {
+            val sp = cue + (rel + i) * rate
+            val i0 = sp.toInt()
+            if (i0 >= len - 1) break
+            var g = 1f
+            val pastCut = w + i - cutAt
+            if (pastCut >= 0) { if (pastCut >= 64) break; g = 1f - pastCut / 64f }
+            val fr = (sp - i0).toFloat()
+            var v = (d[i0] + (d[i0 + 1] - d[i0]) * fr) * sg * gn * g
+            // eigener Startpunkt: ganz kurz einblenden (kein Knacksen)
+            if (cue > 0 && rel + i < 96) v *= (rel + i) / 96f
+            val a = abs(v)
+            if (a > peak) peak = a
+            dst[i] += v
+            i++
+        }
+        return peak
+    }
+
+    // ---------------------------------------------------------------- Präzises Einspielen
+
+    /** Jitterfrei: Anschläge erklingen mit fester Verzögerung ab der Berührung (statt „nächster Block“). */
+    @Volatile var tightTiming = true
+    /** Abstand geschriebener → gehörter Frame (Höchstwert, langsam fallend) – daraus die feste Verzögerung. */
+    @Volatile private var leadMax = 0L
+    /** Einspiel-Ausgleich (ms): so viel liegen Anschläge systematisch zu spät (Touch-Verzögerung) – wird abgezogen. */
+    @Volatile var recOffsetMs = 0f
+
+    private fun updateLead(w: Long, block: Int) {
+        val ld = w - outClock.frameAt(System.nanoTime(), sampleRate) + block
+        val cur = leadMax
+        leadMax = if (ld > cur) ld else cur - max(1L, cur / 2000)
+    }
+
+    /** Feste Auslöse-Verzögerung in ms (für die Anzeige). */
+    fun triggerDelayMs(): Float = if (sampleRate > 0) leadMax * 1000f / sampleRate else 0f
+
+    /** Gehörter Frame im Moment der Berührung, abzüglich Einspiel-Ausgleich. */
+    private fun heardAtTouch(touchNanos: Long): Long {
+        val t = if (touchNanos > 0L && System.nanoTime() - touchNanos in 0..250_000_000L) touchNanos else System.nanoTime()
+        return outClock.frameAt(t, sampleRate) - (recOffsetMs * sampleRate / 1000f).toLong()
+    }
+
+    /** Schlag zur Kalibrierung: Versatz (ms) des Tipps zum nächsten Viertel des laufenden Rasters, oder null. */
+    fun beatOffsetMs(touchNanos: Long): Float? {
+        if (!seqPlaying) return null
+        val beat = seqBar() / 4
+        if (beat <= 0L) return null
+        val heard = outClock.frameAt(touchNanos, sampleRate)
+        var g = Math.floorMod(heard - seqStart(), beat)
+        if (g > beat / 2) g -= beat
+        return g * 1000f / sampleRate
+    }
+
+    fun padDown(p: Int, velocity: Float = 1f, touchNanos: Long = 0L): Boolean {
         if (!running) return false
         val existing = takes.get(p)
         if (existing != null) {
@@ -2530,15 +2590,24 @@ object Engine {
             if (recLive() && !drumRec) {
                 val bar = seqBar()
                 val origin = seqStart()
-                val heard = outClock.frameAt(System.nanoTime(), sampleRate)
+                val heard = heardAtTouch(touchNanos)
                 val n = Math.floorDiv((heard - origin) * STEPS + bar / 2, bar)
                 val f = stepFrame(origin, bar, n)
                 seq[p][Math.floorMod(n, STEPS.toLong()).toInt()] = 1f
                 // Liegt der Rasterpunkt noch vor uns, spielt ihn gleich der Sequenzer – kein Doppelschlag
                 if (f >= written) return true
-            } else if (recLive() && drumRec) recordHit(p, velocity, loop)
+            } else if (recLive() && drumRec) recordHit(p, velocity, loop, touchNanos)
+            // der laufende Anschlag klingt bis zum neuen weiter
+            val old = loop.shotStart
+            if (old != Long.MIN_VALUE && old != SHOT_NOW && old <= written) { loop.prevStart = old; loop.prevGain = loop.shotGain }
             loop.shotGain = velocity
-            loop.shotStart = SHOT_NOW
+            // jitterfrei: feste Verzögerung ab dem Berührungszeitpunkt, sonst im nächsten Block
+            var at = SHOT_NOW
+            if (tightTiming && touchNanos > 0L && leadMax > 0L) {
+                val f = outClock.frameAt(touchNanos, sampleRate) + leadMax
+                if (f > written && f - written < sampleRate / 4) at = f
+            }
+            loop.shotStart = at
             return true
         }
         val now = System.nanoTime()
@@ -2879,12 +2948,12 @@ object Engine {
      * Pad gedrückt (Touch oder MIDI) – reagiert sofort: ONE SHOTS klingen im nächsten Block,
      * gestoppte Loops starten beim Berühren (im Start-Raster bzw. phasenrichtig im Takt).
      */
-    fun liveDown(p: Int, velocity: Float = 1f): Int {
+    fun liveDown(p: Int, velocity: Float = 1f, touchNanos: Long = 0L): Int {
         val l = loops.get(p)
         val wasMuted = l != null && !l.oneShot && (l.muted || !seqPlaying) && l.pendAt == Long.MIN_VALUE
         val wasPlaying = l != null && !l.oneShot && !l.muted && seqPlaying && l.pendAt == Long.MIN_VALUE
         val existing = takes.get(p)
-        if (padDown(p, velocity)) return LIVE_SHOT
+        if (padDown(p, velocity, touchNanos)) return LIVE_SHOT
         if (existing != null || takes.get(p)?.let { it.live } == true) return 0
         if (l != null && instantStart && wasMuted) {
             launchToggle(p)
@@ -3314,6 +3383,7 @@ object Engine {
                     if (!repPad[p] || f < repPadFrom[p]) continue
                     val l = loops.get(p) ?: continue
                     if (!l.oneShot) continue
+                    markPrev(l)
                     l.shotGain = 1f
                     l.shotStart = f
                     if (step >= 0) seq[p][step] = 1f

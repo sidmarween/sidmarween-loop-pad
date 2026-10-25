@@ -2046,7 +2046,8 @@ class PadView(context: Context) : View(context) {
     var drumMode = false
         private set
     /** Anschlagstärke nach Tipp-Höhe im Pad (oben = laut). */
-    var drumVelPos = false
+    /** Einspiel-Timing & Anschlag einstellen (Dialog). */
+    var onTimingCalib: (() -> Unit)? = null
     private val drToggle = RectF()
     private val drPanel = RectF()
     private val drLine = RectF()
@@ -2198,10 +2199,10 @@ class PadView(context: Context) : View(context) {
         val labels = arrayOf(
             if (rec) "■ REC" else "● REC", if (Engine.seqPlaying) "■ STOPP" else "▶ PLAY", if (Engine.metronome) "♩ KLICK AN" else "♩ KLICK",
             if (Engine.rollQuant > 0) "AUTO-Q ${quantName(Engine.rollQuant)}" else "AUTO-Q AUS", "LÄNGE $bars T", "↶ UNDO",
-            "🥁 DRUMSET", if (drumVelPos) "ANSCHLAG: HÖHE" else "ANSCHLAG: FEST", if (Engine.countIn) "EINZÄHLEN AN" else "EINZÄHLEN AUS",
+            "🥁 DRUMSET", "ANSCHLAG: " + TouchVelocity.MODES[TouchVelocity.mode], "⏱ TIMING " + String.format(Locale.GERMANY, "%+.0f ms", -Engine.recOffsetMs),
             "⌗ QUANT. ${quantName(if (Engine.rollQuant > 0) Engine.rollQuant else 16)}", "⌫ LEEREN", "🎹 NOTEN"
         )
-        val on = booleanArrayOf(rec, Engine.seqPlaying, Engine.metronome, Engine.rollQuant > 0, false, false, false, drumVelPos, Engine.countIn, false, false, false)
+        val on = booleanArrayOf(rec, Engine.seqPlaying, Engine.metronome, Engine.rollQuant > 0, false, false, false, TouchVelocity.mode != 0, Engine.recOffsetMs != 0f, false, false, false)
         for (i in 0 until 12) {
             smallBtn(canvas, drBtns[i], labels[i], on[i], cols)
             if (i == 0 && rec) {
@@ -2265,8 +2266,17 @@ class PadView(context: Context) : View(context) {
             }
             5 -> { val l = Engine.undo(); hint(if (l == null) "Nichts rückgängig zu machen" else "↶ Rückgängig: $l") }
             6 -> onDrumKit?.invoke()
-            7 -> { drumVelPos = !drumVelPos; hint(if (drumVelPos) "Anschlag nach Höhe: oben im Pad = laut, unten = leise" else "Anschlag fest: immer volle Lautstärke") }
-            8 -> { Engine.countIn = !Engine.countIn; hint(if (Engine.countIn) "Vor der Aufnahme 1 Takt einzählen" else "Aufnahme startet sofort") }
+            7 -> {
+                TouchVelocity.mode = (TouchVelocity.mode + 1) % 3
+                TouchVelocity.update(context)
+                context.getSharedPreferences("marvpad", Context.MODE_PRIVATE).edit().putInt("velMode", TouchVelocity.mode).apply()
+                hint(when (TouchVelocity.mode) {
+                    0 -> "Anschlag FEST: immer volle Lautstärke"
+                    1 -> "Anschlag HÖHE: oben im Pad = laut, unten = leise"
+                    else -> "Anschlag STÄRKE: fest tippen = laut, leicht = leise (Bewegungssensor + Fingerfläche, lernt nach ein paar Schlägen mit)"
+                })
+            }
+            8 -> onTimingCalib?.invoke()
             9 -> {
                 val q = if (Engine.rollQuant > 0) Engine.rollQuant else 16
                 val n = Engine.quantizeHits(q)
@@ -4275,11 +4285,10 @@ class PadView(context: Context) : View(context) {
                 }
                 pointerPad[id] = p
                 downXY[id] = floatArrayOf(x, y)
-                val vel = if (drumActive() && drumVelPos && Engine.isOneShot(p)) {
-                    val r = padRects[p]
-                    (0.2f + 0.8f * (1f - (y - r.top) / max(1f, r.height()))).coerceIn(0.2f, 1f)
-                } else 1f
-                val res = Engine.liveDown(p, vel)
+                // Zeitpunkt der Berührung (nicht der Verarbeitung) – für genaues Timing beim Einspielen
+                val tNs = TouchVelocity.eventNanos(e)
+                val vel = if (Engine.isOneShot(p)) TouchVelocity.of(e, idx, y, padRects[p].top, padRects[p].bottom, tNs) else 1f
+                val res = Engine.liveDown(p, vel, tNs)
                 val shot = (res and Engine.LIVE_SHOT) != 0
                 if ((res and Engine.LIVE_LAUNCHED) != 0) launchedPointers.add(id) else launchedPointers.remove(id)
                 if (shot) {

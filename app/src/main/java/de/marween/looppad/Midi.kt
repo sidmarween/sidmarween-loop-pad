@@ -306,12 +306,16 @@ object Midi {
                 if (running == 0) continue
                 data[have++] = b
                 if (have >= need) {
+                    curTs = timestamp
                     message(running, data[0], if (need > 1) data[1] else 0, dev)
                     have = 0
                 }
             }
         }
     }
+
+    /** Zeitstempel des gerade verarbeiteten MIDI-Ereignisses (System.nanoTime-Basis). */
+    @Volatile private var curTs = 0L
 
     private fun chOk(ch: Int): Boolean = channel == 0 || ch == channel
 
@@ -393,7 +397,7 @@ object Midi {
             if (padHeld[p]) return
             padHeld[p] = true
             val v = if (velocity) max(0.05f, vel / 127f) else 1f
-            val r = Engine.liveDown(p, v)
+            val r = Engine.liveDown(p, v, curTs)
             padLaunched[p] = (r and Engine.LIVE_LAUNCHED) != 0
             if ((r and Engine.LIVE_SHOT) != 0 && Engine.repeatOn) Engine.repeatPadDown(p)
         } else {

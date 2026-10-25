@@ -152,6 +152,7 @@ class MainActivity : Activity() {
         pads.statusColors = prefs.getBoolean("statusColors", true)
         pads.onImportMenu = { p -> showImportMenu(p) }
         pads.onDrumKit = { showDrumKits() }
+        pads.onTimingCalib = { showTimingCalib() }
         pads.onDrumClear = { p ->
             val items = ArrayList<String>()
             val acts = ArrayList<() -> Unit>()
@@ -185,6 +186,11 @@ class MainActivity : Activity() {
         dj = DjView(this)
         dj.skinIdx = prefs.getInt("djSkin", 15)
         Dj.autoGain = prefs.getBoolean("djAutoGain", true)
+        TouchVelocity.mode = prefs.getInt("velMode", 0)
+        TouchVelocity.curve = prefs.getInt("velCurve", 1)
+        TouchVelocity.floor = prefs.getFloat("velFloor", 0.2f)
+        Engine.recOffsetMs = prefs.getFloat("recOffsetMs", 0f)
+        Engine.tightTiming = prefs.getBoolean("tightTiming", true)
         Engine.quadOut = prefs.getBoolean("quadOut", false)
         Dj.colorWave = prefs.getBoolean("djColorWave", true)
         Dj.changeTargetLufs(prefs.getFloat("djTargetLufs", -10f))
@@ -472,6 +478,12 @@ class MainActivity : Activity() {
     override fun onResume() {
         super.onResume()
         pickerOpen = false
+        TouchVelocity.update(this)
+    }
+
+    override fun onPause() {
+        TouchVelocity.stop()
+        super.onPause()
     }
 
     override fun onStop() {
@@ -686,6 +698,95 @@ class MainActivity : Activity() {
     }
 
     // ---------------------------------------------------------------- Auf die Eins tappen
+
+    /**
+     * Einspiel-Timing kalibrieren: im Klick mittippen – die App misst, wie viel deine Anschläge
+     * systematisch daneben liegen (Touch-Verzögerung, Bluetooth …) und zieht das beim Aufnehmen ab.
+     * Dazu Anschlagsdynamik (Art, Kurve, leisester Schlag) und jitterfreies Auslösen.
+     */
+    private fun showTimingCalib() {
+        val prefs = getSharedPreferences("marvpad", MODE_PRIVATE)
+        val d = resources.displayMetrics.density
+        fun px(v: Float) = (v * d).toInt()
+        val wasPlaying = Engine.seqPlaying
+        val wasMetro = Engine.metronome
+        if (!wasPlaying) Engine.seqPlay()
+        Engine.metronome = true
+        val taps = ArrayList<Float>()
+        val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(px(18f), px(6f), px(18f), px(6f)) }
+        val scroll = android.widget.ScrollView(this).apply { addView(box) }
+        box.addView(TextView(this).apply {
+            text = "1) Hör auf den Klick und tippe 8–16 Mal genau mit – so, wie du auch trommelst.\n2) „Übernehmen“: Deine Schläge werden beim Aufnehmen um diesen Versatz korrigiert, damit AUTO-Q sie auf den richtigen Platz legt."
+            textSize = 13f
+        })
+        val info = TextView(this).apply { textSize = 15f; gravity = Gravity.CENTER; setPadding(0, px(10f), 0, px(6f)); setTextColor(Color.rgb(255, 176, 40)) }
+        fun median(): Float? = if (taps.size < 4) null else taps.drop(2).sorted().let { it[it.size / 2] }
+        fun update() {
+            val m = median()
+            val spread = if (taps.size > 4) taps.drop(2).let { it.maxOrNull()!! - it.minOrNull()!! } else 0f
+            info.text = (if (m == null) "${taps.size} Taps – weiter mittippen …" else String.format(Locale.GERMANY, "%d Taps · du liegst %+.0f ms %s · Streuung %.0f ms", taps.size, m, if (m > 0) "zu spät" else "zu früh", spread)) +
+                String.format(Locale.GERMANY, "\nJetzt eingestellt: %+.0f ms · Auslöse-Verzögerung %.0f ms", -Engine.recOffsetMs, Engine.triggerDelayMs())
+        }
+        update()
+        box.addView(info)
+        box.addView(Button(this).apply {
+            text = "TAP"
+            textSize = 28f
+            setTextColor(Color.WHITE)
+            setBackgroundColor(Color.rgb(255, 106, 16))
+            setOnTouchListener { v, e ->
+                if (e.actionMasked == android.view.MotionEvent.ACTION_DOWN) {
+                    Engine.beatOffsetMs(TouchVelocity.eventNanos(e))?.let { taps.add(it); if (taps.size > 24) taps.removeAt(0) }
+                    update()
+                    v.performHapticFeedback(android.view.HapticFeedbackConstants.VIRTUAL_KEY)
+                }
+                true
+            }
+        }, LinearLayout.LayoutParams(-1, px(120f)))
+        val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; setPadding(0, px(8f), 0, 0) }
+        fun nb(t: String, f: () -> Unit) = row.addView(Button(this).apply { text = t; isAllCaps = false; setOnClickListener { f(); update() } }, LinearLayout.LayoutParams(0, -2, 1f))
+        nb("−5 ms") { Engine.recOffsetMs += 5f }
+        nb("0") { Engine.recOffsetMs = 0f }
+        nb("+5 ms") { Engine.recOffsetMs -= 5f }
+        box.addView(row)
+        check(box, "Präzises Auslösen (feste Verzögerung statt Schwanken – klingt tighter)", Engine.tightTiming) { Engine.tightTiming = it }
+        check(box, "Vor der Aufnahme 1 Takt einzählen", Engine.countIn) { Engine.countIn = it }
+        val velBtn = Button(this).apply { isAllCaps = false }
+        fun velLabel() { velBtn.text = "Anschlag: ${TouchVelocity.MODES[TouchVelocity.mode]} · Kurve ${TouchVelocity.CURVES[TouchVelocity.curve]} · leisester ${(TouchVelocity.floor * 100).toInt()} %" }
+        velLabel()
+        velBtn.setOnClickListener {
+            ui().setTitle("Anschlagsdynamik").setItems(arrayOf(
+                "FEST – immer volle Lautstärke",
+                "HÖHE – oben im Pad laut, unten leise",
+                "STÄRKE – fest tippen = laut (Bewegungssensor + Fingerfläche, lernt mit)",
+                "Kurve: weich (leichtes Tippen schon laut)", "Kurve: linear", "Kurve: hart (nur kräftig = laut)",
+                "Leisester Schlag: 10 %", "Leisester Schlag: 20 %", "Leisester Schlag: 35 %", "Leisester Schlag: 50 %"
+            )) { _, w ->
+                when (w) {
+                    in 0..2 -> TouchVelocity.mode = w
+                    in 3..5 -> TouchVelocity.curve = w - 3
+                    else -> TouchVelocity.floor = floatArrayOf(0.1f, 0.2f, 0.35f, 0.5f)[w - 6]
+                }
+                TouchVelocity.update(this)
+                velLabel()
+            }.show()
+        }
+        box.addView(velBtn)
+        ui().setTitle("⏱ Einspiel-Timing & Anschlag").setView(scroll)
+            .setPositiveButton("Übernehmen") { _, _ ->
+                median()?.let { Engine.recOffsetMs = it }
+                hint(String.format(Locale.GERMANY, "Einspiel-Ausgleich %+.0f ms – AUTO-Q legt die Schläge jetzt auf den richtigen Platz", -Engine.recOffsetMs))
+            }
+            .setNegativeButton("Schließen", null)
+            .setOnDismissListener {
+                Engine.metronome = wasMetro
+                if (!wasPlaying) Engine.seqStop()
+                prefs.edit().putFloat("recOffsetMs", Engine.recOffsetMs).putBoolean("tightTiming", Engine.tightTiming)
+                    .putInt("velMode", TouchVelocity.mode).putInt("velCurve", TouchVelocity.curve).putFloat("velFloor", TouchVelocity.floor)
+                    .putBoolean("countIn", Engine.countIn).apply()
+            }
+            .show()
+    }
 
     /** Pad läuft im Rhythmus, aber versetzt: im Takt auf seine Eins tippen – der Loop wird auf die Eins des Rasters geschoben. */
     private fun showTapAlign(p: Int) {
