@@ -6997,8 +6997,10 @@ class PadView(context: Context) : View(context) {
 
     private var songPage = 0
     private var songPaintPointer = -1
-    private var songPaintVal = false
+    private var songPaintVal = 0
     private val SONG_COLS = 16
+
+    private val PAT_COLS = intArrayOf(Color.rgb(90, 190, 255), Color.rgb(120, 230, 140), Color.rgb(255, 190, 70), Color.rgb(240, 120, 200))
 
     private fun songPages(): Int = max(1, (Engine.songBars + SONG_COLS - 1) / SONG_COLS)
 
@@ -7008,8 +7010,8 @@ class PadView(context: Context) : View(context) {
             Engine.isOneShot(r) -> " ⚡"
             else -> " ∞"
         }
-        r == VISIBLE_PADS -> "ACID"
-        else -> "DRUM"
+        r < Engine.ARR_INST -> ""
+        else -> (r - Engine.ARR_INST).let { i -> InstState.instNames[i] + " " + InstState.patLetter(InstState.curPat[i]) }
     }
 
     private fun songCell(x: Float, y: Float): Pair<Int, Int>? {
@@ -7059,16 +7061,24 @@ class PadView(context: Context) : View(context) {
                 val r = ((y - kbPiano.top) / (kbPiano.height() / rows)).toInt().coerceIn(0, rows - 1)
                 when {
                     r < VISIBLE_PADS -> if (Engine.hasLoop(r)) Engine.toggleMute(r)
-                    r == VISIBLE_PADS -> InstState.acidOn = !InstState.acidOn
-                    else -> InstState.drumOn = !InstState.drumOn
+                    r >= Engine.ARR_INST -> (r - Engine.ARR_INST).let { i -> InstState.setInstOn(i, !InstState.instOn(i)) }
                 }
                 performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
                 return true
             }
         }
         val cell = songCell(x, y) ?: return false
-        songPaintVal = !Engine.arr[cell.first][cell.second]
-        Engine.arr[cell.first][cell.second] = songPaintVal
+        val cur = Engine.arrCell(cell.first, cell.second)
+        songPaintVal = if (cell.first >= Engine.ARR_INST) {
+            // Instrument: leer → aktuelles Pattern, dann A → B → C → D → aus
+            val i = cell.first - Engine.ARR_INST
+            if (cur == 0) InstState.curPat[i] + 1 else (cur + 1) % (InstState.PATS + 1)
+        } else if (cur > 0) 0 else 1
+        Engine.setArrCell(cell.first, cell.second, songPaintVal)
+        if (cell.first >= Engine.ARR_INST && songPaintVal > 0) {
+            val i = cell.first - Engine.ARR_INST
+            if (!InstState.patHasNotes(i, songPaintVal - 1)) hint("${InstState.instNames[i]} Pattern ${InstState.patLetter(songPaintVal - 1)} ist noch leer – im ${InstState.instNames[i]}-Editor oben A–D wählen")
+        }
         songPaintPointer = id
         performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
         return true
@@ -7076,7 +7086,8 @@ class PadView(context: Context) : View(context) {
 
     private fun songPaint(x: Float, y: Float) {
         val cell = songCell(x, y) ?: return
-        Engine.arr[cell.first][cell.second] = songPaintVal
+        val v = if (cell.first >= Engine.ARR_INST) songPaintVal else if (songPaintVal > 0) 1 else 0
+        Engine.setArrCell(cell.first, cell.second, v)
     }
 
     private fun drawSong(canvas: Canvas, cols: IntArray) {
@@ -7095,8 +7106,8 @@ class PadView(context: Context) : View(context) {
             tmpRect.set(k.left, y0 + dp(1f), k.right, y0 + rowH - dp(1f))
             val on = when {
                 r < VISIBLE_PADS -> Engine.hasLoop(r) && !Engine.isMuted(r)
-                r == VISIBLE_PADS -> InstState.acidOn
-                else -> InstState.drumOn
+                r < Engine.ARR_INST -> false
+                else -> InstState.instOn(r - Engine.ARR_INST)
             }
             fillPaint.color = if (on) blend(cols[0], cols[2], 0.45f) else blend(cols[0], cols[1], 0.08f)
             canvas.drawRoundRect(tmpRect, dp(4f), dp(4f), fillPaint)
@@ -7123,11 +7134,25 @@ class PadView(context: Context) : View(context) {
                 canvas.drawRect(x0, g.top, x0 + colW, g.bottom, fillPaint)
             }
             for (r in 0 until rows) {
-                if (!Engine.arr[r][bar]) continue
+                if (r in VISIBLE_PADS until Engine.ARR_INST) continue
+                val v = Engine.arrCell(r, bar)
+                if (v <= 0) continue
                 val y0 = g.top + r * rowH
                 tmpRect.set(x0 + dp(1.5f), y0 + dp(1.5f), x0 + colW - dp(1.5f), y0 + rowH - dp(1.5f))
-                fillPaint.color = if (r >= VISIBLE_PADS) blend(cols[2], Color.rgb(80, 180, 255), 0.5f) else cols[2]
-                canvas.drawRoundRect(tmpRect, dp(3f), dp(3f), fillPaint)
+                if (r >= Engine.ARR_INST) {
+                    fillPaint.color = PAT_COLS[(v - 1).coerceIn(0, 3)]
+                    canvas.drawRoundRect(tmpRect, dp(3f), dp(3f), fillPaint)
+                    // gleiches Pattern wie im Takt davor: nur dünn verbinden, Buchstabe beim Wechsel
+                    val prev = if (bar > 0) Engine.arrCell(r, bar - 1) else 0
+                    if (prev != v && tmpRect.width() > dp(7f)) {
+                        textPaint.textSize = min(dp(10f), rowH * 0.7f)
+                        textPaint.color = Color.rgb(20, 20, 24)
+                        canvas.drawText(InstState.patLetter(v - 1), tmpRect.centerX(), tmpRect.centerY() + textPaint.textSize * 0.36f, textPaint)
+                    }
+                } else {
+                    fillPaint.color = cols[2]
+                    canvas.drawRoundRect(tmpRect, dp(3f), dp(3f), fillPaint)
+                }
             }
             strokePaint.strokeWidth = dp(if (bar % 4 == 0) 1.2f else 0.5f)
             strokePaint.color = Color.argb(if (bar % 4 == 0) 110 else 40, 255, 255, 255)

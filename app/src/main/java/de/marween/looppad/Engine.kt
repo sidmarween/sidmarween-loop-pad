@@ -454,6 +454,9 @@ object Engine {
         restore(Array(PADS) { PadSave(null, false, false) }, 0L, 0f, null)
         InstState.acidClear()
         InstState.drumClear()
+        InstState.synClear()
+        InstState.resetBanks()
+        arrClear()
         padFxFromJson(null)
     }
 
@@ -3740,6 +3743,9 @@ object Engine {
     }
 
     /** Pattern-Schritte gehören zur Szene – beim Szenenwechsel verfallen sie im Undo. */
+    /** Nach einem Pattern-Wechsel (A–D) passen alte Pattern-Undo-Schritte nicht mehr. */
+    fun forgetPatternUndo() = dropPatternUndo()
+
     private fun dropPatternUndo() {
         synchronized(undoLock) {
             undoStack.removeAll { it.pat != null }
@@ -3967,10 +3973,22 @@ object Engine {
 
     // ================================================================ Song-Arrangement (Spuren × Takte, wie Ableton)
 
-    /** 12 Pads + ACID + DRUM. */
-    const val ARR_ROWS = 14
+    /** 12 Pads + ACID + DRUM + SYNTH. */
+    const val ARR_ROWS = 15
     const val ARR_MAX = 64
+    /** Erste Instrument-Zeile (danach ACID, DRUM, SYNTH). */
+    const val ARR_INST = 12
     val arr = Array(ARR_ROWS) { BooleanArray(ARR_MAX) }
+    /** Instrument-Zeilen: 0 = aus, 1..4 = Pattern A..D. */
+    val arrPat = Array(InstState.INSTS) { IntArray(ARR_MAX) }
+
+    /** Zelle der Song-Matrix: Pads 0/1, Instrumente 0 (aus) bzw. 1..4 (Pattern A..D). */
+    fun arrCell(r: Int, bar: Int): Int = if (bar !in 0 until ARR_MAX) 0 else if (r < ARR_INST) (if (arr[r][bar]) 1 else 0) else arrPat.getOrNull(r - ARR_INST)?.get(bar) ?: 0
+
+    fun setArrCell(r: Int, bar: Int, v: Int) {
+        if (bar !in 0 until ARR_MAX) return
+        if (r < ARR_INST) arr[r][bar] = v > 0 else arrPat.getOrNull(r - ARR_INST)?.set(bar, v.coerceIn(0, InstState.PATS))
+    }
     /** Szene, die ab diesem Takt gilt (-1 = keine Änderung). */
     val arrScene = IntArray(ARR_MAX) { -1 }
     @Volatile var songMode = false
@@ -3986,8 +4004,16 @@ object Engine {
         val sc = arrScene[bar]
         if (sc in 0 until SCENES && sc != curScene && scenes[sc] != null) switchScene(sc)
         for (r in 0 until min(12, PADS)) loops.get(r)?.muted = !arr[r][bar]
-        InstState.acidOn = arr[12][bar]
-        InstState.drumOn = arr[13][bar]
+        var switched = false
+        for (i in 0 until InstState.INSTS) {
+            val v = arrPat[i][bar]
+            if (v <= 0) InstState.setInstOn(i, false)
+            else {
+                if (InstState.curPat[i] != v - 1) { InstState.selectPat(i, v - 1); switched = true }
+                InstState.setInstOn(i, true)
+            }
+        }
+        if (switched) dropPatternUndo()
     }
 
     /** Aktuelle Lage (was gerade läuft) in einen Takt schreiben. */
@@ -3997,8 +4023,7 @@ object Engine {
             val l = loops.get(r)
             arr[r][bar] = l != null && !l.muted
         }
-        arr[12][bar] = InstState.acidOn && InstState.acidHasNotes()
-        arr[13][bar] = InstState.drumOn && InstState.drumHasNotes()
+        for (i in 0 until InstState.INSTS) arrPat[i][bar] = if (InstState.instOn(i) && InstState.instHasNotes(i)) InstState.curPat[i] + 1 else 0
     }
 
     /** Song aus den Szenen bauen: jede Szene so lange wie eingestellt, nacheinander. */
@@ -4010,12 +4035,10 @@ object Engine {
             val s = scenes[i] ?: continue
             if (bar >= ARR_MAX) break
             arrScene[bar] = i
-            val acid = s.pat.inst.gate.any { it }
-            val drums = s.pat.inst.drums.any { r -> r.any { it > 0 } }
+            val has = booleanArrayOf(s.pat.inst.gate.any { it }, s.pat.inst.drums.any { r -> r.any { it > 0 } }, s.pat.inst.synGate.any { it })
             for (b in bar until min(ARR_MAX, bar + s.bars)) {
                 for (r in 0 until min(12, pads)) arr[r][b] = loops.get(r) != null && !s.mutes[r]
-                arr[12][b] = acid
-                arr[13][b] = drums
+                for (i in 0 until InstState.INSTS) arrPat[i][b] = if (has[i]) InstState.curPat[i] + 1 else 0
             }
             bar += s.bars
         }
@@ -4024,6 +4047,7 @@ object Engine {
 
     fun arrClear() {
         for (row in arr) java.util.Arrays.fill(row, false)
+        for (row in arrPat) java.util.Arrays.fill(row, 0)
         java.util.Arrays.fill(arrScene, -1)
     }
 
@@ -4035,6 +4059,7 @@ object Engine {
         for (row in arr) a.put(String(CharArray(ARR_MAX) { if (row[it]) '1' else '0' }))
         j.put("rows", a)
         j.put("scenes", org.json.JSONArray().apply { arrScene.forEach { put(it) } })
+        j.put("pats", org.json.JSONArray().apply { for (row in arrPat) put(String(CharArray(ARR_MAX) { '0' + row[it] })) })
         return j
     }
 
@@ -4052,6 +4077,16 @@ object Engine {
             }
         }
         j.optJSONArray("scenes")?.let { a -> for (b in 0 until min(ARR_MAX, a.length())) arrScene[b] = a.optInt(b, -1) }
+        val pa = j.optJSONArray("pats")
+        if (pa != null) {
+            for (i in 0 until min(InstState.INSTS, pa.length())) {
+                val str = pa.optString(i)
+                for (b in 0 until min(ARR_MAX, str.length)) arrPat[i][b] = (str[b] - '0').coerceIn(0, InstState.PATS)
+            }
+        } else {
+            // ältere Songs: ACID/DRUM nur an/aus → Pattern A
+            for (b in 0 until ARR_MAX) { arrPat[0][b] = if (arr[12][b]) 1 else 0; arrPat[1][b] = if (arr[13][b]) 1 else 0 }
+        }
     }
 
     // ================================================================ Effekte je Pad (bis zu 3 pro Pad)

@@ -92,6 +92,9 @@ class InstEditor(private val host: View) {
     private val velLane = RectF()
     /** Werkzeugleiste für die Auswahl: ◀ ▶ ▲ ▼ (Oktave) DUPL UNDO */
     private val tools = Array(8) { RectF() }
+    /** Pattern A–D */
+    private val patRects = Array(InstState.PATS) { RectF() }
+    private val inst: Int get() = (kind - 1).coerceIn(0, InstState.INSTS - 1)
     /** Taktleiste über der Matrix: tippen = Einfügemarke, ziehen = Zeitbereich markieren */
     private val ruler = RectF()
     /** Senkrechter Bildlauf rechts (Piano-Roll): ziehen = Tonhöhenbereich wählen */
@@ -153,9 +156,9 @@ class InstEditor(private val host: View) {
             val w = (box.width() - 2 * m - (rs.size - 1) * g) / rs.size
             for (i in rs.indices) rs[i].set(box.left + m + i * (w + g), top, box.left + m + i * (w + g) + w, top + dp(30f))
         }
-        row(arrayOf(bLen, bRaster, bMode, bZoomOut, bZoomIn, bClear), y)
+        row(arrayOf(patRects[0], patRects[1], patRects[2], patRects[3], bLen, bRaster, bMode, bZoomOut, bZoomIn), y)
         y += dp(36f)
-        row(arrayOf(bAll, bCopy, bPaste, bDel, bExtra, bQuant), y)
+        row(arrayOf(bAll, bCopy, bPaste, bDel, bQuant, bExtra, bClear), y)
         y += dp(36f)
         row(tools.copyOfRange(0, if (mel) 8 else 6), y)
         if (!mel) { tools[6].setEmpty(); tools[7].setEmpty() }
@@ -279,6 +282,11 @@ class InstEditor(private val host: View) {
         btn(c, bMidi, "⇅ MIDI", false, acc)
         btn(c, bSound, if (mel) "⚙ SOUND" else "⚙ KITS", sound, acc)
         btn(c, bClose, "✕", false, acc)
+        for (p in 0 until InstState.PATS) {
+            val cur = InstState.curPat[inst] == p
+            val has = InstState.patHasNotes(inst, p)
+            btn(c, patRects[p], InstState.patLetter(p) + if (has && !cur) "•" else "", cur, if (has || cur) acc else Color.rgb(90, 92, 104))
+        }
         btn(c, bLen, "${len / 16} TAKT" + if (len > 16) "E" else "", false, acc)
         btn(c, bRaster, "Q " + when (qStep) { 1 -> "1/16"; 2 -> "1/8"; else -> "1/4" }, false, acc)
         btn(c, bMode, if (selMode) "⬚ AUSWAHL" else "✏ STIFT", selMode, acc)
@@ -841,6 +849,8 @@ class InstEditor(private val host: View) {
     private val D_VSCROLL = 9
     private val D_RULER = 10
     private val D_PAN = 11
+    private val D_PAT = 12
+    private var patDown = -1
     private var pressToken = 0
     private var longDone = false
     // zwei Finger: verschieben + zoomen
@@ -991,6 +1001,22 @@ class InstEditor(private val host: View) {
         longDone = false
         pressToken++
         val st = InstState
+        val pi = patRects.indexOfFirst { it.contains(x, y) }
+        if (pi >= 0) {
+            ptr = id; drag = D_PAT; patDown = pi
+            val tok = pressToken
+            host.postDelayed({
+                if (tok == pressToken && drag == D_PAT && pi != InstState.curPat[inst]) {
+                    InstState.copyPatTo(inst, pi)
+                    longDone = true
+                    haptic()
+                    onHint?.invoke("${InstState.instNames[inst]} ${InstState.patLetter(InstState.curPat[inst])} → ${InstState.patLetter(pi)} kopiert")
+                    host.invalidate()
+                }
+            }, 500L)
+            haptic()
+            return
+        }
         if (button(x, y)) { haptic(); return }
         if (sound) {
             toggleRects.forEachIndexed { k, r -> if (r.contains(x, y)) { toggles()[k].act(); haptic(); return } }
@@ -1254,6 +1280,7 @@ class InstEditor(private val host: View) {
         val long = SystemClock.uptimeMillis() - downT > 450
         when (drag) {
             D_KEYS -> if (mel) { liveOff(); liveSemi = Int.MIN_VALUE }
+            D_PAT -> if (!longDone) switchPattern(patDown)
             D_RULER -> onHint?.invoke(if (moved) (if (sel.isEmpty()) "Keine Noten im Bereich" else "${sel.size} markiert – KOPIE, DUPL, ◀ ▶ ▲ ▼ oder ziehen")
                 else "Einfügemarke: Takt ${insert / 16 + 1}.${insert % 16 / 4 + 1} – EINF. setzt dort ein")
             D_MOVE -> if (longDone) {
@@ -1473,6 +1500,23 @@ class InstEditor(private val host: View) {
             0 -> nudge(-1, 0); 1 -> nudge(1, 0); 2 -> nudge(0, -1); 3 -> nudge(0, 1)
             4 -> duplicate(); else -> undoNow()
         }
+    }
+
+    private fun switchPattern(p: Int) {
+        val i = inst
+        if (p == InstState.curPat[i]) {
+            onHint?.invoke("Pattern ${InstState.patLetter(p)} · andere Buchstaben: antippen = wechseln, lange drücken = dieses dorthin kopieren")
+            return
+        }
+        if (mel) liveOff()
+        InstState.selectPat(i, p)
+        Engine.forgetPatternUndo()
+        sel.clear()
+        insert = -1
+        col0 = 0
+        pendingFit = true
+        onHint?.invoke("${InstState.instNames[i]} Pattern ${InstState.patLetter(p)}" +
+            if (!InstState.instHasNotes(i)) " – leer. Tipp: Buchstabe lange drücken kopiert das aktuelle Pattern dorthin" else "")
     }
 
     private fun undoNow() {

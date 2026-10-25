@@ -192,8 +192,111 @@ object InstState {
 
     // ---------------------------------------------------------------- Projekte
 
+    // ---------------------------------------------------------------- Patterns A–D je Instrument
+
+    /** Instrumente mit Pattern-Speicher: 0 = ACID, 1 = DRUM, 2 = SYNTH. */
+    const val INSTS = 3
+    const val PATS = 4
+    val instNames = arrayOf("ACID", "DRUM", "SYNTH")
+    fun patLetter(p: Int) = "ABCD"[p.coerceIn(0, PATS - 1)].toString()
+
+    /** Gespeichertes Pattern (Kopien der Schritt-Arrays + Länge). */
+    class Pat(val len: Int, val ints: Array<IntArray>, val bools: Array<BooleanArray>, val floats: Array<FloatArray>) {
+        fun copy() = Pat(len, Array(ints.size) { ints[it].copyOf() }, Array(bools.size) { bools[it].copyOf() }, Array(floats.size) { floats[it].copyOf() })
+        fun hasNotes(inst: Int): Boolean = when (inst) {
+            1 -> ints.any { r -> (0 until len).any { r[it] > 0 } }
+            else -> (0 until len).any { bools[0][it] }
+        }
+        fun toJson(): JSONObject = JSONObject().apply {
+            put("len", len)
+            put("i", JSONArray().apply { ints.forEach { a -> put(JSONArray().apply { a.forEach { put(it) } }) } })
+            put("b", JSONArray().apply { bools.forEach { a -> put(String(CharArray(a.size) { k -> if (a[k]) '1' else '0' })) } })
+            put("f", JSONArray().apply { floats.forEach { a -> put(JSONArray().apply { a.forEach { put(Math.round(it * 1000) / 1000.0) } }) } })
+        }
+    }
+
+    /** Die gerade gespielten/bearbeiteten Arrays je Instrument. */
+    private fun liveInts(inst: Int): Array<IntArray> = when (inst) { 0 -> arrayOf(acidSemi); 1 -> drumSteps; else -> arrayOf(synSemi) }
+    private fun liveBools(inst: Int): Array<BooleanArray> = when (inst) { 0 -> arrayOf(acidGate, acidAcc, acidSlide, acidTie); 1 -> emptyArray(); else -> arrayOf(synGate, synTie) }
+    private fun liveFloats(inst: Int): Array<FloatArray> = when (inst) { 0 -> arrayOf(acidVel); 1 -> drumVel; else -> arrayOf(synVel) }
+    fun instLen(inst: Int): Int = when (inst) { 0 -> acidLen; 1 -> drumLen; else -> synLen }
+    private fun setInstLen(inst: Int, n: Int) { val v = n.coerceIn(16, MAX); when (inst) { 0 -> acidLen = v; 1 -> drumLen = v; else -> synLen = v } }
+    fun instOn(inst: Int): Boolean = when (inst) { 0 -> acidOn; 1 -> drumOn; else -> synOn }
+    fun setInstOn(inst: Int, on: Boolean) { when (inst) { 0 -> acidOn = on; 1 -> drumOn = on; else -> synOn = on } }
+    fun instHasNotes(inst: Int): Boolean = when (inst) { 0 -> acidHasNotes(); 1 -> drumHasNotes(); else -> synHasNotes() }
+
+    val bank = Array(INSTS) { arrayOfNulls<Pat>(PATS) }
+    /** Gerade aktives Pattern je Instrument (0..3 = A..D). */
+    val curPat = IntArray(INSTS)
+
+    fun capturePat(inst: Int): Pat = Pat(instLen(inst), Array(liveInts(inst).size) { liveInts(inst)[it].copyOf() },
+        Array(liveBools(inst).size) { liveBools(inst)[it].copyOf() }, Array(liveFloats(inst).size) { liveFloats(inst)[it].copyOf() })
+
+    private fun loadPat(inst: Int, p: Pat?) {
+        val li = liveInts(inst); val lb = liveBools(inst); val lf = liveFloats(inst)
+        for (k in li.indices) { java.util.Arrays.fill(li[k], 0); p?.ints?.getOrNull(k)?.let { System.arraycopy(it, 0, li[k], 0, min(it.size, MAX)) } }
+        for (k in lb.indices) { java.util.Arrays.fill(lb[k], false); p?.bools?.getOrNull(k)?.let { System.arraycopy(it, 0, lb[k], 0, min(it.size, MAX)) } }
+        for (k in lf.indices) { java.util.Arrays.fill(lf[k], 1f); p?.floats?.getOrNull(k)?.let { System.arraycopy(it, 0, lf[k], 0, min(it.size, MAX)) } }
+        setInstLen(inst, p?.len ?: 16)
+    }
+
+    /** Pattern wechseln: aktuelles sichern, anderes laden. (Auch aus dem Audio-Thread an der Eins.) */
+    @Synchronized fun selectPat(inst: Int, p: Int) {
+        if (inst !in 0 until INSTS || p !in 0 until PATS || p == curPat[inst]) return
+        bank[inst][curPat[inst]] = capturePat(inst)
+        loadPat(inst, bank[inst][p])
+        curPat[inst] = p
+    }
+
+    /** Aktuelles Pattern in Platz [to] kopieren. */
+    @Synchronized fun copyPatTo(inst: Int, to: Int) {
+        if (inst !in 0 until INSTS || to !in 0 until PATS || to == curPat[inst]) return
+        bank[inst][to] = capturePat(inst)
+    }
+
+    fun patHasNotes(inst: Int, p: Int): Boolean = if (p == curPat[inst]) instHasNotes(inst) else bank[inst][p]?.hasNotes(inst) == true
+
+    fun resetBanks() {
+        for (b in bank) java.util.Arrays.fill(b, null)
+        java.util.Arrays.fill(curPat, 0)
+    }
+
+    private fun banksToJson(): JSONArray {
+        val a = JSONArray()
+        for (inst in 0 until INSTS) {
+            val o = JSONObject()
+            o.put("cur", curPat[inst])
+            val ps = JSONArray()
+            for (p in 0 until PATS) ps.put(if (p == curPat[inst]) JSONObject.NULL else bank[inst][p]?.toJson() ?: JSONObject.NULL)
+            o.put("pats", ps)
+            a.put(o)
+        }
+        return a
+    }
+
+    private fun banksFromJson(a: JSONArray?) {
+        resetBanks()
+        if (a == null) return
+        for (inst in 0 until min(INSTS, a.length())) {
+            val o = a.optJSONObject(inst) ?: continue
+            curPat[inst] = o.optInt("cur", 0).coerceIn(0, PATS - 1)
+            val ps = o.optJSONArray("pats") ?: continue
+            for (p in 0 until min(PATS, ps.length())) {
+                val q = ps.optJSONObject(p) ?: continue
+                try {
+                    val ia = q.optJSONArray("i"); val ba = q.optJSONArray("b"); val fa = q.optJSONArray("f")
+                    val ints = Array(ia?.length() ?: 0) { r -> val x = ia!!.getJSONArray(r); IntArray(MAX) { k -> if (k < x.length()) x.optInt(k) else 0 } }
+                    val bools = Array(ba?.length() ?: 0) { r -> val str = ba!!.optString(r); BooleanArray(MAX) { k -> k < str.length && str[k] == '1' } }
+                    val floats = Array(fa?.length() ?: 0) { r -> val x = fa!!.getJSONArray(r); FloatArray(MAX) { k -> if (k < x.length()) x.optDouble(k, 1.0).toFloat() else 1f } }
+                    bank[inst][p] = Pat(q.optInt("len", 16).coerceIn(16, MAX), ints, bools, floats)
+                } catch (e: Exception) {}
+            }
+        }
+    }
+
     fun toJson(): JSONObject {
         val j = JSONObject()
+        j.put("banks", banksToJson())
         fun ia(a: IntArray) = JSONArray().apply { a.forEach { put(it) } }
         fun ba(a: BooleanArray) = JSONArray().apply { a.forEach { put(it) } }
         fun fa(a: FloatArray) = JSONArray().apply { a.forEach { put(it.toDouble()) } }
@@ -221,8 +324,9 @@ object InstState {
 
     fun fromJson(j: JSONObject?) {
         if (j == null) {
-            acidClear(); drumClear(); synClear(); return
+            acidClear(); drumClear(); synClear(); resetBanks(); acidLen = 16; drumLen = 16; synLen = 16; return
         }
+        banksFromJson(j.optJSONArray("banks"))
         fun ri(n: String, a: IntArray) { j.optJSONArray(n)?.let { for (k in 0 until min(a.size, it.length())) a[k] = it.optInt(k) } }
         fun rb(n: String, a: BooleanArray) { j.optJSONArray(n)?.let { for (k in 0 until min(a.size, it.length())) a[k] = it.optBoolean(k) } }
         fun rf(n: String, a: FloatArray) { j.optJSONArray(n)?.let { for (k in 0 until min(a.size, it.length())) a[k] = it.optDouble(k).toFloat() } }
@@ -232,7 +336,7 @@ object InstState {
         scaleType = j.optInt("scaleType", 0).coerceIn(0, scaleNames.size - 1); scaleRoot = Math.floorMod(j.optInt("scaleRoot", 0), 12); scaleSnap = j.optBoolean("scaleSnap", false)
         acidCut = j.optDouble("acidCut", 0.35).toFloat(); acidRes = j.optDouble("acidRes", 0.7).toFloat()
         acidEnv = j.optDouble("acidEnv", 0.6).toFloat(); acidDec = j.optDouble("acidDec", 0.35).toFloat(); acidVol = j.optDouble("acidVol", 0.75).toFloat()
-        j.optJSONArray("drumSteps")?.let { ds -> for (v in 0 until min(DV, ds.length())) ds.optJSONArray(v)?.let { r -> for (k in 0 until min(STEPS, r.length())) drumSteps[v][k] = r.optInt(k) } }
+        j.optJSONArray("drumSteps")?.let { ds -> for (v in 0 until min(DV, ds.length())) ds.optJSONArray(v)?.let { r -> for (k in 0 until min(MAX, r.length())) drumSteps[v][k] = r.optInt(k) } }
         rf("drumTune", drumTune); rf("drumDecay", drumDecay); rf("drumLevel", drumLevel)
         drumOn = j.optBoolean("drumOn", true); drumFx = j.optBoolean("drumFx", false)
         drumDrive = j.optDouble("drumDrive", 0.15).toFloat(); drumVol = j.optDouble("drumVol", 0.8).toFloat()
