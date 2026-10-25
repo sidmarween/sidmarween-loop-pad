@@ -263,6 +263,49 @@ object Engine {
     /** Shuffle/Swing 0..1: verschiebt jede zweite 1/16 um bis zu eine halbe 1/16 nach hinten (50 % … 75 %). */
     @Volatile var swing = 0f
 
+    // ---------------------------------------------------------------- Pad-Loop (Ausschnitt eines laufenden Loops wiederholen)
+    val PAD_LOOP_BEATS = floatArrayOf(0.125f, 0.25f, 0.5f, 1f, 2f, 4f, 8f, 16f)
+    val padLoopOn = BooleanArray(PADS)
+    /** Größe in Schlägen (Vierteln). */
+    val padLoopBeats = FloatArray(PADS) { 1f }
+    private val padLoopSt = IntArray(PADS)
+    private val padLoopData = IntArray(PADS)
+    private val padLoopReset = BooleanArray(PADS)
+
+    /** Länge des Pad-Loops in Samples (ein Schlag = Takt/4; ohne Takt: Loop = 1 Takt). */
+    private fun padLoopLen(p: Int, len: Int, mlen: Long): Int {
+        val beat = if (mlen > 0L) mlen / 4.0 else len / 4.0
+        return (beat * padLoopBeats[p]).toInt().coerceIn(32, len)
+    }
+
+    /** Größte sinnvolle Größe: der ganze Loop. */
+    fun padLoopMaxBeats(p: Int): Float {
+        val l = loops.get(p) ?: return 4f
+        val m = masterLen
+        return if (m > 0L) (l.data.size * 4.0 / m).toFloat() else 4f
+    }
+
+    fun padLoopToggle(p: Int) {
+        if (p !in 0 until PADS) return
+        padLoopReset[p] = true
+        padLoopOn[p] = !padLoopOn[p]
+    }
+
+    /** Kleiner (−1) / größer (+1). */
+    fun padLoopResize(p: Int, dir: Int) {
+        if (p !in 0 until PADS) return
+        val i = PAD_LOOP_BEATS.indexOfFirst { it >= padLoopBeats[p] - 1e-4f }.coerceAtLeast(0)
+        val mx = padLoopMaxBeats(p)
+        var ni = (i + dir).coerceIn(0, PAD_LOOP_BEATS.size - 1)
+        while (ni > 0 && PAD_LOOP_BEATS[ni] > mx + 1e-4f) ni--
+        padLoopBeats[p] = PAD_LOOP_BEATS[ni]
+        padLoopReset[p] = true
+    }
+
+    fun padLoopLabel(p: Int): String = when (val b = padLoopBeats[p]) {
+        0.125f -> "1/32"; 0.25f -> "1/16"; 0.5f -> "1/8"; 1f -> "1/4"; 2f -> "1/2"; 4f -> "1 T"; 8f -> "2 T"; 16f -> "4 T"; else -> b.toString()
+    }
+
     private fun swingOffset(bar: Long): Long = (swing * 0.5f * bar / STEPS).toLong()
     private fun seqStart(): Long = if (masterLen > 0L) masterStart else seqOrigin
     private fun stepFrame(origin: Long, bar: Long, n: Long): Long = origin + Math.floorDiv(n * bar, STEPS.toLong())
@@ -2237,6 +2280,28 @@ object Engine {
                         if (off < fadeN) v *= off / fadeN.toFloat()
                         val endRem = min(sLen - off, slotEnd - pos)
                         if (endRem < fadeN) v *= endRem / fadeN.toFloat()
+                        val a = abs(v)
+                        if (a > peak) peak = a
+                        fg = if (fg < fadeTarget) min(fadeTarget, fg + fadeStep) else max(fadeTarget, fg - fadeStep)
+                        dst[i] += v * fg * gn
+                    }
+                } else if (padLoopOn[p] && rel + block > 0 && len > 1) {
+                    // Pad-Loop: kleiner Ausschnitt wiederholt sich im Takt (läuft im Raster weiter, beim Ausschalten geht es synchron weiter)
+                    val lp = padLoopLen(p, len, mlen)
+                    if (padLoopReset[p] || padLoopData[p] != len) {
+                        val cur = Math.floorMod(rel + block, len.toLong()).toInt()
+                        padLoopSt[p] = min((cur / lp) * lp, len - lp).coerceAtLeast(0)
+                        padLoopReset[p] = false
+                        padLoopData[p] = len
+                    }
+                    val st0 = padLoopSt[p]
+                    val fadeN = min(48, lp / 4).coerceAtLeast(1)
+                    for (i in 0 until block) {
+                        val r = rel + i
+                        if (r < 0) continue
+                        val off = ((r % len) % lp).toInt()
+                        var v = d[(st0 + off).coerceAtMost(len - 1)]
+                        if (off < fadeN) v *= off / fadeN.toFloat() else if (lp - off < fadeN) v *= (lp - off) / fadeN.toFloat()
                         val a = abs(v)
                         if (a > peak) peak = a
                         fg = if (fg < fadeTarget) min(fadeTarget, fg + fadeStep) else max(fadeTarget, fg - fadeStep)

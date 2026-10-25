@@ -3142,6 +3142,7 @@ class PadView(context: Context) : View(context) {
             bx -= sz + dp(3f)
         }
         if (has && Engine.isOneShot(i) && Engine.isMuted(i)) padBadge(canvas, bx, by, sz, "M", Color.rgb(90, 160, 255))
+        if (func == F_NONE) drawPadLoop(canvas, i, cols)
         // Modus-Rahmen
         val mc = when (func) {
             F_MUTE -> Color.rgb(90, 160, 255)
@@ -3459,6 +3460,47 @@ class PadView(context: Context) : View(context) {
     }
 
     /** Trefferfläche des FX-Schalters unten rechts im Pad. */
+    private val loopTmp = RectF()
+
+    /** Pad-Loop-Leiste unten links auf laufenden Loop-Pads: [−] [⟲ Größe] [+]. */
+    private fun padLoopRect(i: Int, out: RectF): Boolean {
+        val r = padRects[i]
+        if (r.width() <= 0f || sceneView) return false
+        if (!Engine.hasLoop(i) || Engine.isOneShot(i) || Engine.isSliced(i)) return false
+        val st = Engine.state(i)
+        if (st != Engine.PadState.PLAYING && st != Engine.PadState.MUTED) return false
+        val h = min(dp(28f), r.height() * 0.26f)
+        fxBadgeRect(i, loopTmp)
+        val right = loopTmp.left - dp(4f)
+        out.set(r.left + dp(5f), r.bottom - h - dp(5f), right, r.bottom - dp(5f))
+        return out.width() >= dp(64f)
+    }
+
+    private fun drawPadLoop(canvas: Canvas, i: Int, cols: IntArray) {
+        if (!padLoopRect(i, tmpRect)) return
+        val on = Engine.padLoopOn[i]
+        val acc = Color.rgb(60, 220, 140)
+        val r = RectF(tmpRect)
+        val seg = r.width() * 0.27f
+        fillPaint.shader = null
+        fillPaint.color = alpha(Color.BLACK, 0.55f)
+        canvas.drawRoundRect(r, dp(7f), dp(7f), fillPaint)
+        val mid = RectF(r.left + seg, r.top, r.right - seg, r.bottom)
+        fillPaint.color = if (on) acc else alpha(Color.WHITE, 0.12f)
+        canvas.drawRoundRect(mid, dp(6f), dp(6f), fillPaint)
+        strokePaint.strokeWidth = dp(1.2f)
+        strokePaint.color = if (on) Color.WHITE else alpha(acc, 0.8f)
+        canvas.drawRoundRect(r, dp(7f), dp(7f), strokePaint)
+        textPaint.color = Color.WHITE
+        textPaint.textSize = min(dp(16f), r.height() * 0.62f)
+        canvas.drawText("−", r.left + seg / 2, r.centerY() + textPaint.textSize * 0.36f, textPaint)
+        canvas.drawText("+", r.right - seg / 2, r.centerY() + textPaint.textSize * 0.36f, textPaint)
+        textPaint.color = if (on) Color.BLACK else Color.WHITE
+        val lb = "⟲ " + Engine.padLoopLabel(i)
+        textPaint.textSize = min(dp(12f), r.height() * 0.48f)
+        canvas.drawText(fitLabel(textPaint, lb, mid.width() - dp(4f), textPaint.textSize, dp(7f)), mid.centerX(), mid.centerY() + textPaint.textSize * 0.36f, textPaint)
+    }
+
     private fun fxBadgeRect(i: Int, out: RectF) {
         val r = padRects[i]
         val h = min(dp(18f), r.width() * 0.2f)
@@ -4277,6 +4319,20 @@ class PadView(context: Context) : View(context) {
                                 onImportMenu?.invoke(i)
                                 return true
                             }
+                        }
+                        if (padLoopRect(i, iconRect) && iconRect.contains(x, y)) {
+                            val seg = iconRect.width() * 0.27f
+                            when {
+                                x < iconRect.left + seg -> { Engine.padLoopResize(i, -1); hint("Pad ${i + 1}: Loop ${Engine.padLoopLabel(i)}") }
+                                x > iconRect.right - seg -> { Engine.padLoopResize(i, 1); hint("Pad ${i + 1}: Loop ${Engine.padLoopLabel(i)}") }
+                                else -> {
+                                    Engine.padLoopToggle(i)
+                                    hint(if (Engine.padLoopOn[i]) "Pad ${i + 1}: ⟲ Loop ${Engine.padLoopLabel(i)} an – − / + verkleinert/vergrößert, Mitte = aus" else "Pad ${i + 1}: Loop aus – läuft im Takt weiter")
+                                }
+                            }
+                            performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+                            invalidate()
+                            return true
                         }
                         fxBadgeRect(i, iconRect)
                         iconRect.inset(-dp(3f), -dp(3f))
