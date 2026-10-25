@@ -171,6 +171,7 @@ class MainActivity : Activity() {
         pads.onRollIo = { p -> showRollIo(p) }
         pads.onInstMidi = { k -> showInstMidi(k) }
         pads.onInstPresets = { k -> showInstPresets(k) }
+        pads.onInstScale = { showScaleMenu() }
         pads.onLaunchQuantChanged = {
             prefs.edit().putInt("launchIdx", Engine.launchIdx).apply()
             hint(if (Engine.LAUNCH_Q[Engine.launchIdx] <= 0f) "Start-Raster SOFORT: Loops starten/stoppen beim Antippen"
@@ -2934,6 +2935,30 @@ class MainActivity : Activity() {
         }
         @Suppress("DEPRECATION")
         super.onBackPressed()
+    }
+
+    // ================================================================ Tonleiter (Piano-Roll)
+
+    private fun showScaleMenu() {
+        val st = InstState
+        val items = arrayOf(
+            "Tonleiter: ${st.scaleNames[st.scaleType]}  ▸",
+            "Grundton: ${st.scaleNoteNames[st.scaleRoot]}  ▸",
+            (if (st.scaleSnap) "☑" else "☐") + " Einrasten: neue/verschobene Noten nur auf Tönen der Tonleiter",
+            "Tonleiter aus"
+        )
+        ui().setTitle("🎼 Tonleiter: " + st.scaleLabel())
+            .setItems(items) { _, w ->
+                when (w) {
+                    0 -> ui().setTitle("Tonleiter").setItems(st.scaleNames) { _, t -> st.scaleType = t; showScaleMenu() }.show()
+                    1 -> ui().setTitle("Grundton").setItems(st.scaleNoteNames) { _, r -> st.scaleRoot = r; if (st.scaleType == 0) st.scaleType = 2; showScaleMenu() }.show()
+                    2 -> { st.scaleSnap = !st.scaleSnap; showScaleMenu() }
+                    else -> { st.scaleType = 0; st.scaleSnap = false }
+                }
+                pads.invalidate()
+            }
+            .setNegativeButton("Fertig", null)
+            .show()
     }
 
     // ================================================================ Handys koppeln

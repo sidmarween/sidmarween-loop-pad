@@ -8275,7 +8275,10 @@ class PadView(context: Context) : View(context) {
         ed.onRec = { recPressed() }
         ed.onMidi = { k -> onInstMidi?.invoke(k) }
         ed.onPresets = { k -> onInstPresets?.invoke(k) }
+        ed.onScale = { onInstScale?.invoke() }
     }
+    /** Tonleiter für die Piano-Roll wählen. */
+    var onInstScale: (() -> Unit)? = null
     /** ACID/DRUM: Noten als MIDI-Datei laden/exportieren (1 = ACID, 2 = DRUM). */
     var onInstMidi: ((Int) -> Unit)? = null
     /** Preset-Bibliothek für ACID (1) / DRUM (2). */

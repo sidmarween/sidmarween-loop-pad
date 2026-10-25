@@ -137,6 +137,29 @@ object InstState {
     @Volatile var synCutMod = 0f
     val synWaveNames = arrayOf("SAW", "SQR", "SUPER", "PLUCK", "GLOCKE")
     val synChordNames = arrayOf("EINZELN", "DUR", "MOLL", "SUS4", "DUR7", "MOLL7", "OKTAVE")
+    // ---------------------------------------------------------------- Tonleiter (Piano-Roll: Hervorheben + Einrasten)
+    @Volatile var scaleType = 0
+    @Volatile var scaleRoot = 0
+    @Volatile var scaleSnap = false
+    val scaleNames = arrayOf("AUS", "DUR", "MOLL", "MOLL HARM.", "DORISCH", "PHRYGISCH", "PENTA DUR", "PENTA MOLL", "BLUES")
+    private val scaleIv = arrayOf(intArrayOf(), intArrayOf(0, 2, 4, 5, 7, 9, 11), intArrayOf(0, 2, 3, 5, 7, 8, 10), intArrayOf(0, 2, 3, 5, 7, 8, 11),
+        intArrayOf(0, 2, 3, 5, 7, 9, 10), intArrayOf(0, 1, 3, 5, 7, 8, 10), intArrayOf(0, 2, 4, 7, 9), intArrayOf(0, 3, 5, 7, 10), intArrayOf(0, 3, 5, 6, 7, 10))
+    val scaleNoteNames = arrayOf("C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "H")
+    fun inScale(s: Int): Boolean = scaleType == 0 || scaleIv[scaleType].contains(Math.floorMod(s - scaleRoot, 12))
+    fun isScaleRoot(s: Int): Boolean = scaleType != 0 && Math.floorMod(s - scaleRoot, 12) == 0
+    fun scaleLabel(): String = if (scaleType == 0) "AUS" else scaleNoteNames[scaleRoot] + " " + scaleNames[scaleType]
+    /** Ton auf die Tonleiter ziehen (nur wenn Einrasten an). [dir] = Richtung (+1/−1), 0 = nächster. */
+    fun snapScale(s: Int, dir: Int = 0): Int {
+        if (!scaleSnap || scaleType == 0 || inScale(s)) return s
+        if (dir != 0) {
+            var t = s
+            repeat(12) { t += if (dir > 0) 1 else -1; if (inScale(t)) return t }
+            return s
+        }
+        for (d in 1..6) { if (inScale(s - d)) return s - d; if (inScale(s + d)) return s + d }
+        return s
+    }
+
     val synChordIv = arrayOf(intArrayOf(0), intArrayOf(0, 4, 7), intArrayOf(0, 3, 7), intArrayOf(0, 5, 7), intArrayOf(0, 4, 7, 10), intArrayOf(0, 3, 7, 10), intArrayOf(0, 12))
 
     fun synClear() {
@@ -192,6 +215,7 @@ object InstState {
         j.put("synLen", synLen); j.put("synOn", synOn); j.put("synFx", synFx); j.put("synOct", synOct); j.put("synWave", synWave); j.put("synChord", synChord)
         j.put("synCut", synCut.toDouble()); j.put("synRes", synRes.toDouble()); j.put("synAtk", synAtk.toDouble()); j.put("synRel", synRel.toDouble())
         j.put("synVol", synVol.toDouble()); j.put("synDetune", synDetune.toDouble()); j.put("synEnv", synEnv.toDouble())
+        j.put("scaleType", scaleType); j.put("scaleRoot", scaleRoot); j.put("scaleSnap", scaleSnap)
         return j
     }
 
@@ -205,6 +229,7 @@ object InstState {
         ri("acidSemi", acidSemi); rb("acidGate", acidGate); rb("acidAcc", acidAcc); rb("acidSlide", acidSlide)
         acidOn = j.optBoolean("acidOn", true); acidFx = j.optBoolean("acidFx", true); acidSquare = j.optBoolean("acidSquare", false)
         acidOct = j.optInt("acidOct", 0)
+        scaleType = j.optInt("scaleType", 0).coerceIn(0, scaleNames.size - 1); scaleRoot = Math.floorMod(j.optInt("scaleRoot", 0), 12); scaleSnap = j.optBoolean("scaleSnap", false)
         acidCut = j.optDouble("acidCut", 0.35).toFloat(); acidRes = j.optDouble("acidRes", 0.7).toFloat()
         acidEnv = j.optDouble("acidEnv", 0.6).toFloat(); acidDec = j.optDouble("acidDec", 0.35).toFloat(); acidVol = j.optDouble("acidVol", 0.75).toFloat()
         j.optJSONArray("drumSteps")?.let { ds -> for (v in 0 until min(DV, ds.length())) ds.optJSONArray(v)?.let { r -> for (k in 0 until min(STEPS, r.length())) drumSteps[v][k] = r.optInt(k) } }

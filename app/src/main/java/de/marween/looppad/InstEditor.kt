@@ -51,6 +51,8 @@ class InstEditor(private val host: View) {
     var onRec: (() -> Unit)? = null
     /** Preset-Auswahl (1 = ACID, 2 = DRUM). */
     var onPresets: ((Int) -> Unit)? = null
+    /** Tonleiter wählen (Piano-Roll). */
+    var onScale: (() -> Unit)? = null
 
     private val d = host.resources.displayMetrics.density
     private fun dp(v: Float) = v * d
@@ -88,6 +90,12 @@ class InstEditor(private val host: View) {
     private val sliLane = RectF()
     private val scroll = RectF()
     private val velLane = RectF()
+    /** Werkzeugleiste für die Auswahl: ◀ ▶ ▲ ▼ (Oktave) DUPL UNDO */
+    private val tools = Array(8) { RectF() }
+    /** Taktleiste über der Matrix: tippen = Einfügemarke, ziehen = Zeitbereich markieren */
+    private val ruler = RectF()
+    /** Senkrechter Bildlauf rechts (Piano-Roll): ziehen = Tonhöhenbereich wählen */
+    private val vLane = RectF()
 
     // ---------------------------------------------------------------- Zustand
     private var sound = false
@@ -97,6 +105,9 @@ class InstEditor(private val host: View) {
     /** Raster fürs Quantisieren in Schritten: 1 = 1/16, 2 = 1/8, 4 = 1/4 */
     private var qStep = 2
     private var topSemi = 24
+    /** Zeilenhöhe der Piano-Roll in dp (zwei Finger senkrecht spreizen = größer). */
+    private var rowPx = 17f
+    private var pendingFit = false
     private val sel = HashSet<Int>()
     private var insert = -1
     private class AClip(val rel: Int, val semi: Int, val len: Int, val acc: Boolean, val slide: Boolean, val vel: Float = 1f)
@@ -113,6 +124,7 @@ class InstEditor(private val host: View) {
         col0 = 0
         zoom = 1
         topSemi = 24
+        pendingFit = true
     }
 
     fun close() {
@@ -144,12 +156,19 @@ class InstEditor(private val host: View) {
         row(arrayOf(bLen, bRaster, bMode, bZoomOut, bZoomIn, bClear), y)
         y += dp(36f)
         row(arrayOf(bAll, bCopy, bPaste, bDel, bExtra, bQuant), y)
-        y += dp(38f)
+        y += dp(36f)
+        row(tools.copyOfRange(0, if (mel) 8 else 6), y)
+        if (!mel) { tools[6].setEmpty(); tools[7].setEmpty() }
+        y += dp(36f)
         val bottom = box.bottom - m
         val keyW = if (mel) max(dp(44f), box.width() * 0.13f) else max(dp(70f), box.width() * 0.2f)
         val velH = dp(44f)
+        val vw = if (mel) dp(20f) else 0f
+        ruler.set(box.left + m + keyW + dp(3f), y, box.right - m - vw, y + dp(18f))
+        y += dp(20f)
         keys.set(box.left + m, y, box.left + m + keyW, bottom - dp(12f) - velH - dp(4f) - (if (kind == 1) dp(40f) else 0f))
-        grid.set(keys.right + dp(3f), y, box.right - m, keys.bottom)
+        grid.set(keys.right + dp(3f), y, box.right - m - vw, keys.bottom)
+        if (mel) vLane.set(grid.right + dp(4f), grid.top, box.right - m, grid.bottom) else vLane.setEmpty()
         var ly = grid.bottom
         if (kind == 1) {
             accLane.set(grid.left, ly + dp(4f), grid.right, ly + dp(20f))
@@ -163,7 +182,10 @@ class InstEditor(private val host: View) {
         scroll.set(grid.left, velLane.bottom + dp(4f), grid.right, velLane.bottom + dp(10f))
     }
 
-    private val rowsA: Int get() = max(8, (grid.height() / dp(17f)).toInt())
+    private val SEMI_MIN = -24
+    private val SEMI_MAX = 36
+    private val rowsA: Int get() = (grid.height() / dp(rowPx)).toInt().coerceIn(6, SEMI_MAX - SEMI_MIN + 1)
+    private fun clampTop() { topSemi = topSemi.coerceIn(min(SEMI_MAX, SEMI_MIN + rowsA - 1), SEMI_MAX) }
     private fun rowH(): Float = if (mel) grid.height() / rowsA else grid.height() / InstState.DV
     private fun colW(): Float = grid.width() / visCols
     private fun colAt(x: Float): Int = (col0 + ((x - grid.left) / colW()).toInt()).coerceIn(0, len - 1)
@@ -274,7 +296,12 @@ class InstEditor(private val host: View) {
             drawSound(c, acc)
             return
         }
+        if (pendingFit && mel) { pendingFit = false; fitView() }
+        clampTop()
+        drawTools(c, acc)
+        drawRuler(c, acc)
         if (mel) drawAcid(c, acc) else drawDrum(c, acc)
+        if (mel) drawVLane(c, acc)
         drawVel(c, acc)
         // Bildlauf
         fill.color = Color.argb(50, 255, 255, 255)
@@ -286,6 +313,105 @@ class InstEditor(private val host: View) {
             tmp.set(scroll.left + scroll.width() * a0, scroll.top, scroll.left + scroll.width() * a1, scroll.bottom)
             c.drawRoundRect(tmp, dp(3f), dp(3f), fill)
         }
+    }
+
+    private fun toolLabels(): Array<String> = if (mel) arrayOf("◀", "▶", "▲ HT", "▼ HT", "OKT ▲", "OKT ▼", "DUPL", "↶ UNDO")
+        else arrayOf("◀", "▶", "▲", "▼", "DUPL", "↶ UNDO")
+
+    private fun drawTools(c: Canvas, acc: Int) {
+        val l = toolLabels()
+        val dim = Color.rgb(120, 200, 255)
+        for (i in l.indices) btn(c, tools[i], l[i], false, if (l[i] == "DUPL" && sel.isNotEmpty()) acc else dim)
+    }
+
+    /** Taktleiste: Taktnummern, Zählzeiten, Einfügemarke, markierter Zeitbereich. */
+    private fun drawRuler(c: Canvas, acc: Int) {
+        fill.color = Color.rgb(24, 25, 31)
+        c.drawRoundRect(ruler, dp(4f), dp(4f), fill)
+        c.save()
+        c.clipRect(ruler)
+        // markierter Bereich
+        if (sel.isNotEmpty()) {
+            val ks = if (mel) sel.filter { aHead(it) }.flatMap { listOf(it, it + aLen(it)) } else sel.flatMap { listOf(it % InstState.MAX, it % InstState.MAX + 1) }
+            if (ks.isNotEmpty()) {
+                fill.color = Color.argb(70, Color.red(acc), Color.green(acc), Color.blue(acc))
+                c.drawRect(colX(ks.min()), ruler.top, colX(ks.max()), ruler.bottom, fill)
+            }
+        }
+        for (k in col0..min(len, col0 + visCols)) {
+            val x = colX(k)
+            val hgt = when { k % 16 == 0 -> ruler.height(); k % 4 == 0 -> ruler.height() * 0.45f; else -> ruler.height() * 0.2f }
+            stroke.strokeWidth = if (k % 16 == 0) dp(1.4f) else dp(0.8f)
+            stroke.color = Color.argb(if (k % 4 == 0) 170 else 70, 255, 255, 255)
+            c.drawLine(x, ruler.bottom - hgt, x, ruler.bottom, stroke)
+            if (k % 16 == 0 && k < len) {
+                text.textAlign = Paint.Align.LEFT; text.textSize = dp(10f); text.color = Color.WHITE
+                c.drawText("${k / 16 + 1}", x + dp(3f), ruler.top + dp(11f), text)
+                text.textAlign = Paint.Align.CENTER
+            } else if (k % 4 == 0 && k < len && colW() * 4 > dp(26f)) {
+                text.textAlign = Paint.Align.LEFT; text.textSize = dp(7.5f); text.color = Color.argb(120, 255, 255, 255)
+                c.drawText("${k / 16 + 1}.${k % 16 / 4 + 1}", x + dp(2f), ruler.top + dp(9f), text)
+                text.textAlign = Paint.Align.CENTER
+            }
+        }
+        if (insert in col0..col0 + visCols) {
+            val x = colX(insert)
+            fill.color = Color.rgb(255, 210, 40)
+            val path = android.graphics.Path()
+            path.moveTo(x - dp(6f), ruler.top); path.lineTo(x + dp(6f), ruler.top); path.lineTo(x, ruler.bottom); path.close()
+            c.drawPath(path, fill)
+        }
+        c.restore()
+    }
+
+    private fun laneY(s: Float): Float = vLane.top + (SEMI_MAX - s + 0.5f) / (SEMI_MAX - SEMI_MIN + 1) * vLane.height()
+
+    /** Senkrechter Bildlauf: ganzer Tonumfang, sichtbarer Ausschnitt, Striche wo Noten liegen. */
+    private fun drawVLane(c: Canvas, acc: Int) {
+        fill.color = Color.rgb(24, 25, 31)
+        c.drawRoundRect(vLane, dp(5f), dp(5f), fill)
+        stroke.strokeWidth = dp(0.8f)
+        for (s in SEMI_MIN..SEMI_MAX) if (Math.floorMod(s, 12) == 0) {
+            stroke.color = Color.argb(70, 255, 255, 255)
+            c.drawLine(vLane.left + dp(3f), laneY(s.toFloat()), vLane.right - dp(3f), laneY(s.toFloat()), stroke)
+        }
+        val th0 = laneY(topSemi + 0.5f)
+        val th1 = laneY(topSemi - rowsA + 0.5f)
+        fill.color = Color.argb(90, Color.red(acc), Color.green(acc), Color.blue(acc))
+        tmp.set(vLane.left + dp(1f), th0, vLane.right - dp(1f), th1)
+        c.drawRoundRect(tmp, dp(4f), dp(4f), fill)
+        stroke.color = acc; stroke.strokeWidth = dp(1.2f)
+        c.drawRoundRect(tmp, dp(4f), dp(4f), stroke)
+        stroke.strokeWidth = dp(2f)
+        for (k in 0 until len) if (aHead(k)) {
+            stroke.color = if (k in sel) Color.WHITE else Color.rgb(255, 200, 80)
+            val y = laneY(aSemi[k].toFloat())
+            c.drawLine(vLane.left + dp(4f), y, vLane.right - dp(4f), y, stroke)
+        }
+    }
+
+    /** Beim Öffnen: alle vorhandenen Noten in den sichtbaren Bereich holen. */
+    private fun fitView() {
+        val ss = (0 until len).filter { aHead(it) }.map { aSemi[it] }
+        if (ss.isEmpty()) { topSemi = 24; clampTop(); return }
+        val lo = ss.min(); val hi = ss.max()
+        topSemi = if (hi - lo + 3 <= rowsA) Math.round((lo + hi) / 2f + rowsA / 2f) else hi + 2
+        clampTop()
+    }
+
+    /** Markierte Noten sichtbar halten (nach Transponieren). */
+    private fun ensureVisible() {
+        val ss = sel.filter { aHead(it) }.map { aSemi[it] }
+        if (ss.isEmpty()) return
+        if (ss.max() > topSemi) topSemi = ss.max() + 1
+        if (ss.min() < topSemi - rowsA + 1) topSemi = ss.min() + rowsA - 2
+        clampTop()
+    }
+
+    private fun vScrollTo(y: Float) {
+        val center = SEMI_MAX + 0.5f - (y - vLane.top) / vLane.height() * (SEMI_MAX - SEMI_MIN + 1)
+        topSemi = Math.round(center + rowsA / 2f)
+        clampTop()
     }
 
     private fun btn(c: Canvas, r: RectF, label: String, on: Boolean, col: Int) {
@@ -372,6 +498,10 @@ class InstEditor(private val host: View) {
                 stroke.color = Color.argb(110, 0, 0, 0)
                 c.drawLine(keys.left, y0 + rh, keys.right, y0 + rh, stroke)
             }
+            if (InstState.scaleType != 0 && InstState.inScale(semi)) {
+                fill.color = if (InstState.isScaleRoot(semi)) acc else Color.argb(150, Color.red(acc), Color.green(acc), Color.blue(acc))
+                c.drawRect(keys.right - dp(4f), y0 + dp(1f), keys.right, y0 + rh - dp(1f), fill)
+            }
             if (n == 0) {
                 text.textAlign = Paint.Align.RIGHT
                 text.textSize = min(dp(9.5f), rh * 0.9f)
@@ -380,7 +510,17 @@ class InstEditor(private val host: View) {
                 text.textAlign = Paint.Align.CENTER
             }
         }
-        gridBack(c, rows) { r -> if (black(topSemi - r)) Color.rgb(22, 23, 28) else Color.rgb(29, 30, 37) }
+        val scl = InstState.scaleType != 0
+        gridBack(c, rows) { r ->
+            val sm = topSemi - r
+            when {
+                scl && InstState.isScaleRoot(sm) -> blendC(Color.rgb(29, 30, 37), acc, 0.22f)
+                scl && InstState.inScale(sm) -> Color.rgb(33, 35, 43)
+                scl -> Color.rgb(17, 17, 21)
+                black(sm) -> Color.rgb(22, 23, 28)
+                else -> Color.rgb(29, 30, 37)
+            }
+        }
         c.save()
         c.clipRect(grid)
         val cw = colW()
@@ -614,12 +754,14 @@ class InstEditor(private val host: View) {
             Toggle({ "KLANG: " + st.synWaveNames[st.synWave] }, { false }, { st.synWave = (st.synWave + 1) % st.synWaveNames.size }),
             Toggle({ "AKKORD: " + st.synChordNames[st.synChord] }, { st.synChord != 0 }, { st.synChord = (st.synChord + 1) % st.synChordNames.size }),
             Toggle({ "FX-BUS" }, { st.synFx }, { st.synFx = !st.synFx }),
+            Toggle({ "SKALA: " + st.scaleLabel() }, { st.scaleType != 0 }, { onScale?.invoke() }),
             Toggle({ "🎲 ZUFALL" }, { false }, { Engine.pushPatternUndo("SYNTH Zufall"); st.synRandom() })
         )
         return if (mel) listOf(
             Toggle({ if (st.acidOn) "● AN" else "○ AUS" }, { st.acidOn }, { st.acidOn = !st.acidOn }),
             Toggle({ if (st.acidSquare) "⊓ SQUARE" else "⩘ SAW" }, { st.acidSquare }, { st.acidSquare = !st.acidSquare }),
             Toggle({ "FX-BUS" }, { st.acidFx }, { st.acidFx = !st.acidFx }),
+            Toggle({ "SKALA: " + st.scaleLabel() }, { st.scaleType != 0 }, { onScale?.invoke() }),
             Toggle({ "🎲 ZUFALL" }, { false }, { Engine.pushPatternUndo("ACID Zufall"); st.acidRandom() })
         ) else listOf(
             Toggle({ if (st.drumOn) "● AN" else "○ AUS" }, { st.drumOn }, { st.drumOn = !st.drumOn }),
@@ -696,6 +838,20 @@ class InstEditor(private val host: View) {
     private val D_SCROLL = 6
     private val D_CELL = 7
     private val D_VEL = 8
+    private val D_VSCROLL = 9
+    private val D_RULER = 10
+    private val D_PAN = 11
+    private var pressToken = 0
+    private var longDone = false
+    // zwei Finger: verschieben + zoomen
+    private var panA = -1
+    private var panB = -1
+    private var panSx0 = 0f
+    private var panSy0 = 0f
+    private var panRow0 = 17f
+    private var panZoom0 = 1
+    private var panSemiAnchor = 0f
+    private var panColAnchor = 0f
     private var drag = D_NONE
     private var ptr = -1
     private var downX = 0f
@@ -720,14 +876,20 @@ class InstEditor(private val host: View) {
         val i = e.actionIndex
         when (e.actionMasked) {
             MotionEvent.ACTION_DOWN, MotionEvent.ACTION_POINTER_DOWN -> {
-                if (ptr >= 0) return
+                if (ptr >= 0) { startPan(e); return }
                 down(e.getPointerId(i), e.getX(i), e.getY(i))
             }
             MotionEvent.ACTION_MOVE -> {
+                if (drag == D_PAN) { panMove(e); return }
                 val pi = e.findPointerIndex(ptr)
                 if (pi >= 0) move(e.getX(pi), e.getY(pi))
             }
-            MotionEvent.ACTION_UP, MotionEvent.ACTION_POINTER_UP -> if (e.getPointerId(i) == ptr) up()
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_POINTER_UP -> {
+                if (drag == D_PAN) {
+                    val id = e.getPointerId(i)
+                    if (id == panA || id == panB) { drag = D_NONE; ptr = -1; panA = -1; panB = -1 }
+                } else if (e.getPointerId(i) == ptr) up()
+            }
             MotionEvent.ACTION_CANCEL -> {
                 drag = D_NONE
                 ptr = -1
@@ -736,8 +898,98 @@ class InstEditor(private val host: View) {
         }
     }
 
+    /** Zweiter Finger auf der Matrix: verschieben (beide Richtungen) und zoomen statt bearbeiten. */
+    private fun startPan(e: MotionEvent) {
+        if (sound || drag == D_PAN) return
+        if (drag !in intArrayOf(D_NONE, D_MOVE, D_RESIZE, D_CELL, D_RUBBER)) return
+        if (moved && (drag == D_MOVE || (drag == D_RESIZE && !newNote))) return
+        val i1 = e.findPointerIndex(ptr)
+        val i2 = e.actionIndex
+        if (i1 < 0) return
+        val x2 = e.getX(i2); val y2 = e.getY(i2)
+        if (!grid.contains(x2, y2) && !keys.contains(x2, y2)) return
+        // gerade gesetzte Note war nicht gemeint
+        if (newNote) { Engine.undo(); newNote = false }
+        if (liveSemi != Int.MIN_VALUE) { liveOff(); liveSemi = Int.MIN_VALUE }
+        pressToken++
+        drag = D_PAN
+        panA = ptr
+        panB = e.getPointerId(i2)
+        val x1 = e.getX(i1); val y1 = e.getY(i1)
+        val cx = (x1 + x2) / 2; val cy = (y1 + y2) / 2
+        panSx0 = abs(x1 - x2); panSy0 = abs(y1 - y2)
+        panRow0 = rowPx; panZoom0 = zoom
+        panSemiAnchor = topSemi + 0.5f - (cy - grid.top) / rowH()
+        panColAnchor = col0 + (cx - grid.left) / colW()
+    }
+
+    private fun panMove(e: MotionEvent) {
+        val a = e.findPointerIndex(panA)
+        val b = e.findPointerIndex(panB)
+        if (a < 0 || b < 0) return
+        val cx = (e.getX(a) + e.getX(b)) / 2
+        val cy = (e.getY(a) + e.getY(b)) / 2
+        val sx = abs(e.getX(a) - e.getX(b))
+        val sy = abs(e.getY(a) - e.getY(b))
+        if (mel) {
+            if (panSy0 > dp(50f) && sy > dp(30f)) {
+                val r = sy / panSy0
+                if (abs(r - 1f) > 0.12f) rowPx = (panRow0 * r).coerceIn(10f, 40f)
+            }
+            topSemi = Math.round(panSemiAnchor + (cy - grid.top) / rowH() - 0.5f)
+            clampTop()
+        }
+        if (panSx0 > dp(50f)) {
+            val r = sx / panSx0
+            zoom = when {
+                r > 2.6f -> panZoom0 * 4
+                r > 1.5f -> panZoom0 * 2
+                r < 0.4f -> panZoom0 / 4
+                r < 0.67f -> panZoom0 / 2
+                else -> panZoom0
+            }.coerceIn(1, 4)
+        }
+        col0 = Math.round(panColAnchor - (cx - grid.left) / colW()).coerceIn(0, max(0, len - visCols))
+    }
+
+    /** Lange drücken: auf leerem Feld = Rahmen aufziehen (markieren), auf einer Note = markieren/abwählen. */
+    private fun longPress(token: Int) {
+        if (token != pressToken || ptr < 0 || moved || sound) return
+        if (mel) {
+            when {
+                (drag == D_RESIZE && newNote) -> {
+                    Engine.undo()
+                    newNote = false
+                    liveOff()
+                    drag = D_RUBBER
+                    rubber.set(downX, downY, downX, downY)
+                    onHint?.invoke("⬚ Rahmen ziehen = markieren · loslassen ohne Ziehen = Einfügemarke")
+                }
+                drag == D_MOVE || drag == D_RESIZE -> {
+                    if (dHead in sel && downWasSelected) sel.remove(dHead) else sel.add(dHead)
+                    drag = D_MOVE
+                    onHint?.invoke(if (sel.isEmpty()) "Auswahl leer" else "${sel.size} markiert – ziehen verschiebt alle · KOPIE / DUPL / ▲▼")
+                }
+                else -> return
+            }
+        } else {
+            if (drag == D_CELL && newNote) {
+                Engine.undo()
+                newNote = false
+                drag = D_RUBBER
+                rubber.set(downX, downY, downX, downY)
+                onHint?.invoke("⬚ Rahmen ziehen = markieren · loslassen ohne Ziehen = Einfügemarke")
+            } else return
+        }
+        longDone = true
+        haptic()
+        host.invalidate()
+    }
+
     private fun down(id: Int, x: Float, y: Float) {
         downX = x; downY = y; downT = SystemClock.uptimeMillis(); moved = false
+        longDone = false
+        pressToken++
         val st = InstState
         if (button(x, y)) { haptic(); return }
         if (sound) {
@@ -758,6 +1010,20 @@ class InstEditor(private val host: View) {
         if (scroll.contains(x, y) || (zoom > 1 && y > scroll.top - dp(6f) && y < scroll.bottom + dp(10f) && x >= scroll.left && x <= scroll.right)) {
             ptr = id; drag = D_SCROLL
             scrollTo(x)
+            return
+        }
+        if (!sound) {
+            val ti = toolRects().indexOfFirst { it.contains(x, y) }
+            if (ti >= 0) { tool(ti); haptic(); return }
+        }
+        if (mel && x >= vLane.left - dp(4f) && x <= vLane.right + dp(4f) && y >= vLane.top && y <= vLane.bottom) {
+            ptr = id; drag = D_VSCROLL
+            vScrollTo(y)
+            return
+        }
+        if (y >= ruler.top - dp(4f) && y <= ruler.bottom && x >= ruler.left && x <= ruler.right) {
+            ptr = id; drag = D_RULER
+            insert = colAt(x)
             return
         }
         if (velLane.contains(x, y)) {
@@ -810,13 +1076,16 @@ class InstEditor(private val host: View) {
         if (!grid.contains(x, y)) return
         ptr = id
         if (mel) acidDown(x, y) else drumDown(x, y)
+        val tok = pressToken
+        if (!selMode) host.postDelayed({ longPress(tok) }, 450L)
     }
 
     private fun acidDown(x: Float, y: Float) {
         val st = InstState
         val k = colAt(x)
-        val semi = semiAt(y)
+        val semiRaw = semiAt(y)
         val h = aCover(k)
+        val semi = if (h >= 0 && aSemi[h] == semiRaw) semiRaw else InstState.snapScale(semiRaw)
         newNote = false
         dApplied = 0
         dAppliedSemi = 0
@@ -900,6 +1169,7 @@ class InstEditor(private val host: View) {
 
     private fun move(x: Float, y: Float) {
         if (drag == D_VEL) { velAt(x, y); return }
+        if (drag == D_VSCROLL) { vScrollTo(y); return }
         if (!moved && abs(x - downX) < dp(6f) && abs(y - downY) < dp(6f)) return
         val first = !moved
         moved = true
@@ -911,10 +1181,20 @@ class InstEditor(private val host: View) {
                 sliders()[sliderIdx].set(((x - r.left) / r.width()).coerceIn(0f, 1f))
             }
             D_SCROLL -> scrollTo(x)
+            D_VSCROLL -> vScrollTo(y)
+            D_RULER -> {
+                val c0 = colAt(min(downX, x))
+                val c1 = colAt(max(downX, x))
+                sel.clear()
+                if (mel) { for (k in 0 until len) if (aHead(k) && k <= c1 && k + aLen(k) - 1 >= c0) sel.add(k) }
+                else for (v in 0 until InstState.DV) for (k in c0..c1) if (InstState.drumSteps[v][k] > 0) sel.add(v * InstState.MAX + k)
+                insert = c0
+            }
             D_KEYS -> if (mel) {
                 // senkrecht ziehen = Klaviatur verschieben, sonst Ton wechseln
                 if (abs(y - downY) > dp(30f) && abs(x - downX) > dp(30f)) {
-                    topSemi = (keysTop0 + ((y - downY) / rowH()).toInt()).coerceIn(-12 + rowsA - 1, 36)
+                    topSemi = keysTop0 + ((y - downY) / rowH()).toInt()
+                    clampTop()
                 } else {
                     val s = semiAt(y)
                     if (s != liveSemi) {
@@ -974,12 +1254,12 @@ class InstEditor(private val host: View) {
         val long = SystemClock.uptimeMillis() - downT > 450
         when (drag) {
             D_KEYS -> if (mel) { liveOff(); liveSemi = Int.MIN_VALUE }
-            D_MOVE -> if (!moved && mel) {
-                if (long && kind == 1) {
-                    Engine.pushPatternUndo("ACID Accent")
-                    aAcc[dHead] = !aAcc[dHead]
-                    onHint?.invoke(if (aAcc[dHead]) "Accent an" else "Accent aus")
-                } else if (selMode) {
+            D_RULER -> onHint?.invoke(if (moved) (if (sel.isEmpty()) "Keine Noten im Bereich" else "${sel.size} markiert – KOPIE, DUPL, ◀ ▶ ▲ ▼ oder ziehen")
+                else "Einfügemarke: Takt ${insert / 16 + 1}.${insert % 16 / 4 + 1} – EINF. setzt dort ein")
+            D_MOVE -> if (longDone) {
+                // lange gedrückt = markiert, nichts löschen
+            } else if (!moved && mel) {
+                if (selMode) {
                     // nochmal antippen = abwählen (wenn schon markiert)
                     if (downWasSelected) sel.remove(dHead)
                 } else {
@@ -996,14 +1276,15 @@ class InstEditor(private val host: View) {
                 st.drumSteps[cellVoice][cellStep] = 0
                 sel.remove(cellVoice * InstState.MAX + cellStep)
             }
-            D_RESIZE -> if (!moved && !newNote && mel) {
+            D_RESIZE -> if (!moved && !newNote && mel && !longDone) {
                 Engine.pushPatternUndo("ACID Note löschen")
                 aDelete(dHead)
             }
             D_RUBBER -> if (!moved) {
                 sel.clear()
                 insert = colAt(downX)
-            }
+                if (longDone) onHint?.invoke("Einfügemarke: Takt ${insert / 16 + 1}.${insert % 16 / 4 + 1}")
+            } else if (sel.isNotEmpty()) onHint?.invoke("${sel.size} markiert – KOPIE, DUPL, ◀ ▶ ▲ ▼ oder eine ziehen")
             D_CELL -> if (!moved && !newNote) {
                 val v = cellVoice
                 val k = cellStep
@@ -1019,6 +1300,8 @@ class InstEditor(private val host: View) {
         drag = D_NONE
         ptr = -1
         downWasSelected = false
+        longDone = false
+        pressToken++
     }
 
     private var downWasSelected = false
@@ -1037,7 +1320,7 @@ class InstEditor(private val host: View) {
         val newHeads = ArrayList<Int>()
         for (n in notes) {
             val nh = Math.floorMod(n.rel + dc, len)
-            aSet(nh, (n.semi + dr).coerceIn(-24, 36), min(n.len, len - nh), n.acc, n.slide, n.vel)
+            aSet(nh, InstState.snapScale(n.semi + dr, dr).coerceIn(SEMI_MIN, SEMI_MAX), min(n.len, len - nh), n.acc, n.slide, n.vel)
             newHeads.add(nh)
         }
         sel.clear()
@@ -1097,9 +1380,8 @@ class InstEditor(private val host: View) {
             bMode.contains(x, y) -> {
                 selMode = !selMode
                 onHint?.invoke(if (selMode) "⬚ Auswahl: Noten antippen oder Rahmen ziehen, Markierte ziehen = verschieben, ins Leere tippen = Einfügemarke"
-                               else if (kind == 3) "✏ Stift: Feld antippen setzt Note (ziehen = länger), Note antippen löscht, Note ziehen = verschieben"
-                               else if (mel) "✏ Stift: Feld antippen setzt Note (ziehen = länger), Note antippen löscht, lange drücken = Accent, Note ziehen = verschieben"
-                               else "✏ Stift: Felder antippen/ziehen setzt Schläge, antippen löscht, lange drücken = Accent")
+                               else if (mel) "✏ Stift: antippen setzt Note (ziehen = länger), Note antippen löscht, Note ziehen = verschieben · lange drücken: Note = markieren, leer = Rahmen · 2 Finger = scrollen/zoomen"
+                               else "✏ Stift: Felder antippen/ziehen setzt Schläge, antippen löscht, Schlag lange drücken = Accent, leer lange drücken = Rahmen")
             }
             bZoomIn.contains(x, y) -> { zoom = min(4, zoom * 2); col0 = col0.coerceIn(0, max(0, len - visCols)) }
             bZoomOut.contains(x, y) -> { zoom = max(1, zoom / 2); col0 = col0.coerceIn(0, max(0, len - visCols)) }
@@ -1146,9 +1428,62 @@ class InstEditor(private val host: View) {
         onHint?.invoke(if (up) "+1 Halbton" else "Zurück um eine Oktave")
     }
 
-    private fun copy() {
+    private fun toolRects(): List<RectF> = tools.take(if (mel) 8 else 6)
+
+    private fun selectAll() {
+        sel.clear()
+        if (mel) { for (k in 0 until len) if (aHead(k)) sel.add(k) }
+        else for (v in 0 until InstState.DV) for (k in 0 until len) if (InstState.drumSteps[v][k] > 0) sel.add(v * InstState.MAX + k)
+    }
+
+    /** Auswahl (oder alles) um [dc] Schritte und [dr] Halbtöne bzw. Spuren verschieben. */
+    private fun nudge(dc: Int, dr: Int) {
+        if (mel) sel.retainAll { aHead(it) }
+        if (sel.isEmpty()) {
+            selectAll()
+            if (sel.isEmpty()) { onHint?.invoke("Keine Noten da"); return }
+            onHint?.invoke("Nichts markiert – ganzes Pattern")
+        }
+        Engine.pushPatternUndo(if (dr != 0 && mel) "Transponieren" else "Noten verschieben")
+        if (mel) {
+            dHead = sel.min()
+            moveAcid(dc, dr)
+            if (dr != 0) ensureVisible()
+        } else {
+            val k0 = sel.first()
+            cellVoice = k0 / InstState.MAX; cellStep = k0 % InstState.MAX
+            moveDrum(dc, dr)
+        }
+    }
+
+    private fun duplicate() {
+        if (mel) sel.retainAll { aHead(it) }
+        if (sel.isEmpty()) { onHint?.invoke("Erst markieren: Note lange drücken, Rahmen ziehen oder in der Taktleiste ziehen"); return }
+        copy(true)
+        val at = insert
+        paste()
+        onHint?.invoke("Verdoppelt → ab Takt ${at / 16 + 1}.${at % 16 / 4 + 1} (bleibt markiert: weiter DUPL drücken reiht an)")
+    }
+
+    private fun tool(i: Int) {
+        if (mel) when (i) {
+            0 -> nudge(-1, 0); 1 -> nudge(1, 0); 2 -> nudge(0, 1); 3 -> nudge(0, -1)
+            4 -> nudge(0, 12); 5 -> nudge(0, -12); 6 -> duplicate(); else -> undoNow()
+        } else when (i) {
+            0 -> nudge(-1, 0); 1 -> nudge(1, 0); 2 -> nudge(0, -1); 3 -> nudge(0, 1)
+            4 -> duplicate(); else -> undoNow()
+        }
+    }
+
+    private fun undoNow() {
+        val l = Engine.undo()
+        sel.clear()
+        onHint?.invoke(if (l != null) "↶ $l" else "Nichts zum Rückgängigmachen")
+    }
+
+    private fun copy(quiet: Boolean = false) {
         val st = InstState
-        if (sel.isEmpty()) { onHint?.invoke("Erst Noten markieren (⬚ AUSWAHL oder ALLE)"); return }
+        if (sel.isEmpty()) { onHint?.invoke("Erst markieren: Note lange drücken, Rahmen ziehen oder in der Taktleiste ziehen"); return }
         if (mel) {
             val heads = sel.filter { aHead(it) }.sorted()
             if (heads.isEmpty()) return
@@ -1157,7 +1492,7 @@ class InstEditor(private val host: View) {
             val end = heads.maxOf { it + aLen(it) }
             clipSpan = ((end - s0 + 3) / 4) * 4
             insert = (s0 + clipSpan).let { if (it >= len) 0 else it }
-            onHint?.invoke("${aClip.size} Noten kopiert · EINF. setzt sie an der Einfügemarke ein")
+            if (!quiet) onHint?.invoke("${aClip.size} Noten kopiert · EINF. setzt sie an der gelben Marke ein (Marke: Taktleiste antippen)")
         } else {
             val items = sel.map { Triple(it / InstState.MAX, it % InstState.MAX, st.drumSteps[it / InstState.MAX][it % InstState.MAX]) }
             val s0 = items.minOf { it.second }
@@ -1165,7 +1500,7 @@ class InstEditor(private val host: View) {
             val end = items.maxOf { it.second } + 1
             clipSpan = ((end - s0 + 3) / 4) * 4
             insert = (s0 + clipSpan).let { if (it >= len) 0 else it }
-            onHint?.invoke("${dClip.size} Schläge kopiert · EINF. setzt sie an der Einfügemarke ein")
+            if (!quiet) onHint?.invoke("${dClip.size} Schläge kopiert · EINF. setzt sie an der gelben Marke ein (Marke: Taktleiste antippen)")
         }
     }
 
