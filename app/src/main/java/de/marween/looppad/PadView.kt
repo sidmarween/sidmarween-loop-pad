@@ -190,7 +190,7 @@ class PadView(context: Context) : View(context) {
             textPaint.textAlign = Paint.Align.CENTER
             textPaint.textSize = dp(11f)
             textPaint.color = if (on) Color.WHITE else alpha(cols[1], if (sel) 0.9f else 0.5f)
-            canvas.drawText(if (on) FX_CODES[Engine.slotType[s]] else "AUS", c.centerX() + dp(3f), c.centerY() + dp(5f), textPaint)
+            canvas.drawText(if (on) fxCode(Engine.slotType[s]) else "AUS", c.centerX() + dp(3f), c.centerY() + dp(5f), textPaint)
             // Pfeil zur nächsten Station
             if (s < Engine.SLOTS - 1) {
                 textPaint.textSize = dp(8f)
@@ -3819,7 +3819,7 @@ class PadView(context: Context) : View(context) {
         }
         textPaint.textSize = r.width() * 0.3f
         textPaint.color = Color.WHITE
-        canvas.drawText(FX_CODES[Engine.fxType], r.centerX(), r.centerY() + r.width() * 0.11f, textPaint)
+        canvas.drawText(fxCode(Engine.fxType), r.centerX(), r.centerY() + r.width() * 0.11f, textPaint)
         textPaint.textSize = dp(8f)
         textPaint.color = alpha(Color.WHITE, 0.6f)
         canvas.drawText("◂  ▸", r.centerX(), r.bottom - dp(5f), textPaint)
@@ -5035,7 +5035,7 @@ class PadView(context: Context) : View(context) {
             canvas.drawRoundRect(r, rr, rr, strokePaint)
             textPaint.textSize = r.width() * 0.32f
             textPaint.color = Color.rgb(40, 40, 40)
-            canvas.drawText(FX_CODES[Engine.fxType], r.centerX(), r.centerY() + r.width() * 0.11f, textPaint)
+            canvas.drawText(fxCode(Engine.fxType), r.centerX(), r.centerY() + r.width() * 0.11f, textPaint)
         } else {
             val rr = dp(4f)
             comicShadow(canvas, r, rr)
@@ -5066,7 +5066,7 @@ class PadView(context: Context) : View(context) {
             canvas.drawRoundRect(r, rr, rr, strokePaint)
             textPaint.textSize = r.width() * 0.26f
             textPaint.color = Color.BLACK
-            canvas.drawText(FX_CODES[Engine.fxType], r.centerX(), r.centerY() + r.width() * 0.09f, textPaint)
+            canvas.drawText(fxCode(Engine.fxType), r.centerX(), r.centerY() + r.width() * 0.09f, textPaint)
         }
     }
 
@@ -5656,7 +5656,7 @@ class PadView(context: Context) : View(context) {
         canvas.drawRoundRect(r, rr, rr, strokePaint)
         textPaint.textSize = r.width() * 0.28f
         textPaint.color = if (sk.padStyle == PS_FRAMED) sk.padInk else sk.btnText
-        canvas.drawText(FX_CODES[Engine.fxType], r.centerX(), r.centerY() + r.width() * 0.1f, textPaint)
+        canvas.drawText(fxCode(Engine.fxType), r.centerX(), r.centerY() + r.width() * 0.1f, textPaint)
     }
 
     private fun drawXySkin(canvas: Canvas, dt: Float) {
@@ -9318,8 +9318,9 @@ class PadView(context: Context) : View(context) {
         private val FX_CODES = arrayOf(
             "LP", "HP", "BP", "NT", "EQ", "PK", "CMB", "DLY", "STU", "FLG", "CHO", "REV", "HAL", "VOC", "DST", "BIT",
             "PHS", "TRM", "VIB", "EQ3", "FLT", "SAT", "OD", "GDL", "PIT", "STR", "SMR", "FRZ", "RNG", "FM", "SHF", "FSH",
-            "RES", "GRN", "SQF", "MFX", "KRS"
+            "RES", "GRN", "SQF", "MFX", "KRS", "TAP", "SPC", "LOP", "SLC", "RVS", "HRM", "ATN", "ROB"
         )
+        private fun fxCode(t: Int): String = FX_CODES.getOrElse(t) { "FX" }
         private val NEON_WIDTHS = floatArrayOf(18f, 10f, 5f, 2.2f)
         private val NEON_ALPHAS = floatArrayOf(0.10f, 0.22f, 0.50f, 1.0f)
     }
