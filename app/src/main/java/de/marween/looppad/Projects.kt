@@ -62,6 +62,10 @@ object Projects {
         for (v in Engine.knobs) kn.put(v.toDouble())
         j.put("knobs", kn)
         j.put("metronome", Engine.metronome)
+        j.put("xfA", Engine.xfA)
+        j.put("xfB", Engine.xfB)
+        j.put("xfPos", Engine.xfPos.toDouble())
+        j.put("xfCurve", Engine.xfCurve)
         j.put("swing", Engine.swing.toDouble())
         val pa = JSONArray()
         for (p in pads.indices) {
@@ -173,6 +177,10 @@ object Projects {
             for (sl in 1 until Engine.SLOTS) Engine.slotOn[sl] = false
         }
         Engine.metronome = j.optBoolean("metronome", false)
+        Engine.xfA = j.optInt("xfA", -1)
+        Engine.xfB = j.optInt("xfB", -1)
+        Engine.xfPos = j.optDouble("xfPos", 0.5).toFloat().coerceIn(0f, 1f)
+        Engine.xfCurve = j.optInt("xfCurve", 0).coerceIn(0, 2)
         InstState.fromJson(j.optJSONObject("instruments"))
         Engine.swing = j.optDouble("swing", 0.0).toFloat()
         Engine.scenesFromJson(j.optJSONObject("scenes"))

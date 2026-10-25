@@ -2062,7 +2062,7 @@ object Engine {
             captureInst = cim
             for (p in 0 until PADS) {
                 chainFx[p] = padChainActive(p)
-                chainNow[p] = chainFx[p] || (cm shr p) and 1 != 0
+                chainNow[p] = chainFx[p] || (cm shr p) and 1 != 0 || xfGain(p) != 1f || xfCur[p] != 1f
                 if (chainNow[p]) java.util.Arrays.fill(padBufs[p], 0f)
             }
             for (p in 0 until PADS) {
@@ -2219,6 +2219,14 @@ object Engine {
                     if (t < 0) continue
                     val pr = pfxPar[p][sl]
                     fx.process(pb, block, w, t, pr[0], pr[1], true, pr[2], pr[3], pr[4], masterLen, masterStart, micP)
+                }
+                // Crossfader: Verstärkung über den Block rampen (kein Knistern beim schnellen Schieben)
+                val xg = xfGain(p)
+                val x0 = xfCur[p]
+                if (xg != 1f || x0 != 1f) {
+                    val d = (xg - x0) / block
+                    for (i in 0 until block) pb[i] *= x0 + d * (i + 1)
+                    xfCur[p] = xg
                 }
                 val dst = if (padFx[p]) bus else out
                 for (i in 0 until block) dst[i] += pb[i]
@@ -2695,6 +2703,30 @@ object Engine {
     var onBounced: ((Int, List<Int>) -> Unit)? = null
     /** Wave-Aufnahme mit eingerechnetem XY-Effekt: Pad läuft jetzt am Effekt vorbei. */
     var onFxBaked: ((Int) -> Unit)? = null
+    // ---------------------------------------------------------------- Crossfader (Mischpult)
+
+    /** Crossfader zwischen zwei Pads: A links, B rechts (-1 = frei), Stellung 0 = nur A … 1 = nur B. */
+    @Volatile var xfA = -1
+    @Volatile var xfB = -1
+    @Volatile var xfPos = 0.5f
+    /** Kurve: 0 = sanft (gleiche Leistung), 1 = linear, 2 = Schnitt (Scratch: beide voll, Wechsel am Rand). */
+    @Volatile var xfCurve = 0
+    val XF_CURVES = arrayOf("SANFT", "LINEAR", "SCHNITT")
+    private val xfCur = FloatArray(PADS) { 1f }
+
+    fun xfActive(): Boolean = xfA in 0 until PADS && xfB in 0 until PADS && xfA != xfB
+
+    /** Verstärkung, die der Crossfader einem Pad gibt (1 = unbeeinflusst). */
+    fun xfGain(p: Int): Float {
+        if (!xfActive() || (p != xfA && p != xfB)) return 1f
+        val t = (if (p == xfA) 1f - xfPos else xfPos).coerceIn(0f, 1f)
+        return when (xfCurve) {
+            1 -> t
+            2 -> min(1f, t * 12f)
+            else -> kotlin.math.sin(t * Math.PI.toFloat() / 2f)
+        }
+    }
+
     /** Pad, dessen Pad-/Instrument-Eingang gerade bereitsteht (zuletzt eingestellt). */
     @Volatile var capOwner = -1
     var onBouncedInst: ((Int, String) -> Unit)? = null
