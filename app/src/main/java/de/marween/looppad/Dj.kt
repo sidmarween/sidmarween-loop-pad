@@ -213,6 +213,12 @@ object Dj {
     }
 
     val decks = arrayOf(Deck(0), Deck(1))
+    /** Gig-Modus: Schutz vor versehentlichem Stoppen/Laden auf einem hörbaren Deck. */
+    @Volatile var gigMode = false
+
+    /** Deck ist gerade im Master zu hören (läuft, Fader offen, Crossfader nicht zu). */
+    fun onAir(d: Deck): Boolean = d.playing && d.fader > 0.05f && xGain(d.idx) > 0.05f
+
     /** Crossfader 0 = nur A, 1 = nur B. */
     @Volatile var xfade = 0.5f
     /** 0 = weich (konstante Leistung), 1 = hart (Scratch). */

@@ -177,6 +177,7 @@ class MainActivity : Activity() {
         dj = DjView(this)
         dj.skinIdx = prefs.getInt("djSkin", 15)
         Dj.autoGain = prefs.getBoolean("djAutoGain", true)
+        Engine.quadOut = prefs.getBoolean("quadOut", false)
         Dj.colorWave = prefs.getBoolean("djColorWave", true)
         Dj.changeTargetLufs(prefs.getFloat("djTargetLufs", -10f))
         dj.onLoad = { k -> showDeckLoad(k) }
@@ -2089,7 +2090,7 @@ class MainActivity : Activity() {
 
     /** Hauptmenü in Gruppen: Projekt · Aufnahme & Wiedergabe · Aussehen · Audio & MIDI · Hilfe. */
     private fun showMainMenu() {
-        val groups = listOf(
+        val groups = (if (djMode) listOf<Pair<String, () -> Unit>>((if (Dj.gigMode) "🎤 GIG-MODUS AN – beenden" else "🎤 GIG-MODUS starten (Bühne: Schutz, Bildschirm an, Nicht stören)") to { if (Dj.gigMode) stopGig() else showGigCheck() }) else emptyList()) + listOf(
             "💾 Projekt & Dateien" to { showMenuGroup(0) },
             "🎙 Aufnahme & Wiedergabe" to { showMenuGroup(1) },
             "🎨 Aussehen: Designs, Schriften, Ansicht" to { showMenuGroup(2) },
@@ -2172,6 +2173,10 @@ class MainActivity : Activity() {
                 items.add(Triple(String.format(Locale.GERMANY, "⚡ Latenz & Live-Reaktion (%.0f ms)", Engine.outputLatencyMs()), { showLatency() }, false))
                 items.add(Triple(check(Engine.monitorOn) + " 🎙 Live-Mikrofon mit Effekten …", { showMonitor() }, false))
                 items.add(Triple("🎹 MIDI (" + (if (Midi.deviceNames.isEmpty()) "kein Gerät" else Midi.deviceNames.joinToString(", ")) + ")", { showMidi() }, false))
+                val usbCh = Engine.usbOutChannels(this)
+                items.add(Triple(check(Engine.quadOut) + " 🎛 4-Kanal-Ausgabe: Master 1/2, Vorhören 3/4" + (if (usbCh >= 4) " (Interface: $usbCh Kanäle)" else " (braucht ein USB-Interface mit 4 Ausgängen)"), {
+                    if (usbCh < 4 && !Engine.quadOut) toast("Kein USB-Interface mit 4 Ausgängen erkannt") else setQuad(!Engine.quadOut)
+                }, false))
             }
             else -> {
                 title = "ℹ Hilfe & Info"
@@ -2599,9 +2604,13 @@ class MainActivity : Activity() {
 
     // ================================================================ DJ: Tracks laden
 
-    private fun showDeckLoad(k: Int) {
+    private fun showDeckLoad(k: Int, force: Boolean = false) {
         TrackDb.load(this)
         val dd = Dj.decks[k]
+        if (Dj.gigMode && Dj.onAir(dd) && !force) {
+            confirm("Deck ${"AB"[k]} ist zu hören!", "Gig-Modus: Wirklich etwas anderes in das laufende Deck laden?") { showDeckLoad(k, true) }
+            return
+        }
         val items = arrayListOf(
             "💿 Sammlung – Crates, Verlauf, Vorschläge (${TrackDb.all().size})",
             "📂 Datei (MP3, WAV, M4A, OGG …)",
@@ -2700,6 +2709,93 @@ class MainActivity : Activity() {
             .show()
     }
 
+
+
+    // ================================================================ Gig-Modus
+
+    private var gigPrevFilter = -1
+    private val gigAutosave = object : Runnable {
+        override fun run() {
+            if (!Dj.gigMode) return
+            try {
+                saveDeckCollection(0)
+                saveDeckCollection(1)
+                TrackDb.save(this@MainActivity)
+            } catch (ignored: Throwable) {}
+            window.decorView.postDelayed(this, 20_000L)
+        }
+    }
+
+    /** Checkliste vor dem Auftritt: Akku, Flugmodus, Nicht stören, Ausgang. */
+    private fun showGigCheck() {
+        val bm = getSystemService(BATTERY_SERVICE) as android.os.BatteryManager
+        val pct = bm.getIntProperty(android.os.BatteryManager.BATTERY_PROPERTY_CAPACITY)
+        val charging = bm.isCharging
+        val air = Settings.Global.getInt(contentResolver, Settings.Global.AIRPLANE_MODE_ON, 0) == 1
+        val nm = getSystemService(NOTIFICATION_SERVICE) as android.app.NotificationManager
+        val dndOk = nm.isNotificationPolicyAccessGranted
+        val usbCh = Engine.usbOutChannels(this)
+        val lines = StringBuilder()
+        lines.append(if (pct < 0) "🔋 Akku: ?" else "🔋 Akku $pct %" + (if (charging) " · lädt ✅" else if (pct < 50) " · ⚠ Ladekabel anschließen!" else " · Ladekabel empfohlen")).append("\n")
+        lines.append(if (air) "✈ Flugmodus an ✅ (keine Anrufe)" else "✈ Flugmodus aus – empfohlen: einschalten (Anrufe, Updates)").append("\n")
+        lines.append(if (dndOk) "🔕 Nicht stören: wird für den Gig eingeschaltet ✅" else "🔕 Nicht stören: braucht einmal deine Erlaubnis (Knopf unten)").append("\n")
+        lines.append(if (usbCh >= 4) "🎛 USB-Interface mit $usbCh Kanälen erkannt – Vorhören auf 3/4 möglich" else if (usbCh > 0) "🎛 USB-Audio (Stereo) – Vorhören über Split-Cue (lange auf DECK drücken)" else "🎧 Kein USB-Interface – Vorhören über Split-Cue (lange auf DECK drücken)").append("\n\n")
+        lines.append("Im Gig-Modus:\n• Bildschirm bleibt an\n• ein hörbares Deck stoppt nur per Doppeltipp\n• Laden auf ein hörbares Deck fragt nach\n• Cue-Punkte und Sammlung werden alle 20 s gesichert\n• Zurück-Taste fragt nach")
+        val b = ui().setTitle("🎤 Gig-Check").setMessage(lines.toString())
+            .setPositiveButton("Gig starten") { _, _ -> startGig() }
+        if (!air) b.setNeutralButton("✈ Flugmodus …") { _, _ -> try { startActivity(Intent(Settings.ACTION_AIRPLANE_MODE_SETTINGS)) } catch (e: Exception) { toast("Einstellung nicht gefunden") } }
+        else if (!dndOk) b.setNeutralButton("🔕 Erlauben …") { _, _ -> try { startActivity(Intent(Settings.ACTION_NOTIFICATION_POLICY_ACCESS_SETTINGS)) } catch (e: Exception) { toast("Einstellung nicht gefunden") } }
+        if (usbCh >= 4) b.setNegativeButton(if (Engine.quadOut) "4 Kanäle: AN" else "4 Kanäle nutzen") { _, _ -> setQuad(!Engine.quadOut); showGigCheck() }
+        else b.setNegativeButton("Abbrechen", null)
+        b.show()
+    }
+
+    private fun setQuad(on: Boolean) {
+        Engine.quadOut = on
+        getSharedPreferences("marvpad", MODE_PRIVATE).edit().putBoolean("quadOut", on).apply()
+        scheduleAudioRestart()
+        window.decorView.postDelayed({ hint(if (Engine.outChannels == 4) "🎛 4 Kanäle: Master auf 1/2, Vorhören (🎧) auf 3/4" else if (on) "4 Kanäle nicht möglich – das Interface bietet Android nur Stereo an" else "Ausgabe: Stereo") }, 1500L)
+    }
+
+    private fun startGig() {
+        Dj.gigMode = true
+        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        val nm = getSystemService(NOTIFICATION_SERVICE) as android.app.NotificationManager
+        if (nm.isNotificationPolicyAccessGranted) {
+            try {
+                gigPrevFilter = nm.currentInterruptionFilter
+                nm.setInterruptionFilter(android.app.NotificationManager.INTERRUPTION_FILTER_ALARMS)
+            } catch (ignored: Exception) {}
+        }
+        window.decorView.removeCallbacks(gigAutosave)
+        window.decorView.postDelayed(gigAutosave, 20_000L)
+        hint("🎤 GIG-MODUS AN – viel Spaß!")
+    }
+
+    private fun stopGig() {
+        Dj.gigMode = false
+        window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        window.decorView.removeCallbacks(gigAutosave)
+        val nm = getSystemService(NOTIFICATION_SERVICE) as android.app.NotificationManager
+        if (gigPrevFilter > 0 && nm.isNotificationPolicyAccessGranted) try { nm.setInterruptionFilter(gigPrevFilter) } catch (ignored: Exception) {}
+        gigPrevFilter = -1
+        saveDeckCollection(0)
+        saveDeckCollection(1)
+        hint("Gig-Modus aus – Nicht stören wieder wie vorher")
+    }
+
+    @Deprecated("Zurück-Taste")
+    override fun onBackPressed() {
+        if (Dj.gigMode) {
+            confirm("Gig läuft", "Wirklich zurück? Die Musik spielt weiter, solange ein Deck läuft.") {
+                @Suppress("DEPRECATION")
+                super.onBackPressed()
+            }
+            return
+        }
+        @Suppress("DEPRECATION")
+        super.onBackPressed()
+    }
 
     // ================================================================ DJ-Sammlung (Crates, Verlauf, Analyse, Vorschläge)
 
@@ -3449,6 +3545,10 @@ class MainActivity : Activity() {
             text = "🎛 Regler & Fader zuordnen (CC lernen) …"
             setOnClickListener { midiCcMap() }
         })
+        box.addView(Button(this).apply {
+            text = "🎧 DJ-Controller: Tasten lernen, Vorlagen, Jog-Rad …"
+            setOnClickListener { midiDjMap() }
+        })
         check(box, "MIDI-Clock empfangen – Tempo folgt dem Gerät", Midi.clockIn) { Midi.clockIn = it }
         check(box, "Start/Stopp empfangen", Midi.transportIn) { Midi.transportIn = it }
         check(box, "MIDI-Clock + Start/Stopp senden (Drumcomputer, Synths synchron)", Midi.clockOut) { Midi.clockOut = it }
@@ -3476,6 +3576,7 @@ class MainActivity : Activity() {
                 live.removeCallbacks(ticker)
                 Midi.learnPad = -1
                 Midi.learnCc = -1
+                Midi.learnBtn = -1
                 Midi.save(prefs)
             }
             .show()
@@ -3503,8 +3604,41 @@ class MainActivity : Activity() {
             .show()
     }
 
+    /** DJ-Controller: Tasten je Deck lernen, Vorlage laden, Jog-Rad-Kodierung. */
+    private fun midiDjMap() {
+        val n = Midi.djBtn.size
+        val labels = ArrayList<String>()
+        labels.add("📋 Vorlage: Pioneer DDJ-400 / DDJ-FLX4 laden (bitte prüfen)")
+        labels.add("🌀 Jog-Rad: " + (if (Midi.jogMode == 0) "Mitte 64 (Pioneer, Numark)" else "1/127 (Hercules, Traktor)") + " – antippen wechselt")
+        labels.add("🎚 Regler, Fader, EQ, Jog-Räder (CC) …")
+        labels.add("🗑 Alle DJ-Tasten löschen")
+        for (i in 0 until n) labels.add(Midi.djBtnName(i) + ": " + Midi.noteLabel(Midi.djBtn[i]))
+        ui().setTitle("🎧 DJ-Controller – Taste antippen, dann am Controller drücken")
+            .setItems(labels.toTypedArray()) { _, w ->
+                when (w) {
+                    0 -> {
+                        Midi.presetDdj()
+                        Midi.save(getSharedPreferences("marvpad", MODE_PRIVATE))
+                        ui().setTitle("Vorlage DDJ-400 / DDJ-FLX4 geladen")
+                            .setMessage("Belegt: Play, Cue, Sync, Kopfhörer, Hot Cues 1–4 (Pads im Hot-Cue-Modus), Jog-Räder (Rand = Pitch-Bend, oben = Scratch), Kanal-Fader, Crossfader, EQ, Gain, Filter (CFX), Tempo-Fader.\n\nDie Werte stammen aus dem freien Mixxx-Mapping – ich konnte sie nicht am Gerät prüfen. Stimmt etwas nicht, die Taste hier einfach neu lernen. Unter „Letztes Ereignis“ im MIDI-Menü siehst du, was der Controller sendet.")
+                            .setPositiveButton("OK", null).show()
+                    }
+                    1 -> { Midi.jogMode = 1 - Midi.jogMode; Midi.save(getSharedPreferences("marvpad", MODE_PRIVATE)); midiDjMap() }
+                    2 -> midiCcMap()
+                    3 -> confirm("Alle DJ-Tasten löschen?", "Regler-Zuordnungen bleiben.") { java.util.Arrays.fill(Midi.djBtn, -1); Midi.save(getSharedPreferences("marvpad", MODE_PRIVATE)) }
+                    else -> {
+                        val i = w - 4
+                        Midi.learnBtn = i
+                        hint("${Midi.djBtnName(i)}: jetzt die Taste am Controller drücken …")
+                    }
+                }
+            }
+            .setNegativeButton("Fertig") { _, _ -> Midi.learnBtn = -1; Midi.save(getSharedPreferences("marvpad", MODE_PRIVATE)) }
+            .show()
+    }
+
     private fun midiCcMap() {
-        val labels = Array(Midi.TARGETS.size) { i -> Midi.TARGETS[i] + ": " + (if (Midi.ccMap[i] < 0) "–" else "CC ${Midi.ccMap[i]}") }
+        val labels = Array(Midi.TARGETS.size) { i -> Midi.TARGETS[i] + ": " + Midi.ccLabel(Midi.ccMap[i]) }
         ui()
             .setTitle("Ziel wählen")
             .setItems(labels) { _, t ->

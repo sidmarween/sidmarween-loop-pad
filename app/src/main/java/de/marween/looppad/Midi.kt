@@ -46,8 +46,63 @@ object Midi {
     val TARGETS = arrayOf(
         "XY-Effekt X", "XY-Effekt Y", "MIX", "Regler 2 (STEIL …)", "Regler 3 (DRIVE …)", "Master-VOL", "SWING",
         "Crossfader", "Deck A Lautstärke", "Deck B Lautstärke", "Deck A Filter", "Deck B Filter",
-        "Deck A Pitch", "Deck B Pitch", "Mikrofon (Mithören)", "Deck A Effekt", "Deck B Effekt"
+        "Deck A Pitch", "Deck B Pitch", "Mikrofon (Mithören)", "Deck A Effekt", "Deck B Effekt",
+        "Deck A HI", "Deck A MID", "Deck A LOW", "Deck B HI", "Deck B MID", "Deck B LOW", "Deck A Gain", "Deck B Gain",
+        "Deck A Jog-Rad Rand (Pitch-Bend)", "Deck B Jog-Rad Rand (Pitch-Bend)", "Deck A Jog-Rad oben (Scratch)", "Deck B Jog-Rad oben (Scratch)",
+        "Vorhören-Lautstärke"
     )
+
+    /** DJ-Tasten je Deck (gelernt als Kanal + Note). */
+    val DJ_BTN_NAMES = arrayOf(
+        "▶ Play/Pause", "CUE", "SYNC", "🎧 Vorhören", "Hot Cue 1", "Hot Cue 2", "Hot Cue 3", "Hot Cue 4",
+        "LOOP an/aus", "Loop ½", "Loop ×2", "Beat Jump ◀", "Beat Jump ▶", "Keylock", "ECHO OUT", "BRAKE", "Jog-Rad berührt", "Loop Roll 1/8 (halten)", "SLIP"
+    )
+    const val DJ_PER_DECK = 19
+    /** Kanal*128 + Note je DJ-Taste (-1 = keine). */
+    val djBtn = IntArray(DJ_PER_DECK * 2) { -1 }
+    @Volatile var learnBtn = -1
+    private val jogTouch = BooleanArray(2)
+    private val cueHeld = BooleanArray(2)
+
+    fun djBtnName(i: Int): String = "Deck ${"AB"[i / DJ_PER_DECK]} · ${DJ_BTN_NAMES[i % DJ_PER_DECK]}"
+
+    /** Zuordnung lesbar: „CC 19“ (alle Kanäle) bzw. „CC 19 · K2“. */
+    fun ccLabel(code: Int): String = when {
+        code < 0 -> "–"
+        code < 128 -> "CC $code"
+        else -> "CC ${(code - 128) % 128} · K${(code - 128) / 128 + 1}"
+    }
+
+    fun noteLabel(code: Int): String = if (code < 0) "–" else "${noteName(code % 128)} (${code % 128}) · K${code / 128 + 1}"
+
+    /**
+     * Vorlage Pioneer DDJ-400 / DDJ-FLX4 (Werte wie im Mixxx-Mapping; bitte prüfen und bei Bedarf
+     * einzeln neu lernen): Deck A Kanal 1, Deck B Kanal 2, Hot-Cue-Pads Kanal 8 / 10, Mixer Kanal 7.
+     */
+    fun presetDdj() {
+        java.util.Arrays.fill(djBtn, -1)
+        for (k in 0..1) {
+            val ch = k
+            val base = k * DJ_PER_DECK
+            djBtn[base + 0] = ch * 128 + 0x0B
+            djBtn[base + 1] = ch * 128 + 0x0C
+            djBtn[base + 2] = ch * 128 + 0x58
+            djBtn[base + 3] = ch * 128 + 0x54
+            val padCh = if (k == 0) 7 else 9
+            for (h in 0..3) djBtn[base + 4 + h] = padCh * 128 + h
+            djBtn[base + 16] = ch * 128 + 0x36
+        }
+        fun cc(t: Int, ch: Int, n: Int) { ccMap[t] = 128 + ch * 128 + n }
+        cc(7, 6, 0x1F)
+        cc(8, 0, 0x13); cc(9, 1, 0x13)
+        cc(10, 6, 0x17); cc(11, 6, 0x18)
+        cc(12, 0, 0x00); cc(13, 1, 0x00)
+        cc(17, 0, 0x07); cc(18, 0, 0x0B); cc(19, 0, 0x0F)
+        cc(20, 1, 0x07); cc(21, 1, 0x0B); cc(22, 1, 0x0F)
+        cc(23, 0, 0x04); cc(24, 1, 0x04)
+        cc(25, 0, 0x21); cc(26, 1, 0x21)
+        cc(27, 0, 0x22); cc(28, 1, 0x22)
+    }
     /** CC-Nummer je Ziel (-1 = keine). */
     val ccMap = IntArray(TARGETS.size) { -1 }
 
@@ -95,6 +150,8 @@ object Midi {
             programScenes = o.optBoolean("prog", true)
             o.optJSONArray("pads")?.let { a -> for (i in 0 until min(12, a.length())) padNotes[i] = a.optInt(i, -1) }
             o.optJSONArray("cc")?.let { a -> for (i in 0 until min(ccMap.size, a.length())) ccMap[i] = a.optInt(i, -1) }
+            o.optJSONArray("djBtn")?.let { a -> for (i in 0 until min(djBtn.size, a.length())) djBtn[i] = a.optInt(i, -1) }
+            jogMode = o.optInt("jog", 0)
             disabled.clear()
             o.optJSONArray("off")?.let { a -> for (i in 0 until a.length()) disabled.add(a.optString(i)) }
         } catch (ignored: Exception) {}
@@ -107,6 +164,8 @@ object Midi {
         o.put("transport", transportIn); o.put("prog", programScenes)
         o.put("pads", JSONArray().apply { padNotes.forEach { put(it) } })
         o.put("cc", JSONArray().apply { ccMap.forEach { put(it) } })
+        o.put("djBtn", JSONArray().apply { djBtn.forEach { put(it) } })
+        o.put("jog", jogMode)
         o.put("off", JSONArray().apply { disabled.forEach { put(it) } })
         p.edit().putString("midi", o.toString()).apply()
     }
@@ -264,6 +323,20 @@ object Midi {
             0x90, 0x80 -> {
                 val on = type == 0x90 && d2 > 0
                 lastEvent = "$dev · Kanal $ch · ${if (on) "Note an" else "Note aus"} ${noteName(d1)} ($d1)" + if (on) " · Anschlag $d2" else ""
+                val code = (ch - 1) * 128 + d1
+                if (on && learnBtn >= 0) {
+                    val b = learnBtn
+                    for (k in djBtn.indices) if (k != b && djBtn[k] == code) djBtn[k] = -1
+                    djBtn[b] = code
+                    learnBtn = -1
+                    onHint?.invoke("${djBtnName(b)} ← ${noteLabel(code)}")
+                    return
+                }
+                val bi = djBtn.indexOf(code)
+                if (bi >= 0) {
+                    djButton(bi, on)
+                    return
+                }
                 if (on && learnPad >= 0) {
                     val p = learnPad
                     for (k in 0 until 12) if (k != p && padNote(k) == d1) padNotes[k] = -2
@@ -288,10 +361,12 @@ object Midi {
                 lastEvent = "$dev · Kanal $ch · CC $d1 = $d2"
                 if (learnCc >= 0) {
                     val t = learnCc
-                    for (k in ccMap.indices) if (k != t && ccMap[k] == d1) ccMap[k] = -1
-                    ccMap[t] = d1
+                    // mit Kanal lernen: DJ-Controller nutzen dieselbe CC-Nummer je Deck auf eigenem Kanal
+                    val code = 128 + (ch - 1) * 128 + d1
+                    for (k in ccMap.indices) if (k != t && ccMap[k] == code) ccMap[k] = -1
+                    ccMap[t] = code
                     learnCc = -1
-                    onHint?.invoke("${TARGETS[t]} ← CC $d1")
+                    onHint?.invoke("${TARGETS[t]} ← ${ccLabel(code)}")
                     return
                 }
                 if (!chOk(ch)) return
@@ -300,7 +375,8 @@ object Midi {
                     return
                 }
                 val v = d2 / 127f
-                for (t in ccMap.indices) if (ccMap[t] == d1) cc(t, v)
+                val code = 128 + (ch - 1) * 128 + d1
+                for (t in ccMap.indices) if (ccMap[t] == d1 || ccMap[t] == code) cc(t, v, d2)
             }
             0xC0 -> {
                 lastEvent = "$dev · Kanal $ch · Programm ${d1 + 1}"
@@ -347,7 +423,7 @@ object Midi {
         onKeysNote?.invoke(semi, on)
     }
 
-    private fun cc(t: Int, v: Float) {
+    private fun cc(t: Int, v: Float, raw: Int = (v * 127).toInt()) {
         val a = Dj.decks[0]
         val b = Dj.decks[1]
         when (t) {
@@ -368,8 +444,102 @@ object Midi {
             14 -> Engine.monitorGain = v * 1.5f
             15 -> a.fxAmt = v
             16 -> b.fxAmt = v
+            17 -> a.hi = v
+            18 -> a.mid = v
+            19 -> a.lo = v
+            20 -> b.hi = v
+            21 -> b.mid = v
+            22 -> b.lo = v
+            23 -> a.gain = v
+            24 -> b.gain = v
+            25, 26, 27, 28 -> jog(if (t == 25 || t == 27) 0 else 1, raw, t >= 27)
+            29 -> Dj.cueGain = v * 1.5f
         }
     }
+
+    // ---------------------------------------------------------------- DJ-Controller
+
+    private val bendOff = arrayOf(Runnable { Dj.decks[0].bend = 0f }, Runnable { Dj.decks[1].bend = 0f })
+    private val scratchOff = arrayOf(Runnable { if (!jogTouch[0]) Dj.scratchEnd(Dj.decks[0]) }, Runnable { if (!jogTouch[1]) Dj.scratchEnd(Dj.decks[1]) })
+    /** Jog-Rad-Kodierung: 0 = Mitte 64 (Pioneer, Numark), 1 = 1/127 (Hercules, Traktor). */
+    @Volatile var jogMode = 0
+
+    /** Jog-Rad (relativ): berührt bzw. „oben“ = Scratchen, Rand = Tempo kurz biegen (Angleichen per Hand). */
+    private fun jog(k: Int, raw: Int, top: Boolean) {
+        val d = Dj.decks[k]
+        if (!d.loaded()) return
+        val dv = if (jogMode == 0) raw - 64 else if (raw < 64) raw else raw - 128
+        if (dv == 0) return
+        val h = handler
+        if (jogTouch[k] || top) {
+            if (!d.scratching) Dj.scratchStart(d)
+            d.scratchTarget = (d.scratchTarget + dv * d.srcRate / 420.0).coerceIn(0.0, (d.len - 2).toDouble())
+            if (!jogTouch[k] && h != null) {
+                // ohne Berühr-Taste: Scratchen endet, wenn das Rad stillsteht
+                h.removeCallbacks(scratchOff[k])
+                h.postDelayed(scratchOff[k], 150L)
+            }
+            return
+        }
+        d.bend = (dv * 0.006f).coerceIn(-0.4f, 0.4f)
+        if (h != null) {
+            h.removeCallbacks(bendOff[k])
+            h.postDelayed(bendOff[k], 70L)
+        }
+    }
+
+    private fun djButton(i: Int, on: Boolean) {
+        val k = i / DJ_PER_DECK
+        val b = i % DJ_PER_DECK
+        val d = Dj.decks[k]
+        when (b) {
+            0 -> if (on) { if (!(Dj.gigMode && Dj.onAir(d) && !gigSecond(k))) Dj.togglePlay(d) }
+            1 -> {
+                if (!d.loaded()) return
+                if (on) {
+                    if (d.playing) Dj.cuePress(d)
+                    else if (abs(d.pos - d.cuePoint) < d.srcRate * 0.02) { cueHeld[k] = true; d.playing = true }
+                    else Dj.cuePress(d)
+                } else if (cueHeld[k]) {
+                    cueHeld[k] = false
+                    d.playing = false
+                    d.seekTo = d.cuePoint
+                }
+            }
+            2 -> if (on) Dj.toggleSync(d)
+            3 -> if (on) d.cue = !d.cue
+            4, 5, 6, 7 -> if (on) Dj.hotCue(d, b - 4, false)
+            8 -> if (on) Dj.toggleLoop(d)
+            9 -> if (on) Dj.setLoopBeats(d, d.loopBeats / 2f)
+            10 -> if (on) Dj.setLoopBeats(d, d.loopBeats * 2f)
+            11 -> if (on) Dj.beatJump(d, -d.jumpBars)
+            12 -> if (on) Dj.beatJump(d, d.jumpBars)
+            13 -> if (on) { d.keylock = !d.keylock; d.gReset = true }
+            14 -> if (on) Dj.echoOut(d)
+            15 -> if (on) Dj.brake(d, false)
+            16 -> {
+                jogTouch[k] = on
+                if (on) Dj.scratchStart(d) else Dj.scratchEnd(d)
+            }
+            17 -> if (on) Dj.rollStart(d, 0.5f) else Dj.rollEnd(d)
+            18 -> if (on) d.slipOn = !d.slipOn
+        }
+        onDjButton?.invoke()
+    }
+
+    private val gigTap = LongArray(2)
+
+    /** Gig-Modus: zweiter Druck innerhalb 0,5 s stoppt ein hörbares Deck. */
+    private fun gigSecond(k: Int): Boolean {
+        val now = System.currentTimeMillis()
+        val ok = now - gigTap[k] < 500
+        gigTap[k] = if (ok) 0 else now
+        if (!ok) onHint?.invoke("GIG: Deck ${"AB"[k]} ist zu hören – zum Stoppen nochmal drücken")
+        return ok
+    }
+
+    /** DJ-Taste ausgelöst (Oberfläche neu zeichnen). */
+    @Volatile var onDjButton: (() -> Unit)? = null
 
     private val releaseTouch = Runnable { Engine.fxTouch = false }
 

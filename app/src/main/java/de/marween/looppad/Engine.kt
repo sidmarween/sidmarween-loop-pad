@@ -1520,6 +1520,25 @@ object Engine {
         return am.getDevices(flag).firstOrNull { deviceKey(it) == key }
     }
 
+    /** 4-Kanal-Ausgabe (USB-Interface): Master auf 1/2, Vorhören auf 3/4. */
+    @Volatile var quadOut = false
+    /** Tatsächlich geöffnete Ausgabe-Kanäle (2 oder 4). */
+    @Volatile var outChannels = 2
+        private set
+
+    /** Größte Kanalzahl eines angeschlossenen USB-Ausgangs (0 = keiner). */
+    fun usbOutChannels(ctx: Context): Int {
+        val am = ctx.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+        var best = 0
+        for (d in am.getDevices(AudioManager.GET_DEVICES_OUTPUTS)) {
+            if (!isUsb(d)) continue
+            val cc = d.channelCounts
+            val m = if (cc.isEmpty()) 2 else cc.maxOrNull() ?: 2
+            best = max(best, m)
+        }
+        return best
+    }
+
     fun isUsb(d: android.media.AudioDeviceInfo): Boolean =
         d.type == android.media.AudioDeviceInfo.TYPE_USB_DEVICE ||
             d.type == android.media.AudioDeviceInfo.TYPE_USB_HEADSET ||
@@ -1746,7 +1765,30 @@ object Engine {
 
     private fun bufferBursts(): Int = when (latencyMode) { 1 -> 2; 2 -> 4; 3 -> 8; else -> 2 }
 
+    /** 4-Kanal-Ausgabe (Kanal-Index-Maske, wie USB-Interfaces sie erwarten) – oder null. */
+    private fun buildQuad(burst: Int): AudioTrack? = try {
+        val fmt = AudioFormat.Builder().setEncoding(AudioFormat.ENCODING_PCM_FLOAT).setSampleRate(sampleRate).setChannelIndexMask(0xF).build()
+        val t = AudioTrack.Builder()
+            .setAudioAttributes(AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_MEDIA).setContentType(AudioAttributes.CONTENT_TYPE_MUSIC).build())
+            .setAudioFormat(fmt)
+            .setBufferSizeInBytes(max(burst * 4 * 4 * 8, 16384))
+            .setTransferMode(AudioTrack.MODE_STREAM)
+            .setPerformanceMode(AudioTrack.PERFORMANCE_MODE_LOW_LATENCY)
+            .build()
+        if (t.state != AudioTrack.STATE_INITIALIZED || t.channelCount != 4) { t.release(); null } else {
+            try { t.setBufferSizeInFrames(burst * bufferBursts()) } catch (ignored: Exception) {}
+            outBufferFrames = t.bufferSizeInFrames
+            fastPath = try { t.performanceMode == AudioTrack.PERFORMANCE_MODE_LOW_LATENCY } catch (e: Throwable) { false }
+            t
+        }
+    } catch (e: Throwable) { null }
+
     private fun buildTrack(burst: Int): AudioTrack {
+        outChannels = 2
+        if (quadOut) {
+            val q = buildQuad(burst)
+            if (q != null) { outChannels = 4; return q }
+        }
         val minBuf = AudioTrack.getMinBufferSize(sampleRate, AudioFormat.CHANNEL_OUT_STEREO, AudioFormat.ENCODING_PCM_FLOAT)
         val t = AudioTrack.Builder()
             .setAudioAttributes(
@@ -2047,6 +2089,8 @@ object Engine {
         val cue = FloatArray(block)
         val mono = FloatArray(block)
         val stereo = FloatArray(block * 2)
+        val quad = FloatArray(block * 4)
+        val quadOn = outChannels == 4
         val mL = FloatArray(block)
         val mR = FloatArray(block)
         val recSt = FloatArray(block * 2)
@@ -2326,7 +2370,7 @@ object Engine {
                 mR[i] = (if (djOn) m + djR[i] else m) * vol
             }
             MasterBus.process(mL, mR, block, sampleRate)
-            val split = djOn && Dj.splitCue
+            val split = djOn && Dj.splitCue && !quadOn
             val cg = Dj.cueGain
             for (i in 0 until block) {
                 var l = softClip(mL[i])
@@ -2363,12 +2407,21 @@ object Engine {
 
             // Set-Aufnahme: Master (Stereo) ohne Metronom und ohne Vorhör-Kanal
             if (SetRecorder.recording) SetRecorder.push(recSt, block)
-            val splitNow = djOn && Dj.splitCue
+            val splitNow = (djOn && Dj.splitCue) || quadOn
             if (splitNow) java.util.Arrays.fill(mono, 0f)
             val clickTo = if (splitNow) mono else out
             if (metronome && transport && (countTo == Long.MIN_VALUE || w >= countTo)) addClicks(clickTo, w, block)
             if (countTo != Long.MIN_VALUE) countClicks(clickTo, w, block)
-            if (splitNow) {
+            if (quadOn) {
+                // 4 Kanäle: 1/2 Master (Stereo), 3/4 Vorhören (+ Klick)
+                for (i in 0 until block) {
+                    quad[4 * i] = stereo[2 * i]
+                    quad[4 * i + 1] = stereo[2 * i + 1]
+                    val cq = softClip(cue[i] * cg + mono[i])
+                    quad[4 * i + 2] = cq
+                    quad[4 * i + 3] = cq
+                }
+            } else if (splitNow) {
                 // Klick nur auf dem Vorhör-Kanal
                 for (i in 0 until block) stereo[2 * i + 1] = softClip(stereo[2 * i + 1] + mono[i])
             } else {
@@ -2382,9 +2435,10 @@ object Engine {
                 }
             }
             var off = 0
-            val total = block * 2
+            val outBuf = if (quadOn) quad else stereo
+            val total = block * (if (quadOn) 4 else 2)
             while (off < total && running) {
-                val r = try { t.write(stereo, off, total - off, AudioTrack.WRITE_BLOCKING) } catch (ignored: Exception) { -1 }
+                val r = try { t.write(outBuf, off, total - off, AudioTrack.WRITE_BLOCKING) } catch (ignored: Exception) { -1 }
                 if (r <= 0) {
                     Thread.sleep(5)
                     break

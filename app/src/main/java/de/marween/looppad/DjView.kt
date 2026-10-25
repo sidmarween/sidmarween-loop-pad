@@ -570,6 +570,11 @@ class DjView(context: Context) : View(context) {
         val recLbl = fitLabel(text, if (rec) SetRecorder.fmt(SetRecorder.seconds()) else "REC", setRecBtn.width() - dp(22f), dp(11f), dp(7f))
         c.drawText(recLbl, setRecBtn.centerX() + dp(6f), setRecBtn.centerY() + text.textSize * 0.36f, text)
         chip(c, menuBtn, "☰", false)
+        if (Dj.gigMode) {
+            text.textSize = dp(9f)
+            text.color = Color.rgb(255, 70, 90)
+            c.drawText("● GIG", bpmChip.centerX(), bpmChip.bottom + dp(9f), text)
+        }
     }
 
     private fun chip(c: Canvas, r: RectF, label: String, on: Boolean) {
@@ -2063,6 +2068,11 @@ class DjView(context: Context) : View(context) {
         when (j) {
             0 -> if (down) {
                 if (!dd.loaded()) { onLoad?.invoke(k); return }
+                // Gig-Modus: ein hörbares Deck stoppt nur per Doppeltipp
+                if (Dj.gigMode && Dj.onAir(dd) && !doubleTap(28 + k)) {
+                    onHint?.invoke("GIG: Deck ${"AB"[k]} ist zu hören – zum Stoppen doppelt tippen")
+                    return
+                }
                 Dj.togglePlay(dd)
             }
             1 -> {
