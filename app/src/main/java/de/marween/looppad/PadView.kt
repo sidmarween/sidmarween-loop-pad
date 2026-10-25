@@ -600,19 +600,23 @@ class PadView(context: Context) : View(context) {
         val bottom = h - insetBottom - dp(36f)
         val avail = bottom - contentTop
         val colGap = dp(10f)
-        val rowGap = dp(4f)
-        val mb = dp(20f)
-        val seqH = dp(84f)
-        val selH = dp(30f)
-        var cell = min((inner - 3 * colGap) / 4f, (avail * 0.66f - seqH - gap - 2 * rowGap - 3 * mb - selH) / 3f)
-        var gridH = 3 * cell + 3 * mb + 2 * rowGap + gap + seqH + selH
+        val rowGap = dp(8f)
+        // Raster: 4×3 (alle 12), 3×3 groß (+ Seite 10–12), 4×2 Performance (+ Seite 9–12)
+        val cols = gridCols()
+        val rows = gridRows()
+        val seqH = if (seqFold) dp(50f) else dp(84f)
+        val selH = dp(34f)
+        val cellW = (inner - (cols - 1) * colGap) / cols
+        var cellH = min(cellW, (avail * 0.72f - seqH - gap - (rows - 1) * rowGap - selH) / rows)
+        var gridH = rows * cellH + (rows - 1) * rowGap + gap + seqH + selH
         var xyH = avail - gridH - gap
         val minXy = dp(110f)
         if (xyH < minXy) {
-            cell -= (minXy - xyH) / 3f
-            gridH = 3 * cell + 3 * mb + 2 * rowGap + gap + seqH + selH
+            cellH -= (minXy - xyH) / rows
+            gridH = rows * cellH + (rows - 1) * rowGap + gap + seqH + selH
             xyH = minXy
         }
+        val cell = min(cellW, cellH)
         xyRect.set(margin, contentTop, w - margin, contentTop + xyH)
         // Reiter über der XY-Fläche: Effekte | Instrumente (303 · 909 · SYNTH)
         val tabH = dp(26f)
@@ -624,19 +628,21 @@ class PadView(context: Context) : View(context) {
         xyRect.top = contentTop + tabH + dp(5f)
 
         val gridTop = xyRect.bottom + gap + selH
-        val gridW = 4 * cell + 3 * colGap
+        val gridW = cols * cellW + (cols - 1) * colGap
         val left = (w - gridW) / 2f
         // Auswahl-Leiste über den Pads: SELECT · Pad · WAVE · NOTEN · FX · ⋯
         selRow.set(left, xyRect.bottom + gap - dp(2f), left + gridW, gridTop - dp(6f))
         run {
             val g = dp(5f)
-            val ws = floatArrayOf(1.35f, 0.9f, 1f, 1f, 0.8f, 0.6f)
-            val unit = (selRow.width() - 5 * g) / ws.sum()
+            val paged = gridPages() > 1
+            val ws = if (paged) floatArrayOf(1.35f, 0.9f, 1f, 1f, 0.8f, 0.6f, 0.95f) else floatArrayOf(1.35f, 0.9f, 1f, 1f, 0.8f, 0.6f)
+            val unit = (selRow.width() - (ws.size - 1) * g) / ws.sum()
             var x = selRow.left
-            for (i in 0 until 6) {
+            for (i in ws.indices) {
                 selBtns[i].set(x, selRow.top, x + unit * ws[i], selRow.bottom)
                 x += unit * ws[i] + g
             }
+            if (!paged) selBtns[6].set(-9999f, -9999f, -9998f, -9998f)
         }
         radius = when (theme) {
             STUDIO -> cell * 0.10f
@@ -660,27 +666,29 @@ class PadView(context: Context) : View(context) {
             specL.setEmpty()
             specR.setEmpty()
         }
+        val perPage = cols * rows
+        if (padPage >= gridPages()) padPage = 0
         for (i in 0 until Engine.PADS) {
-            if (i >= VISIBLE_PADS) {
+            // die kleinen Knöpfe unter den Pads gibt es nicht mehr (Pad-Menü/Tastatur: SELECT-Leiste)
+            moreRects[i].set(-9999f, -9999f, -9998f, -9998f)
+            keyRects[i].set(-9999f, -9999f, -9998f, -9998f)
+            if (i >= VISIBLE_PADS || i / perPage != padPage) {
                 padRects[i].setEmpty()
-                moreRects[i].setEmpty()
-                keyRects[i].setEmpty()
                 continue
             }
-            val row = i / 4
-            val col = i % 4
-            val x = left + col * (cell + colGap)
-            val y = gridTop + row * (cell + mb + rowGap)
-            padRects[i].set(x, y, x + cell, y + cell)
-            moreRects[i].set(x + cell * 0.06f, y + cell + dp(3f), x + cell * 0.47f, y + cell + mb - dp(1f))
-            keyRects[i].set(x + cell * 0.53f, y + cell + dp(3f), x + cell * 0.94f, y + cell + mb - dp(1f))
+            val idx = i % perPage
+            val row = idx / cols
+            val col = idx % cols
+            val x = left + col * (cellW + colGap)
+            val y = gridTop + row * (cellH + rowGap)
+            padRects[i].set(x, y, x + cellW, y + cellH)
             val path = Path()
             path.addRoundRect(padRects[i], radius, radius, Path.Direction.CW)
             padMeasures[i].setPath(path, true)
             padLengths[i] = padMeasures[i].length
         }
         // Sequenzer an Stelle der unteren Pad-Reihe
-        val seqTop = gridTop + 3 * (cell + mb + rowGap) - rowGap + gap
+        val seqTop = gridTop + rows * (cellH + rowGap) - rowGap + gap
         seqRect.set(left, seqTop, left + gridW, seqTop + seqH)
         val sp = dp(8f)
         val stripH = dp(30f)
@@ -689,13 +697,14 @@ class PadView(context: Context) : View(context) {
         val stepW = (seqRect.width() - 2 * sp - 15 * sgap - 3 * groupGap) / 16f
         var sx = seqRect.left + sp
         for (k in 0 until Engine.STEPS) {
-            stepRects[k].set(sx, seqRect.top + sp, sx + stepW, seqRect.top + sp + stripH)
+            if (seqFold) stepRects[k].set(-9999f, -9999f, -9998f, -9998f)
+            else stepRects[k].set(sx, seqRect.top + sp, sx + stepW, seqRect.top + sp + stripH)
             sx += stepW + sgap + if (k % 4 == 3) groupGap else 0f
         }
-        val bTop = seqRect.top + sp + stripH + dp(6f)
+        val bTop = if (seqFold) seqRect.top + sp else seqRect.top + sp + stripH + dp(6f)
         val bH = seqRect.bottom - sp - bTop
-        // Platz für den ⤢-Knopf rechts außen freihalten
-        val zw = if (zoomEnabled) dp(30f) + dp(6f) else 0f
+        // Platz für den ⤢-Knopf und den Ein-/Ausklapp-Knopf rechts außen freihalten
+        val zw = (if (zoomEnabled) dp(30f) + dp(6f) else 0f) + dp(30f) + dp(6f)
         val bW = min(dp(46f), (seqRect.width() - 2 * sp - zw) / 7.4f)
         val bg = dp(6f)
         recBtn.set(seqRect.left + sp, bTop, seqRect.left + sp + bW, bTop + bH)
@@ -706,8 +715,10 @@ class PadView(context: Context) : View(context) {
         redoBtn.set(undoBtn.right + bg, bTop, undoBtn.right + bg + uW, bTop + bH)
         mixBtn.set(redoBtn.right + dp(10f), bTop, redoBtn.right + dp(10f) + uW * 1.1f, bTop + bH)
         if (zoomEnabled) zoomPads.set(seqRect.right - sp - dp(30f), bTop, seqRect.right - sp, bTop + bH) else zoomPads.setEmpty()
+        val fr = if (zoomPads.isEmpty) seqRect.right - sp else zoomPads.left - dp(6f)
+        seqFoldBtn.set(fr - dp(30f), bTop, fr, bTop + bH)
         // Mischpult nutzt auch den Platz der Auswahl-Leiste (die im MIX ausgeblendet ist)
-        mixRect.set(left, selRow.top, left + gridW, gridTop + 3 * (cell + mb + rowGap) - rowGap)
+        mixRect.set(left, selRow.top, left + gridW, gridTop + rows * (cellH + rowGap) - rowGap)
         buildHudLines(w, h)
         buildLightCaches()
         buildSkinCaches()
@@ -841,9 +852,11 @@ class PadView(context: Context) : View(context) {
             if (!sceneView) drawFxBadge(canvas, i)
             drawPadOverlay(canvas, i)
             drawCueMark(canvas, i)
+            drawPadName(canvas, i)
         }
         if (!mixView) drawSelOutline(canvas)
         drawSequencer(canvas)
+        drawSeqFold(canvas)
         drawShocks(canvas, dt)
         drawParticles(canvas, dt)
         drawFooter(canvas)
@@ -1477,7 +1490,7 @@ class PadView(context: Context) : View(context) {
                         if (!sceneView) drawFxBadge(canvas, i)
                         drawPadOverlay(canvas, i)
                         drawCueMark(canvas, i)
-                        if (drumActive()) drawPadName(canvas, i)
+                        drawPadName(canvas, i)
                     }
                     drawSelOutline(canvas)
                 }
@@ -1536,7 +1549,31 @@ class PadView(context: Context) : View(context) {
     /** Ausgewähltes Pad – Ziel für Wave-Editor, Noten, Effekte und die Wellenform in der großen Ansicht. */
     var selPad = -1
     private val selRow = RectF()
-    private val selBtns = Array(6) { RectF() }
+    private val selBtns = Array(7) { RectF() }
+
+    // ---- Pad-Raster, Seiten, Sequenzer einklappen
+    /** 0 = 4×3 (alle 12), 1 = 3×3 groß, 2 = 4×2 Performance. */
+    var padGrid = 0
+        set(v) { field = v.coerceIn(0, 2); padPage = 0; layoutPads(); invalidate() }
+    private var padPage = 0
+    var seqFold = false
+        set(v) { field = v; layoutPads(); invalidate() }
+    private val seqFoldBtn = RectF()
+    var onLayoutPrefs: (() -> Unit)? = null
+    private fun gridCols() = if (padGrid == 1) 3 else 4
+    private fun gridRows() = if (padGrid == 2) 2 else 3
+    private fun gridPages() = (VISIBLE_PADS + gridCols() * gridRows() - 1) / (gridCols() * gridRows())
+    private fun pageLabel(): String {
+        val per = gridCols() * gridRows()
+        val a = padPage * per + 1
+        val b = min(VISIBLE_PADS, a + per - 1)
+        return "$a–$b ▸"
+    }
+
+    private fun drawSeqFold(canvas: Canvas) {
+        if (seqFoldBtn.width() <= 0f) return
+        smallBtn(canvas, seqFoldBtn, if (seqFold) "▴" else "▾", false, overlayColors())
+    }
 
     private fun drawSelRow(canvas: Canvas) {
         if (mixView) return
@@ -1546,6 +1583,7 @@ class PadView(context: Context) : View(context) {
         textPaint.color = if (selPad >= 0) cols[2] else alpha(cols[1], 0.5f)
         val lb = fitLabel(textPaint, if (selPad >= 0) "PAD ${selPad + 1}" else "–", selBtns[1].width(), dp(12f), dp(8f))
         canvas.drawText(lb, selBtns[1].centerX(), selBtns[1].centerY() + textPaint.textSize * 0.36f, textPaint)
+        if (selBtns[6].left > -1000f) smallBtn(canvas, selBtns[6], pageLabel(), padPage > 0, cols)
         val labels = arrayOf("〰 WAVE", "🎹 NOTEN", "✨ FX", "⋯")
         for (k in 0 until 4) {
             val r = selBtns[2 + k]
@@ -1599,6 +1637,11 @@ class PadView(context: Context) : View(context) {
         val p = selPad
         val has = p >= 0 && Engine.hasLoop(p)
         when {
+            selBtns[6].contains(x, y) -> {
+                padPage = (padPage + 1) % gridPages()
+                layoutPads()
+                hint("Pads ${pageLabel().dropLast(2)}")
+            }
             selBtns[0].contains(x, y) -> {
                 selectMode = !selectMode
                 hint(if (selectMode) "SELECT: Pad antippen wählt es aus (spielt nicht) – Wave, Noten, FX und ⋯ gelten dann nur für dieses Pad" else "SELECT aus: Pads spielen wieder")
@@ -2221,7 +2264,8 @@ class PadView(context: Context) : View(context) {
         textPaint.color = Color.argb(230, 255, 255, 255)
         val t = fitLabel(textPaint, n.uppercase(Locale.GERMANY), r.width() * 0.86f, min(dp(15f), r.width() * 0.14f), dp(7f))
         textPaint.setShadowLayer(dp(3f), 0f, 0f, Color.BLACK)
-        canvas.drawText(t, r.centerX(), r.bottom - r.height() * 0.12f, textPaint)
+        // oben im Pad – unten sitzen Eingangs- und FX-Plakette
+        canvas.drawText(t, r.centerX(), r.top + dp(9f) + textPaint.textSize, textPaint)
         textPaint.clearShadowLayer()
     }
 
@@ -2826,7 +2870,7 @@ class PadView(context: Context) : View(context) {
         drawMixButton(canvas, cols)
         if (!zoomPads.isEmpty) zoomBtn(canvas, zoomPads, cols)
         val ix = mixBtn.right + dp(8f)
-        val avail = (if (zoomPads.isEmpty) seqRect.right - dp(6f) else zoomPads.left - dp(4f)) - ix
+        val avail = seqFoldBtn.left - dp(4f) - ix
         if (avail < dp(28f)) return
         val cin = Engine.countInBeat()
         val red = Color.rgb(255, 60, 80)
@@ -4131,6 +4175,11 @@ class PadView(context: Context) : View(context) {
                         undoBtn.contains(x, y) -> doUndo(false)
                         redoBtn.contains(x, y) -> doUndo(true)
                         mixBtn.contains(x, y) -> toggleMixView()
+                        seqFoldBtn.contains(x, y) -> {
+                            seqFold = !seqFold
+                            onLayoutPrefs?.invoke()
+                            hint(if (seqFold) "Sequenzer eingeklappt – die Pads werden größer (▴ klappt ihn wieder auf)" else "Sequenzer-Schritte wieder da")
+                        }
                         playBtn.contains(x, y) -> {
                             Engine.seqPlay()
                             burst(x, y, if (theme == NEON) Color.rgb(60, 230, 120) else ORANGE, 18, 220f)

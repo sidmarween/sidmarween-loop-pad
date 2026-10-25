@@ -153,6 +153,9 @@ class MainActivity : Activity() {
         pads.onImportMenu = { p -> showImportMenu(p) }
         pads.onDrumKit = { showDrumKits() }
         pads.onTimingCalib = { showTimingCalib() }
+        pads.padGrid = prefs.getInt("padGrid", 0)
+        pads.seqFold = prefs.getBoolean("seqFold", false)
+        pads.onLayoutPrefs = { prefs.edit().putInt("padGrid", pads.padGrid).putBoolean("seqFold", pads.seqFold).apply() }
         pads.onDrumClear = { p ->
             val items = ArrayList<String>()
             val acts = ArrayList<() -> Unit>()
@@ -2268,6 +2271,19 @@ class MainActivity : Activity() {
                 title = "🎨 Aussehen"
                 items.add(Triple("🖼 Design wählen (HUD, Pad- und DJ-Designs)", { showDesigns() }, false))
                 items.add(Triple("✨ Menü-Aussehen: Schrift, Hell/Dunkel, Farbe, Größe", { showMenuLook() }, false))
+                val gridNames = arrayOf("4×3 – alle 12 Pads", "3×3 – größere Pads (Seite 10–12)", "4×2 – Performance, sehr groß (Seite 9–12)")
+                items.add(Triple("▦ Pad-Raster: " + gridNames[pads.padGrid].substringBefore(" –") + " …", {
+                    ui().setTitle("Pad-Raster").setSingleChoiceItems(gridNames, pads.padGrid) { d, w ->
+                        pads.padGrid = w
+                        prefs.edit().putInt("padGrid", w).apply()
+                        d.dismiss()
+                        if (w > 0) hint("Weitere Pads: Knopf ganz rechts in der SELECT-Leiste wechselt die Seite")
+                    }.show()
+                }, false))
+                items.add(Triple(check(pads.seqFold) + " ▾ Sequenzer-Schritte einklappen (größere Pads)", {
+                    pads.seqFold = !pads.seqFold
+                    prefs.edit().putBoolean("seqFold", pads.seqFold).apply()
+                }, true))
                 items.add(Triple(check(pads.statusColors) + " 🚦 Status-Farben (Rot Aufnahme · Grün Play · Gelb Overdub)", {
                     pads.statusColors = !pads.statusColors
                     prefs.edit().putBoolean("statusColors", pads.statusColors).apply()
