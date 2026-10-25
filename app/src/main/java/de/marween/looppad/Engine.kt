@@ -2539,6 +2539,7 @@ object Engine {
     @Volatile var tightTiming = true
     /** Abstand geschriebener → gehörter Frame (Höchstwert, langsam fallend) – daraus die feste Verzögerung. */
     @Volatile private var leadMax = 0L
+    @Volatile private var touchLagNs = 4_000_000L
     /** Einspiel-Ausgleich (ms): so viel liegen Anschläge systematisch zu spät (Touch-Verzögerung) – wird abgezogen. */
     @Volatile var recOffsetMs = 0f
 
@@ -2549,7 +2550,7 @@ object Engine {
     }
 
     /** Feste Auslöse-Verzögerung in ms (für die Anzeige). */
-    fun triggerDelayMs(): Float = if (sampleRate > 0) leadMax * 1000f / sampleRate else 0f
+    fun triggerDelayMs(): Float = if (sampleRate > 0) leadMax * 1000f / sampleRate + touchLagNs / 1e6f else 0f
 
     /** Gehörter Frame im Moment der Berührung, abzüglich Einspiel-Ausgleich. */
     private fun heardAtTouch(touchNanos: Long): Long {
@@ -2604,7 +2605,10 @@ object Engine {
             // jitterfrei: feste Verzögerung ab dem Berührungszeitpunkt, sonst im nächsten Block
             var at = SHOT_NOW
             if (tightTiming && touchNanos > 0L && leadMax > 0L) {
-                val f = outClock.frameAt(touchNanos, sampleRate) + leadMax
+                // Verarbeitungs-Verzögerung (Berührung → hier) mit einrechnen, Höchstwert langsam fallend
+                val dl = System.nanoTime() - touchNanos
+                if (dl in 0..60_000_000L) touchLagNs = if (dl > touchLagNs) dl else touchLagNs - max(1L, touchLagNs / 30)
+                val f = outClock.frameAt(touchNanos, sampleRate) + leadMax + touchLagNs * sampleRate / 1_000_000_000L
                 if (f > written && f - written < sampleRate / 4) at = f
             }
             loop.shotStart = at
