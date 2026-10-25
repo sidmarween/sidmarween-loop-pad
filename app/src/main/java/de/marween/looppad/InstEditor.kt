@@ -94,7 +94,9 @@ class InstEditor(private val host: View) {
     private val tools = Array(8) { RectF() }
     /** Pattern A–D */
     private val patRects = Array(InstState.PATS) { RectF() }
-    private val inst: Int get() = (kind - 1).coerceIn(0, InstState.INSTS - 1)
+    private val inst: Int get() = if (kind == 3) InstState.synInst else (kind - 1).coerceIn(0, 1)
+    /** SYNTH: Titel antippen = nächste Synth-Spur */
+    private val bTitle = RectF()
     /** Taktleiste über der Matrix: tippen = Einfügemarke, ziehen = Zeitbereich markieren */
     private val ruler = RectF()
     /** Senkrechter Bildlauf rechts (Piano-Roll): ziehen = Tonhöhenbereich wählen */
@@ -150,6 +152,7 @@ class InstEditor(private val host: View) {
         bMidi.set(bSound.left - dp(6f) - dp(62f), y, bSound.left - dp(6f), y + bh)
         bPlay.set(bMidi.left - dp(6f) - hb, y, bMidi.left - dp(6f), y + bh)
         bRec.set(bPlay.left - dp(6f) - hb, y, bPlay.left - dp(6f), y + bh)
+        bTitle.set(box.left, box.top, bRec.left - dp(4f), y + bh + dp(4f))
         y += bh + dp(8f)
         val row = { rs: Array<RectF>, top: Float ->
             val g = dp(5f)
@@ -272,10 +275,26 @@ class InstEditor(private val host: View) {
         text.textAlign = Paint.Align.LEFT
         text.textSize = dp(14f)
         text.color = Color.WHITE
-        c.drawText(when (kind) { 1 -> "🔊 ACID 303"; 3 -> "🎹 SYNTH"; else -> "🥁 DRUM 909" }, box.left + dp(12f), bClose.centerY() - dp(1f), text)
+        if (kind == 3) {
+            // Spurwahl: 1 2 3
+            val cw = dp(22f)
+            val x0 = box.left + dp(12f) + text.measureText("🎹 SYN ") + dp(2f)
+            c.drawText("🎹 SYN", box.left + dp(12f), bClose.centerY() - dp(1f), text)
+            for (t in 0 until InstState.SYN_TRACKS) {
+                tmp.set(x0 + t * (cw + dp(3f)), bClose.top - dp(1f), x0 + t * (cw + dp(3f)) + cw, bClose.centerY() + dp(3f))
+                val on = t == InstState.synCur
+                fill.color = if (on) acc else Color.rgb(40, 42, 50)
+                c.drawRoundRect(tmp, dp(5f), dp(5f), fill)
+                text.textAlign = Paint.Align.CENTER
+                text.color = if (on) Color.BLACK else if (InstState.synTracks[t].hasNotes()) Color.WHITE else Color.argb(120, 255, 255, 255)
+                c.drawText("${t + 1}", tmp.centerX(), tmp.centerY() + dp(4.5f), text)
+                text.textAlign = Paint.Align.LEFT
+                text.color = Color.WHITE
+            }
+        } else c.drawText(when (kind) { 1 -> "🔊 ACID 303"; else -> "🥁 DRUM 909" }, box.left + dp(12f), bClose.centerY() - dp(1f), text)
         text.textSize = dp(9.5f)
         text.color = Color.argb(180, 255, 255, 255)
-        c.drawText("${len / 16} Takt" + (if (len > 16) "e" else "") + " · ${len} Schritte", box.left + dp(12f), bClose.centerY() + dp(12f), text)
+        c.drawText((if (kind == 3) "Spur ${InstState.synCur + 1} · " else "") + "${len / 16} Takt" + (if (len > 16) "e" else "") + " · ${len} Schritte", box.left + dp(12f), bClose.centerY() + dp(12f), text)
         text.textAlign = Paint.Align.CENTER
         btn(c, bRec, if (Engine.seqRecording) "● REC" else "●", Engine.seqRecording, Color.rgb(225, 40, 50))
         btn(c, bPlay, if (Engine.seqPlaying) "■" else "▶", Engine.seqPlaying, acc)
@@ -1001,6 +1020,14 @@ class InstEditor(private val host: View) {
         longDone = false
         pressToken++
         val st = InstState
+        if (kind == 3 && bTitle.contains(x, y)) {
+            liveOff()
+            InstState.synCur = (InstState.synCur + 1) % InstState.SYN_TRACKS
+            sel.clear(); insert = -1; col0 = 0; pendingFit = true
+            onHint?.invoke("SYNTH-Spur ${InstState.synCur + 1} (${InstState.synSoundNames[InstState.synCur]}-Klang voreingestellt) · eigene Noten, eigener Klang, eigene Patterns A–D · Titel antippen = nächste Spur")
+            haptic()
+            return
+        }
         val pi = patRects.indexOfFirst { it.contains(x, y) }
         if (pi >= 0) {
             ptr = id; drag = D_PAT; patDown = pi

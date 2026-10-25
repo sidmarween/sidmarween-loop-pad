@@ -148,8 +148,10 @@ object Engine {
         private set
     @Volatile var drum: DrumMachine? = null
         private set
-    @Volatile var synth: PolySynth? = null
+    @Volatile var synths: Array<PolySynth>? = null
         private set
+    /** Synth der gerade bearbeiteten Spur (Touchpad, Editor). */
+    val synth: PolySynth? get() = synths?.getOrNull(InstState.synCur)
     private var instRate = 0
 
     /** Ein Sequenzer-Schritt für die Instrumente (sample-genau). */
@@ -170,16 +172,19 @@ object Engine {
             val holds = st.acidGate[next] && (st.acidSlide[step] || st.acidTie[next])
             if (!holds) a.queue(f + stepLen / 2, false, 0, false, false)
         }
-        val sy = synth
-        if (sy != null && st.synOn) {
-            val sl = st.synLen.coerceIn(1, InstState.MAX)
+        val sys = synths
+        if (sys != null) for (ti in 0 until InstState.SYN_TRACKS) {
+            val t = InstState.synTracks[ti]
+            val sy = sys.getOrNull(ti) ?: continue
+            if (!t.on) continue
+            val sl = t.len.coerceIn(1, InstState.MAX)
             val k = Math.floorMod(n, sl.toLong()).toInt()
-            if (st.synGate[k] && !(st.synTie[k] && st.synGate[Math.floorMod(k - 1, sl)])) {
+            if (t.gate[k] && !(t.tie[k] && t.gate[Math.floorMod(k - 1, sl)])) {
                 // Länge: so viele Schritte, wie danach gehalten werden
                 var len = 1
-                while (len < sl && st.synGate[(k + len) % sl] && st.synTie[(k + len) % sl]) len++
+                while (len < sl && t.gate[(k + len) % sl] && t.tie[(k + len) % sl]) len++
                 val tag = 1000 + k
-                sy.queue(f, true, st.synSemi[k], st.synVel[k], tag)
+                sy.queue(f, true, t.semi[k], t.vel[k], tag)
                 sy.queue(f + stepLen * len - stepLen / 8, false, 0, 0f, tag)
             }
         }
@@ -1707,7 +1712,7 @@ object Engine {
         if (acid == null || instRate != sampleRate) {
             acid = AcidSynth(sampleRate)
             drum = DrumMachine(sampleRate)
-            synth = PolySynth(sampleRate)
+            synths = Array(InstState.SYN_TRACKS) { PolySynth(sampleRate, InstState.synTracks[it]) }
             instRate = sampleRate
         }
         if (fxs == null || fxRate != sampleRate) {
@@ -2321,19 +2326,20 @@ object Engine {
             val soloed = soloAny
             if (soloed) java.util.Arrays.fill(instScratch, 0f)
             val ci = captureInst
-            for (kind in 0..2) {
-                val dst = if (soloed) instScratch else when (kind) {
+            for (kk in 0 until 2 + InstState.SYN_TRACKS) {
+                val kind = min(kk, 2)
+                val dst = if (soloed) instScratch else when (kk) {
                     0 -> if (InstState.acidFx) bus else out
                     1 -> if (InstState.drumFx) bus else out
-                    else -> if (InstState.synFx) bus else out
+                    else -> if (InstState.synTracks[kk - 2].fx) bus else out
                 }
                 val cap = (ci shr kind) and 1 != 0
                 val tgt = if (cap) instTmp else dst
                 if (cap) java.util.Arrays.fill(instTmp, 0f)
-                when (kind) {
+                when (kk) {
                     0 -> acid?.render(tgt, block, w)
                     1 -> drum?.render(tgt, block)
-                    else -> synth?.render(tgt, block, w)
+                    else -> synths?.getOrNull(kk - 2)?.render(tgt, block, w)
                 }
                 if (cap) for (i in 0 until block) { dst[i] += instTmp[i]; capBuf[i] += instTmp[i] }
             }
@@ -3984,8 +3990,8 @@ object Engine {
 
     // ================================================================ Song-Arrangement (Spuren × Takte, wie Ableton)
 
-    /** 12 Pads + ACID + DRUM + SYNTH. */
-    const val ARR_ROWS = 15
+    /** 12 Pads + ACID + DRUM + SYNTH-Spuren. */
+    const val ARR_ROWS = 12 + InstState.INSTS
     const val ARR_MAX = 64
     /** Erste Instrument-Zeile (danach ACID, DRUM, SYNTH). */
     const val ARR_INST = 12
@@ -4009,12 +4015,14 @@ object Engine {
 
     // ================================================================ Automation (Song-Modus: Werte über die Zeit)
 
-    const val AUTO_LANES = 8
+    const val AUTO_LANES = 12
     /** Auflösung: 16 Punkte je Takt. */
     const val AUTO_RES = 16
-    val AUTO_NAMES = arrayOf("FX X", "FX Y", "ACID Cutoff", "SYNTH Cutoff", "ACID Lautst.", "SYNTH Lautst.", "DRUM Lautst.", "MASTER Lautst.")
+    val AUTO_NAMES = arrayOf("FX X", "FX Y", "ACID Cutoff", "ACID Lautst.", "DRUM Lautst.", "SYN 1 Cutoff", "SYN 1 Lautst.",
+        "SYN 2 Cutoff", "SYN 2 Lautst.", "SYN 3 Cutoff", "SYN 3 Lautst.", "MASTER Lautst.")
     val AUTO_HELP = arrayOf("Effekt-Fläche waagerecht (Effekt ist an, solange die Linie läuft)", "Effekt-Fläche senkrecht", "Filter des ACID-Basses",
-        "Filter des SYNTH", "Lautstärke ACID", "Lautstärke SYNTH", "Lautstärke DRUM 909", "Gesamtlautstärke (Fade-In / Fade-Out)")
+        "Lautstärke ACID", "Lautstärke DRUM 909", "Filter SYNTH 1", "Lautstärke SYNTH 1", "Filter SYNTH 2", "Lautstärke SYNTH 2",
+        "Filter SYNTH 3", "Lautstärke SYNTH 3", "Gesamtlautstärke (Fade-In / Fade-Out)")
     /** NaN = keine Automation an dieser Stelle (Regler gilt). */
     val auto = Array(AUTO_LANES) { FloatArray(ARR_MAX * AUTO_RES) { Float.NaN } }
     /** Live: Bewegungen auf der Effekt-Fläche im Song-Modus in FX X/Y schreiben. */
@@ -4046,8 +4054,8 @@ object Engine {
 
     private fun autoReset() {
         autoFxX = Float.NaN; autoFxY = Float.NaN; autoMaster = Float.NaN
-        InstState.acidCutAuto = Float.NaN; InstState.synCutAuto = Float.NaN
-        InstState.acidVolAuto = Float.NaN; InstState.synVolAuto = Float.NaN; InstState.drumVolAuto = Float.NaN
+        InstState.acidCutAuto = Float.NaN; InstState.acidVolAuto = Float.NaN; InstState.drumVolAuto = Float.NaN
+        for (t in InstState.synTracks) { t.cutAuto = Float.NaN; t.volAuto = Float.NaN }
         autoPos = -1f
     }
 
@@ -4067,11 +4075,10 @@ object Engine {
         autoFxX = autoAt(0, pos)
         autoFxY = autoAt(1, pos)
         InstState.acidCutAuto = autoAt(2, pos)
-        InstState.synCutAuto = autoAt(3, pos)
-        InstState.acidVolAuto = autoAt(4, pos)
-        InstState.synVolAuto = autoAt(5, pos)
-        InstState.drumVolAuto = autoAt(6, pos)
-        autoMaster = autoAt(7, pos)
+        InstState.acidVolAuto = autoAt(3, pos)
+        InstState.drumVolAuto = autoAt(4, pos)
+        for ((k, t) in InstState.synTracks.withIndex()) { t.cutAuto = autoAt(5 + 2 * k, pos); t.volAuto = autoAt(6 + 2 * k, pos) }
+        autoMaster = autoAt(11, pos)
     }
 
     private fun autoToJson(): org.json.JSONArray {
@@ -4132,7 +4139,13 @@ object Engine {
             val s = scenes[i] ?: continue
             if (bar >= ARR_MAX) break
             arrScene[bar] = i
-            val has = booleanArrayOf(s.pat.inst.gate.any { it }, s.pat.inst.drums.any { r -> r.any { it > 0 } }, s.pat.inst.synGate.any { it })
+            val has = BooleanArray(InstState.INSTS) { i ->
+                when (i) {
+                    0 -> s.pat.inst.gate.any { it }
+                    1 -> s.pat.inst.drums.any { r -> r.any { it > 0 } }
+                    else -> if (i - 2 == s.pat.inst.synTrack) s.pat.inst.synGate.any { it } else InstState.synTracks[i - 2].hasNotes()
+                }
+            }
             for (b in bar until min(ARR_MAX, bar + s.bars)) {
                 for (r in 0 until min(12, pads)) arr[r][b] = loops.get(r) != null && !s.mutes[r]
                 for (i in 0 until InstState.INSTS) arrPat[i][b] = if (has[i]) InstState.curPat[i] + 1 else 0
@@ -4523,7 +4536,9 @@ class InstSnap(
     val tie: BooleanArray = BooleanArray(InstState.MAX), val acidLen: Int = 16, val drumLen: Int = 16,
     val acidVel: FloatArray = FloatArray(InstState.MAX) { 1f }, val drumVel: Array<FloatArray> = Array(InstState.DV) { FloatArray(InstState.MAX) { 1f } },
     val synSemi: IntArray = IntArray(InstState.MAX), val synGate: BooleanArray = BooleanArray(InstState.MAX),
-    val synTie: BooleanArray = BooleanArray(InstState.MAX), val synVel: FloatArray = FloatArray(InstState.MAX) { 1f }, val synLen: Int = 16
+    val synTie: BooleanArray = BooleanArray(InstState.MAX), val synVel: FloatArray = FloatArray(InstState.MAX) { 1f }, val synLen: Int = 16,
+    /** Synth-Spur, zu der die syn*-Daten gehören. */
+    val synTrack: Int = 0
 ) {
     fun restore() {
         val st = InstState
@@ -4542,15 +4557,16 @@ class InstSnap(
         System.arraycopy(acc, 0, st.acidAcc, 0, min(acc.size, st.acidAcc.size))
         System.arraycopy(slide, 0, st.acidSlide, 0, min(slide.size, st.acidSlide.size))
         for (v in 0 until min(drums.size, InstState.DV)) System.arraycopy(drums[v], 0, st.drumSteps[v], 0, min(drums[v].size, InstState.MAX))
-        System.arraycopy(synSemi, 0, st.synSemi, 0, min(synSemi.size, InstState.MAX))
-        System.arraycopy(synGate, 0, st.synGate, 0, min(synGate.size, InstState.MAX))
-        System.arraycopy(synTie, 0, st.synTie, 0, min(synTie.size, InstState.MAX))
-        System.arraycopy(synVel, 0, st.synVel, 0, min(synVel.size, InstState.MAX))
-        st.synLen = synLen.coerceIn(16, InstState.MAX)
+        val t = st.synTracks[synTrack.coerceIn(0, InstState.SYN_TRACKS - 1)]
+        System.arraycopy(synSemi, 0, t.semi, 0, min(synSemi.size, InstState.MAX))
+        System.arraycopy(synGate, 0, t.gate, 0, min(synGate.size, InstState.MAX))
+        System.arraycopy(synTie, 0, t.tie, 0, min(synTie.size, InstState.MAX))
+        System.arraycopy(synVel, 0, t.vel, 0, min(synVel.size, InstState.MAX))
+        t.len = synLen.coerceIn(16, InstState.MAX)
     }
 
     fun copy() = InstSnap(semi.copyOf(), gate.copyOf(), acc.copyOf(), slide.copyOf(), Array(drums.size) { drums[it].copyOf() }, tie.copyOf(), acidLen, drumLen, acidVel.copyOf(), Array(drumVel.size) { drumVel[it].copyOf() },
-        synSemi.copyOf(), synGate.copyOf(), synTie.copyOf(), synVel.copyOf(), synLen)
+        synSemi.copyOf(), synGate.copyOf(), synTie.copyOf(), synVel.copyOf(), synLen, synTrack)
 
     fun toJson(): org.json.JSONObject {
         val j = org.json.JSONObject()
@@ -4567,6 +4583,7 @@ class InstSnap(
         j.put("synTie", org.json.JSONArray().apply { synTie.forEach { put(it) } })
         j.put("synVel", org.json.JSONArray().apply { synVel.forEach { put(it.toDouble()) } })
         j.put("synLen", synLen)
+        j.put("synTrack", synTrack)
         return j
     }
 
@@ -4577,7 +4594,7 @@ class InstSnap(
                 st.acidSemi.copyOf(), st.acidGate.copyOf(), st.acidAcc.copyOf(), st.acidSlide.copyOf(),
                 Array(InstState.DV) { st.drumSteps[it].copyOf() }, st.acidTie.copyOf(), st.acidLen, st.drumLen,
                 st.acidVel.copyOf(), Array(InstState.DV) { st.drumVel[it].copyOf() },
-                st.synSemi.copyOf(), st.synGate.copyOf(), st.synTie.copyOf(), st.synVel.copyOf(), st.synLen
+                st.synSemi.copyOf(), st.synGate.copyOf(), st.synTie.copyOf(), st.synVel.copyOf(), st.synLen, st.synCur
             )
         }
 
@@ -4591,7 +4608,7 @@ class InstSnap(
             }
             val sv = FloatArray(n) { 1f }.also { a -> j.optJSONArray("synVel")?.let { for (i in 0 until min(n, it.length())) a[i] = it.optDouble(i, 1.0).toFloat() } }
             return InstSnap(ia("semi"), ba("gate"), ba("acc"), ba("slide"), dr, ba("tie"), j.optInt("acidLen", 16), j.optInt("drumLen", 16),
-                synSemi = ia("synSemi"), synGate = ba("synGate"), synTie = ba("synTie"), synVel = sv, synLen = j.optInt("synLen", 16))
+                synSemi = ia("synSemi"), synGate = ba("synGate"), synTie = ba("synTie"), synVel = sv, synLen = j.optInt("synLen", 16), synTrack = j.optInt("synTrack", 0))
         }
     }
 }
