@@ -635,7 +635,33 @@ class DjView(context: Context) : View(context) {
         } else ""
         mono.textAlign = Paint.Align.RIGHT
         c.drawText(info, ln.right - dp(2f), ln.top + dp(11f), mono)
-        val iw = mono.measureText(info) + dp(8f)
+        var iw = mono.measureText(info) + dp(8f)
+        // Tonart (Camelot) – Farbe zeigt, ob sie zum anderen Deck passt
+        keyHit[k].setEmpty()
+        if (dd.loaded()) {
+            val ek = dd.effKey()
+            val other = Dj.decks[1 - k]
+            val ok = if (other.loaded()) Keys.compat(other.effKey(), ek) else -1
+            val kc = when (ok) {
+                0, 1 -> Color.rgb(70, 220, 110)
+                2 -> Color.rgb(250, 190, 40)
+                3 -> Color.rgb(255, 80, 80)
+                else -> alpha(ink, 0.75f)
+            }
+            val drift = dd.keyDrift()
+            val ks = if (ek < 0) (if (dd.key < 0 && dd.keyGen > 0) "KEY…" else "KEY?") else
+                Keys.camelot(ek) + (if (dd.keyShift != 0) (if (dd.keyShift > 0) "+" else "") + dd.keyShift else "") + (if (abs(drift) >= 0.25) "~" else "") + (if (dd.keylock) "🔒" else "")
+            val kx = ln.right - dp(2f) - iw
+            val kw = mono.measureText(ks) + dp(6f)
+            tmp.set(kx - kw, ln.top + dp(1f), kx + dp(2f), ln.top + dp(14f))
+            fill.color = alpha(kc, 0.18f)
+            c.drawRoundRect(tmp, dp(4f), dp(4f), fill)
+            mono.color = kc
+            c.drawText(ks, kx - dp(1f), ln.top + dp(11f), mono)
+            mono.color = ink
+            keyHit[k].set(tmp.left - dp(4f), ln.top - dp(4f), tmp.right + dp(2f), ln.top + dp(18f))
+            iw += kw + dp(4f)
+        }
         mono.textAlign = Paint.Align.LEFT
         val maxW = ln.width() - iw - dp(16f)
         var t2 = title
@@ -733,6 +759,10 @@ class DjView(context: Context) : View(context) {
             mono.textAlign = Paint.Align.LEFT
         }
     }
+
+    private val keyHit = arrayOf(RectF(), RectF())
+    /** Tonart-Feld im Deck angetippt (Keylock, Key-Shift, Tonart). */
+    var onKeyMenu: ((Int) -> Unit)? = null
 
     private val HOT = intArrayOf(Color.rgb(255, 60, 90), Color.rgb(60, 220, 120), Color.rgb(70, 150, 255), Color.rgb(200, 90, 255))
 
@@ -1784,6 +1814,11 @@ class DjView(context: Context) : View(context) {
             if (hit(overview[k], x, y, dp(3f)) && Dj.decks[k].loaded()) {
                 ptrs[id] = Ptr(K.OVERVIEW, k, 0, x, y, now)
                 seekOverview(k, x)
+                return
+            }
+            if (!keyHit[k].isEmpty && hit(keyHit[k], x, y, 0f)) {
+                haptic()
+                onKeyMenu?.invoke(k)
                 return
             }
             if (hit(lanes[k], x, y, 0f)) {

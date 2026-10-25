@@ -185,6 +185,7 @@ class MainActivity : Activity() {
         dj.onSamplerLoad = { p -> showSamplerLoad(p) }
         dj.onEditSaveLib = { k -> saveDeckToLib(k) }
         dj.onSetRec = { toggleSetRec() }
+        dj.onKeyMenu = { k -> showKeyMenu(k) }
         pads.onSetRec = { toggleSetRec() }
         pads.onInfo = { showLogoMenu() }
         dj.onInfo = { showLogoMenu() }
@@ -1348,6 +1349,7 @@ class MainActivity : Activity() {
                 for (h in 0..3) dd.hot[h] = if (it.hot[h] >= 0) it.hot[h] * r else -1.0
                 dd.seekTo = dd.cuePoint
                 dd.libId = it.id
+                if (it.key >= 0) { dd.keyGen++; dd.key = it.key; dd.keyConf = 1f }
                 runOnUiThread { hint(String.format(Locale.GERMANY, "Deck %s: %s · %.1f BPM · Cue-Punkte geladen", "AB"[k], it.title, it.bpm)) }
             } catch (e: Throwable) {
                 runOnUiThread { toast("Laden fehlgeschlagen: ${e.message ?: e}") }
@@ -2666,6 +2668,64 @@ class MainActivity : Activity() {
             .show()
     }
 
+    /** Tonart eines Decks: Keylock, Key-Shift, harmonisch an das andere Deck anpassen, von Hand setzen. */
+    private fun showKeyMenu(k: Int) {
+        val dd = Dj.decks[k]
+        if (!dd.loaded()) return
+        val o = Dj.decks[1 - k]
+        val ek = dd.effKey()
+        val ok = if (o.loaded()) o.effKey() else -1
+        val title = if (dd.key < 0) "Deck ${"AB"[k]} · Tonart unbekannt" else
+            String.format(Locale.GERMANY, "Deck %s · %s (%s)%s · Sicherheit %d %%", "AB"[k], Keys.camelot(ek), Keys.name(ek),
+                if (dd.keyShift != 0) " · Original ${Keys.camelot(dd.key)}" else "", (dd.keyConf * 100).toInt())
+        val fit = if (ok >= 0 && dd.key >= 0) Keys.bestShift(ok, Keys.shift(dd.key, 0)) else null
+        val compatTxt = when (if (ok >= 0) Keys.compat(ok, ek) else -1) {
+            0 -> "✅ gleiche Tonart wie Deck ${"AB"[1 - k]}"
+            1 -> "✅ passt harmonisch zu Deck ${"AB"[1 - k]} (${Keys.camelot(ok)})"
+            2 -> "🟡 Energie-Wechsel zu Deck ${"AB"[1 - k]} (${Keys.camelot(ok)}) – geht, klingt spannend"
+            3 -> "🔴 beißt sich mit Deck ${"AB"[1 - k]} (${Keys.camelot(ok)})"
+            else -> "Anderes Deck: keine Tonart"
+        }
+        val items = arrayListOf<String>()
+        val acts = arrayListOf<() -> Unit>()
+        items.add(compatTxt); acts.add { showKeyMenu(k) }
+        items.add(if (dd.keylock) "🔒 Keylock AN – Tonhöhe bleibt beim Pitchen (antippen = aus)" else "🔓 Keylock AUS – Pitch verändert die Tonhöhe wie bei Platten (antippen = an)")
+        acts.add {
+            dd.keylock = !dd.keylock
+            dd.gReset = true
+            hint(if (dd.keylock) "🔒 Keylock Deck ${"AB"[k]}: Tempo ändern, Tonart bleibt" else "Keylock Deck ${"AB"[k]} aus")
+        }
+        if (fit != null && fit != dd.keyShift && o.loaded()) {
+            items.add("🎯 Passend zu Deck ${"AB"[1 - k]} machen: " + (if (fit == 0) "Original-Tonart" else (if (fit > 0) "+" else "") + "$fit Halbton") + " → ${Keys.camelot(Keys.shift(dd.key, fit))}")
+            acts.add { dd.keyShift = fit; dd.gReset = true; hint("Deck ${"AB"[k]}: Tonart ${Keys.camelot(dd.effKey())} – passt zu ${Keys.camelot(o.effKey())}") }
+        }
+        for (st in intArrayOf(1, -1, 2, -2)) {
+            val ns = (dd.keyShift + st).coerceIn(-6, 6)
+            items.add((if (st > 0) "♯ +$st" else "♭ $st") + " Halbton → " + (if (dd.key >= 0) Keys.camelot(Keys.shift(dd.key, ns)) else "") + "  (jetzt ${if (dd.keyShift > 0) "+" else ""}${dd.keyShift})")
+            acts.add { dd.keyShift = ns; dd.gReset = true; hint("Deck ${"AB"[k]}: Key-Shift ${if (ns > 0) "+" else ""}$ns" + if (dd.key >= 0) " → ${Keys.camelot(dd.effKey())}" else "") }
+        }
+        if (dd.keyShift != 0) {
+            items.add("⟲ Original-Tonart"); acts.add { dd.keyShift = 0; dd.gReset = true; hint("Deck ${"AB"[k]}: Original-Tonart ${Keys.camelot(dd.effKey())}") }
+        }
+        items.add("🔎 Tonart neu erkennen"); acts.add { hint("Erkenne Tonart …"); Dj.detectKeyAsync(dd) { runOnUiThread { hint("Deck ${"AB"[k]}: ${Keys.camelot(dd.key)} (${Keys.name(dd.key)}) · Sicherheit ${(dd.keyConf * 100).toInt()} %") } } }
+        items.add("✎ Tonart von Hand setzen …"); acts.add {
+            val order = (0 until 24).sortedWith(compareBy({ Keys.camelotNum(it) }, { if (Keys.isMinor(it)) 0 else 1 }))
+            ui().setTitle("Tonart Deck ${"AB"[k]}")
+                .setItems(order.map { "${Keys.camelot(it)} · ${Keys.name(it)}" }.toTypedArray()) { _, i ->
+                    dd.keyGen++
+                    dd.key = order[i]
+                    dd.keyConf = 1f
+                    if (dd.libId != null) saveDeckToLib(k)
+                }.show()
+        }
+        items.add("ℹ Camelot-Rad: Nachbarn (±1) und A↔B mischen sich harmonisch"); acts.add {
+            ui().setTitle("Harmonisch mixen")
+                .setMessage("Jede Tonart hat eine Nummer auf dem Camelot-Rad (1–12) und einen Buchstaben: A = Moll, B = Dur.\n\n✅ Gleiche Nummer, oder ±1 mit gleichem Buchstaben (8A → 7A / 9A), oder A↔B mit gleicher Nummer (8A ↔ 8B): klingt sauber.\n🟡 ±2 (Energie-Boost) oder Buchstabe wechseln und ±1: hörbar, aber spannend.\n🔴 Alles andere beißt sich meist.\n\nOhne Keylock ändert Pitchen die Tonart mit (~ hinter der Tonart = verschoben). Keylock 🔒 hält sie fest; Key-Shift verschiebt sie gezielt.")
+                .setPositiveButton("OK", null).show()
+        }
+        ui().setTitle(title).setItems(items.toTypedArray()) { _, w -> acts[w]() }.setNegativeButton("Schließen", null).show()
+    }
+
     /** Cue-Punkte des Decks in der DJ-Bibliothek sichern (bzw. den Track neu aufnehmen). */
     private fun saveDeckToLib(k: Int) {
         val dd = Dj.decks[k]
@@ -2673,7 +2733,7 @@ class MainActivity : Activity() {
         val hot = DoubleArray(4) { if (dd.hot[it] >= 0) dd.hot[it] / r else -1.0 }
         val id = dd.libId
         if (id != null) {
-            DjLibrary.update(this, id, dd.bpm, dd.grid / r, dd.cuePoint / r, hot)
+            DjLibrary.update(this, id, dd.bpm, dd.grid / r, dd.cuePoint / r, hot, dd.key)
             hint("💾 Cue-Punkte gespeichert")
             return
         }
@@ -2689,7 +2749,7 @@ class MainActivity : Activity() {
                         val f = min(dd.len - 1, (i.toLong() * dd.srcRate / rate).toInt())
                         mono[i] = if (dd.ch == 2) (d[2 * f] + d[2 * f + 1]) / 65536f else d[f] / 32768f
                     }
-                    val it = DjLibrary.add(this, mono, rate, name, dd.bpm, dd.grid / r, dd.cuePoint / r, hot)
+                    val it = DjLibrary.add(this, mono, rate, name, dd.bpm, dd.grid / r, dd.cuePoint / r, hot, dd.key)
                     dd.libId = it.id
                     runOnUiThread { hint("💿 „$name“ mit Cue-Punkten in der DJ-Bibliothek") }
                 } catch (e: Throwable) {

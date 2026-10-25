@@ -18,7 +18,8 @@ object DjLibrary {
         val grid: Double,
         val cue: Double,
         val hot: DoubleArray,
-        val seconds: Double
+        val seconds: Double,
+        val key: Int = -1
     )
 
     private fun dir(ctx: Context): File = File(ctx.filesDir, "djlib").apply { mkdirs() }
@@ -42,14 +43,14 @@ object DjLibrary {
             out.add(Item(
                 o.optString("id"), f, o.optString("title"), o.optDouble("bpm", 120.0).toFloat(),
                 o.optDouble("grid", 0.0), o.optDouble("cue", 0.0),
-                DoubleArray(4) { k -> h?.optDouble(k, -1.0) ?: -1.0 }, o.optDouble("sec", 0.0)
+                DoubleArray(4) { k -> h?.optDouble(k, -1.0) ?: -1.0 }, o.optDouble("sec", 0.0), o.optInt("key", -1)
             ))
         }
         return out.reversed()
     }
 
     /** Speichert Audio (mono) mit Cue-Punkten (Sekunden ab Anfang des Audios). */
-    fun add(ctx: Context, data: FloatArray, rate: Int, title: String, bpm: Float, grid: Double, cue: Double, hot: DoubleArray): Item {
+    fun add(ctx: Context, data: FloatArray, rate: Int, title: String, bpm: Float, grid: Double, cue: Double, hot: DoubleArray, key: Int = -1): Item {
         val id = "dj_" + System.currentTimeMillis()
         val f = File(dir(ctx), "$id.wav")
         f.outputStream().buffered().use { AudioFiles.writeWav(it, data, rate) }
@@ -63,13 +64,14 @@ object DjLibrary {
         o.put("cue", cue)
         o.put("hot", JSONArray().apply { hot.forEach { put(it) } })
         o.put("sec", data.size.toDouble() / rate)
+        o.put("key", key)
         a.put(o)
         index(ctx).writeText(a.toString())
-        return Item(id, f, title, bpm, grid, cue, hot, data.size.toDouble() / rate)
+        return Item(id, f, title, bpm, grid, cue, hot, data.size.toDouble() / rate, key)
     }
 
     /** Cue-Punkte und Tempo eines Eintrags aktualisieren (z. B. im DJ-Modus neu gesetzt). */
-    fun update(ctx: Context, id: String, bpm: Float, grid: Double, cue: Double, hot: DoubleArray) {
+    fun update(ctx: Context, id: String, bpm: Float, grid: Double, cue: Double, hot: DoubleArray, key: Int = -1) {
         val a = readIndex(ctx)
         for (i in 0 until a.length()) {
             val o = a.optJSONObject(i) ?: continue
@@ -78,6 +80,7 @@ object DjLibrary {
             o.put("grid", grid)
             o.put("cue", cue)
             o.put("hot", JSONArray().apply { hot.forEach { put(it) } })
+            if (key >= 0) o.put("key", key)
         }
         index(ctx).writeText(a.toString())
     }

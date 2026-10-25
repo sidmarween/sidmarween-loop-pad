@@ -117,6 +117,32 @@ object Dj {
         @Volatile var level = 0f
         /** Effektives Tempo-Verhältnis (für Anzeige). */
         @Volatile var ratio = 1.0
+        /** Tonart (0..11 Dur, 12..23 Moll, -1 unbekannt) und Sicherheit der Erkennung. */
+        @Volatile var key = -1
+        @Volatile var keyConf = 0f
+        @Volatile var keyGen = 0
+        /** Keylock (Master Tempo): Tonhöhe bleibt beim Tempo-Ändern gleich. */
+        @Volatile var keylock = false
+        /** Tonart verschieben (Halbtöne, −6..+6) – schaltet automatisch Keylock-Klang ein. */
+        @Volatile var keyShift = 0
+        // Keylock-Körner (Mischer-Thread)
+        internal val gPos = DoubleArray(2)
+        internal val gAge = IntArray(2)
+        internal val gOn = BooleanArray(2)
+        internal var gSlot = 0
+        internal var gNext = 0
+        @Volatile internal var gReset = true
+        internal var gWin = FloatArray(0)
+
+        /** Hörbare Tonart: mit Key-Shift und (ohne Keylock) der Tonhöhenänderung durchs Tempo. */
+        fun effKey(): Int {
+            if (key < 0) return -1
+            val tempoSemis = if (keylock || keyShift != 0) 0.0 else Keys.semisOfRatio(ratio * (1.0 + bend))
+            return Keys.shift(key, keyShift + Math.round(tempoSemis).toInt())
+        }
+
+        /** Tempo verbiegt die Tonhöhe hörbar (ohne Keylock, ab ~¼ Halbton). */
+        fun keyDrift(): Double = if (keylock || keyShift != 0) 0.0 else Keys.semisOfRatio(ratio)
 
         internal val lpL = Biquad(); internal val lpR = Biquad()
         internal val hpL = Biquad(); internal val hpR = Biquad()
@@ -250,6 +276,7 @@ object Dj {
         if (st >= 0) {
             d.pos = st.coerceIn(0.0, (len - 2).toDouble())
             d.seekTo = -1.0
+            d.gReset = true
         }
         val base = d.srcRate.toDouble() / sr
         val mb = Engine.currentBpm()
@@ -287,6 +314,16 @@ object Dj {
             return
         }
         val rate = if (d.scratching) d.scratchVel else base * ratio * (1.0 + d.bend)
+        // Keylock / Key-Shift: Tempo und Tonhöhe getrennt (Körner-Verfahren mit Phasen-Suche)
+        if (!d.scratching && (d.keylock || d.keyShift != 0)) {
+            val pf = Keys.factor(d.keyShift.toDouble())
+            val speed = if (d.keylock) base * pf else rate * pf
+            if (abs(speed - rate) > 1e-6) {
+                renderLocked(d, data, ch, len, bl, br, n, rate, speed, sr)
+                return
+            }
+        }
+        d.gReset = true
         var p = d.pos
         val lOn = d.loopOn && d.loopOut > d.loopIn + 16
         val li = d.loopIn
@@ -323,6 +360,142 @@ object Dj {
         d.pos = p
     }
 
+    /** Quellposition mit Loop-Umbruch (für Körner, die über das Loop-Ende hinaus lesen). */
+    private fun wrapLoop(d: Deck, pos: Double): Double {
+        if (!d.loopOn) return pos
+        val li = d.loopIn
+        val lo = d.loopOut
+        val l = lo - li
+        if (l <= 16 || pos < lo) return pos
+        return li + (pos - li) % l
+    }
+
+    private fun monoAt(data: ShortArray, ch: Int, len: Int, i: Int): Float {
+        if (i < 0 || i >= len) return 0f
+        return if (ch == 2) (data[2 * i] + data[2 * i + 1]) * 0.5f else data[i].toFloat()
+    }
+
+    /**
+     * Keylock-Wiedergabe: Abspielkopf läuft mit [rate] (Tempo), der Klang wird aus überlappenden
+     * Körnern (~60 ms, Hann, 50 %) mit Tonhöhe [speed] gelesen. Jedes neue Korn sucht im Umfeld
+     * des Abspielkopfs die Stelle, die am besten an das vorige anschließt (wie WSOLA) – kein Flattern.
+     */
+    private fun renderLocked(d: Deck, data: ShortArray, ch: Int, len: Int, bl: FloatArray, br: FloatArray, n: Int, rate: Double, speed: Double, sr: Int) {
+        val g = ((sr * 0.06).toInt() / 2) * 2
+        val h = g / 2
+        if (d.gWin.size != g) {
+            d.gWin = FloatArray(g) { val s = sin(PI * it / g); (s * s).toFloat() }
+            d.gReset = true
+        }
+        val win = d.gWin
+        var p = d.pos
+        val last = len - 2
+        val lOn = d.loopOn && d.loopOut > d.loopIn + 16
+        val li = d.loopIn
+        val lo = d.loopOut
+        val tol = (d.srcRate * 0.012).toInt()
+        val corrN = (d.srcRate * 0.012).toInt()
+        for (i in 0 until n) {
+            if (d.gReset) {
+                // Neustart (Play, Sprung, Seek): ein Korn schon halb durch, das nächste beginnt sofort – keine Delle
+                d.gReset = false
+                d.gSlot = 0
+                d.gPos[0] = p - h * speed
+                d.gAge[0] = h
+                d.gOn[0] = true
+                d.gOn[1] = false
+                d.gSlot = 1
+                d.gNext = 0
+            }
+            if (d.gNext <= 0) {
+                val s = d.gSlot
+                val prev = 1 - s
+                var c = p
+                if (d.gOn[prev]) {
+                    // natürliche Fortsetzung des vorigen Korns
+                    val nat = wrapLoop(d, d.gPos[prev] + d.gAge[prev] * speed).toInt()
+                    var best = p
+                    var bs = Double.NEGATIVE_INFINITY
+                    var cand = -tol
+                    val pi0 = p.toInt()
+                    while (cand <= tol) {
+                        val cc = pi0 + cand
+                        var sum = 0.0
+                        var e = 1e-9
+                        var j = 0
+                        while (j < corrN) {
+                            val u = monoAt(data, ch, len, cc + j)
+                            sum += u * monoAt(data, ch, len, nat + j)
+                            e += u * u
+                            j += 6
+                        }
+                        val sc = sum / sqrt(e)
+                        if (sc > bs) { bs = sc; best = cc.toDouble() }
+                        cand += 3
+                    }
+                    c = best
+                }
+                d.gPos[s] = c
+                d.gAge[s] = 0
+                d.gOn[s] = true
+                d.gSlot = prev
+                d.gNext = h
+            }
+            d.gNext--
+            var l = 0f
+            var r = 0f
+            for (k in 0..1) {
+                if (!d.gOn[k]) continue
+                val age = d.gAge[k]
+                val sp = wrapLoop(d, d.gPos[k] + age * speed)
+                if (sp >= 0 && sp < last) {
+                    val i0 = sp.toInt()
+                    val fr = (sp - i0).toFloat()
+                    val a = i0 * ch
+                    val b = a + ch
+                    val w = win[age]
+                    val l0 = data[a] / 32768f
+                    val l1 = data[b] / 32768f
+                    l += (l0 + (l1 - l0) * fr) * w
+                    r += if (ch == 2) (data[a + 1] / 32768f + (data[b + 1] / 32768f - data[a + 1] / 32768f) * fr) * w else (l0 + (l1 - l0) * fr) * w
+                }
+                d.gAge[k] = age + 1
+                if (d.gAge[k] >= g) d.gOn[k] = false
+            }
+            bl[i] = l
+            br[i] = r
+            p += rate
+            if (lOn && p >= lo) p -= (lo - li)
+            if (p > last) {
+                bl[i] = 0f; br[i] = 0f
+            }
+        }
+        if (p >= last) {
+            d.playing = false
+            p = last.toDouble()
+        }
+        d.pos = p
+    }
+
+    /** Tonart eines geladenen Decks im Hintergrund erkennen. */
+    fun detectKeyAsync(d: Deck, then: (() -> Unit)? = null) {
+        val gen = ++d.keyGen
+        val data = d.data ?: return
+        val ch = d.ch
+        val len = d.len
+        val rate = d.srcRate
+        Thread {
+            try {
+                val (k, c) = Keys.detect(data, ch, len, rate)
+                if (gen == d.keyGen) {
+                    d.key = k
+                    d.keyConf = c
+                    then?.invoke()
+                }
+            } catch (ignored: Throwable) {}
+        }.start()
+    }
+
     /** Schlag-Phase (0..1) eines Decks an einer Position. */
     fun beatPhase(d: Deck, pos: Double): Double {
         val bf = d.beatFrames()
@@ -345,6 +518,7 @@ object Dj {
 
     fun togglePlay(d: Deck) {
         if (!d.loaded()) return
+        d.gReset = true
         if (!d.playing && d.sync) d.syncReq = true
         d.playing = !d.playing
     }
@@ -583,7 +757,12 @@ object Dj {
         d.seekTo = grid
         d.pitch = 0f
         d.libId = null
+        d.key = -1
+        d.keyConf = 0f
+        d.keyShift = 0
+        d.gReset = true
         d.data = t.data
+        detectKeyAsync(d)
     }
 
     class Wave(val peaks: ByteArray, val lows: ByteArray, val env: FloatArray, val fps: Double, val onset: FloatArray)
