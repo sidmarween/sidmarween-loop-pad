@@ -48,6 +48,7 @@ class MainActivity : Activity() {
         djMode = toDj
         if (toDj) pads.closeFocus()
         getSharedPreferences("marvpad", MODE_PRIVATE).edit().putBoolean("djMode", toDj).apply()
+        applyDjOrientation()
         val v = mainView()
         v.alpha = 0f
         setContentView(v)
@@ -55,6 +56,13 @@ class MainActivity : Activity() {
         v.requestApplyInsets()
         v.animate().alpha(1f).setDuration(250L).start()
         if (toDj) hint("🎧 DJ-Modus: oben Track antippen zum Laden · ▦ PADS wechselt zurück")
+    }
+
+    /** DJ-Modus im Querformat (wie ein Controller) – abschaltbar; Pad-Modus bleibt hochkant. */
+    private fun applyDjOrientation() {
+        val land = getSharedPreferences("marvpad", MODE_PRIVATE).getBoolean("djLand", true)
+        requestedOrientation = if (djMode && land) android.content.pm.ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+            else android.content.pm.ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -2090,7 +2098,13 @@ class MainActivity : Activity() {
 
     /** Hauptmenü in Gruppen: Projekt · Aufnahme & Wiedergabe · Aussehen · Audio & MIDI · Hilfe. */
     private fun showMainMenu() {
-        val groups = (if (djMode) listOf<Pair<String, () -> Unit>>((if (Dj.gigMode) "🎤 GIG-MODUS AN – beenden" else "🎤 GIG-MODUS starten (Bühne: Schutz, Bildschirm an, Nicht stören)") to { if (Dj.gigMode) stopGig() else showGigCheck() }) else emptyList()) + listOf(
+        val djLand = getSharedPreferences("marvpad", MODE_PRIVATE).getBoolean("djLand", true)
+        val groups = (if (djMode) listOf<Pair<String, () -> Unit>>(
+            (if (Dj.gigMode) "🎤 GIG-MODUS AN – beenden" else "🎤 GIG-MODUS starten (Bühne: Schutz, Bildschirm an, Nicht stören)") to { if (Dj.gigMode) stopGig() else showGigCheck() },
+            (if (djLand) "📱 DJ im Querformat (wie ein Controller) – antippen = hochkant" else "📱 DJ hochkant – antippen = Querformat wie ein Controller") to {
+                getSharedPreferences("marvpad", MODE_PRIVATE).edit().putBoolean("djLand", !djLand).apply()
+                applyDjOrientation()
+            }) else emptyList()) + listOf(
             "💾 Projekt & Dateien" to { showMenuGroup(0) },
             "🎙 Aufnahme & Wiedergabe" to { showMenuGroup(1) },
             "🎨 Aussehen: Designs, Schriften, Ansicht" to { showMenuGroup(2) },

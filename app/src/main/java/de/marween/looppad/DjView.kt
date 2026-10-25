@@ -156,6 +156,10 @@ class DjView(context: Context) : View(context) {
     /** Pad-Bereich hochgeschoben: Regler/XY ausgeblendet, Pads groß (beide Decks bzw. alle Sampler). */
     var padsBig = false
         private set
+    /** Querformat: Deck A links, Deck B rechts, Mischpult in der Mitte (wie ein Controller). */
+    private var land = false
+    /** Beide Decks gleichzeitig mit je 8 Pads (groß hochkant oder Querformat). */
+    private val dual: Boolean get() = padsBig || land
     private var padCount = 8
     private val MODE_NAMES = arrayOf("CUES", "LOOP", "ROLL", "FX", "SAMPLER")
     private val MODE_COLS = intArrayOf(Color.rgb(255, 150, 40), Color.rgb(60, 200, 120), Color.rgb(70, 160, 255), Color.rgb(255, 70, 110), Color.rgb(190, 120, 255))
@@ -250,6 +254,8 @@ class DjView(context: Context) : View(context) {
         val w = width.toFloat()
         val h = height.toFloat()
         if (w <= 0f || h <= 0f) return
+        land = w > h * 1.15f
+        if (land) { layoutLand(w, h); return }
         val m = dp(10f)
         val fr = when (skin.frame) { 1 -> dp(12f); 2 -> dp(18f); else -> 0f }
         panel.set(fr + dp(4f), insetTop + dp(4f), w - fr - dp(4f), h - insetBottom - dp(4f))
@@ -347,9 +353,90 @@ class DjView(context: Context) : View(context) {
         for (i in padCount until pads.size) off(pads[i])
     }
 
+    /**
+     * Querformat wie ein DJ-Controller: links Deck A (Wellenform, Play/Cue/Sync/🎧/FX, 4×2 Pads,
+     * Pitch außen), rechts Deck B gespiegelt, in der Mitte Reiter, Regler, Kanal-Fader, XY und Crossfader.
+     */
+    private fun layoutLand(w: Float, h: Float) {
+        fun off(r: RectF) = r.set(-9999f, -9999f, -9998f, -9998f)
+        val m = dp(8f)
+        val fr = when (skin.frame) { 1 -> dp(10f); 2 -> dp(14f); else -> 0f }
+        panel.set(fr + dp(4f), insetTop + dp(4f), w - fr - dp(4f), h - insetBottom - dp(4f))
+        val L = panel.left + m
+        val R = panel.right - m
+        var y = panel.top + dp(4f)
+        header.set(L, y, R, y + dp(40f))
+        menuBtn.set(R - dp(40f), y + dp(4f), R, y + dp(36f))
+        padsBtn.set(menuBtn.left - dp(78f), y + dp(4f), menuBtn.left - dp(6f), y + dp(36f))
+        setRecBtn.set(padsBtn.left - dp(78f), y + dp(4f), padsBtn.left - dp(6f), y + dp(36f))
+        masterBtn.set(setRecBtn.left - dp(78f), y + dp(4f), setRecBtn.left - dp(6f), y + dp(36f))
+        bpmChip.set(masterBtn.left - dp(96f), y + dp(4f), masterBtn.left - dp(6f), y + dp(36f))
+        y = header.bottom + dp(6f)
+        val bottom = panel.bottom - m
+        val gap = dp(10f)
+        val cw = max(dp(230f), (R - L) * 0.27f)
+        val dw = (R - L - cw - 2 * gap) / 2f
+        display.setEmpty()
+        for (k in 0..1) {
+            val x0 = if (k == 0) L else R - dw
+            val x1 = x0 + dw
+            val lh = (bottom - y) * 0.36f
+            lanes[k].set(x0 + dp(4f), y + dp(4f), x1 - dp(4f), y + lh - dp(4f))
+            overview[k].set(lanes[k].left, lanes[k].bottom - dp(7f), lanes[k].right, lanes[k].bottom - dp(1f))
+            val pw = dp(30f)
+            val y2 = y + lh + dp(6f)
+            if (k == 0) pitch[0].set(x0, y2, x0 + pw, bottom - dp(12f)) else pitch[1].set(x1 - pw, y2, x1, bottom - dp(12f))
+            val ix0 = if (k == 0) x0 + pw + dp(8f) else x0
+            val ix1 = if (k == 0) x1 else x1 - pw - dp(8f)
+            val sh = dp(34f)
+            val sg = dp(5f)
+            val sw = (ix1 - ix0 - 4 * sg) / 5f
+            for (i in 0..4) side[k][i].set(ix0 + i * (sw + sg), y2, ix0 + i * (sw + sg) + sw, y2 + sh)
+            val py = y2 + sh + dp(8f)
+            val pg = dp(7f)
+            val phh = (bottom - py - pg) / 2f
+            val pww = (ix1 - ix0 - 3 * pg) / 4f
+            for (r in 0..1) for (cI in 0..3) {
+                val px = ix0 + cI * (pww + pg)
+                val pyy = py + r * (phh + pg)
+                pads[k * 8 + r * 4 + cI].set(px, pyy, px + pww, pyy + phh)
+            }
+        }
+        padCount = 16
+        // Mitte
+        val cx0 = L + dw + gap
+        val cx1 = cx0 + cw
+        val tabH = dp(32f)
+        tabBar.set(cx0, y, cx1, y + tabH)
+        tabDeckR.setEmpty()
+        tabBigR.setEmpty()
+        val mw = (cx1 - cx0) / 5f
+        for (i in 0..4) tabModeR[i].set(cx0 + i * mw + dp(1.5f), y, cx0 + (i + 1) * mw - dp(1.5f), y + tabH)
+        var cy = y + tabH + dp(8f)
+        val kh = min(dp(52f), (bottom - cy) * 0.2f)
+        val kw = (cx1 - cx0) / 4f
+        for (i in 0..3) knobs[i].set(cx0 + i * kw, cy, cx0 + (i + 1) * kw, cy + kh + dp(12f))
+        cy += kh + dp(16f)
+        val th = dp(26f)
+        val tg = dp(6f)
+        val tw = (cx1 - cx0 - 2 * tg) / 3f
+        for (i in 0..2) tops[i].set(cx0 + i * (tw + tg), cy, cx0 + i * (tw + tg) + tw, cy + th)
+        cy += th + dp(10f)
+        val xh = dp(36f)
+        val vb = bottom - xh - dp(10f)
+        val vw = dp(34f)
+        vol[0].set(cx0, cy + dp(8f), cx0 + vw, vb)
+        vol[1].set(cx1 - vw, cy + dp(8f), cx1, vb)
+        val xl = vol[0].right + dp(8f)
+        val xr = vol[1].left - dp(8f)
+        val xs = min(xr - xl, vb - cy)
+        xy.set((xl + xr) / 2f - xs / 2f, cy + (vb - cy - xs) / 2f, (xl + xr) / 2f + xs / 2f, cy + (vb - cy + xs) / 2f)
+        xfader.set(cx0 + dp(6f), bottom - xh, cx1 - dp(6f), bottom)
+    }
+
     /** Pad-Bereich groß/klein umschalten. */
     fun setPadsBig(on: Boolean) {
-        if (padsBig == on) return
+        if (land || padsBig == on) return
         padsBig = on
         for (i in padDown.indices) padDown[i] = false
         layoutAll()
@@ -652,6 +739,29 @@ class DjView(context: Context) : View(context) {
 
     private fun drawDisplay(c: Canvas) {
         val s = skin
+        if (land) {
+            // je Deck ein eigener Bildschirm über seiner Spalte
+            for (k in 0..1) {
+                val r = RectF(lanes[k].left - dp(4f), lanes[k].top - dp(4f), lanes[k].right + dp(4f), lanes[k].bottom + dp(4f))
+                val rad = dp(10f)
+                fill.shader = null
+                fill.color = if (s.dark) Color.argb(200, 0, 0, 0) else Color.argb(70, 0, 0, 0)
+                tmp.set(r.left - dp(3f), r.top - dp(3f), r.right + dp(3f), r.bottom + dp(3f))
+                c.drawRoundRect(tmp, rad + dp(2f), rad + dp(2f), fill)
+                fill.color = s.dispBg
+                c.drawRoundRect(r, rad, rad, fill)
+                c.save()
+                path.reset()
+                path.addRoundRect(r, rad, rad, Path.Direction.CW)
+                c.clipPath(path)
+                drawLane(c, k)
+                c.restore()
+                stroke.strokeWidth = dp(1f)
+                stroke.color = alpha(s.dispInk, 0.35f)
+                c.drawRoundRect(r, rad, rad, stroke)
+            }
+            return
+        }
         val r = display
         val rad = dp(10f)
         // Einfassung + Bildschirm
@@ -1619,7 +1729,7 @@ class DjView(context: Context) : View(context) {
     private fun padSpec(i: Int): PadSpec {
         val mc = MODE_COLS[padMode]
         if (padMode == 4) {
-            val idx = if (padsBig) i else samplerPage * 8 + i
+            val idx = if (dual) i else samplerPage * 8 + i
             if (idx < 12) {
                 val p = idx
                 val st = Engine.state(p)
@@ -1640,8 +1750,8 @@ class DjView(context: Context) : View(context) {
                 else -> PadSpec("TAP", false, skin.accent, false, -1, idx)
             }
         }
-        val k = if (padsBig) i / 8 else padDeck
-        val sl = if (padsBig) i % 8 else i
+        val k = if (dual) i / 8 else padDeck
+        val sl = if (dual) i % 8 else i
         val dd = Dj.decks[k]
         return when (padMode) {
             0 -> PadSpec("CUE ${sl + 1}", dd.hot[sl] >= 0, HOT[sl], false, k, sl)
@@ -1874,7 +1984,7 @@ class DjView(context: Context) : View(context) {
             }
         }
         // Deck-Kennung: groß über jedem 4×2-Block
-        if (padsBig && padMode != 4) {
+        if (padsBig && !land && padMode != 4) {
             text.textSize = dp(10f)
             for (k in 0..1) {
                 val r0 = pads[k * 8]
@@ -2390,7 +2500,7 @@ class DjView(context: Context) : View(context) {
     /** MIDI/außen: Pad-Anzeige blinken lassen. */
     fun flashSampler(p: Int) {
         if (padMode != 4 || p !in 0 until 12) return
-        val v = if (padsBig) p else p - samplerPage * 8
+        val v = if (dual) p else p - samplerPage * 8
         if (v in 0 until padCount) padFlash[v] = 1f
     }
 
