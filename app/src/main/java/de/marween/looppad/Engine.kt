@@ -41,6 +41,8 @@ class Loop(val data: FloatArray) {
     @Volatile var src: FloatArray? = null
     @Volatile var srcBpm: Float = 0f
     @Volatile var warpBars: Float = 0f
+    /** Audio direkt vor [src] im Original (Song-Ausschnitt) – für den nahtlosen Übergang Ende → Anfang. */
+    @Volatile var srcPre: FloatArray? = null
     /** Lautstärke des Pads (Wischen hoch/runter). */
     @Volatile var gain: Float = 1f
     /** Original-Tempo: nicht ins Raster gedehnt (Auto-Beatmatch war aus). */
@@ -3457,6 +3459,7 @@ object Engine {
         c.src = l.src
         c.srcBpm = l.srcBpm
         c.warpBars = l.warpBars
+        c.srcPre = l.srcPre
         c.gain = l.gain
         c.free = l.free
         c.cue = if (data.size == l.data.size) l.cue else 0
@@ -4162,7 +4165,7 @@ object Engine {
     /** Ursprüngliches (ungedehntes) Audio eines gebeatmatchten Pads, falls vorhanden. */
     fun padSource(p: Int): FloatArray? = loops.get(p)?.let { l -> if (l.oneShot) null else (l.src ?: l.data)?.copyOf() }
 
-    fun importClip(p: Int, src: FloatArray, info: Warp.Info): String {
+    fun importClip(p: Int, src: FloatArray, info: Warp.Info, preIn: FloatArray? = null): String {
         padSyncStart[p] = false
         if (src.isEmpty()) return "Leere Datei"
         if (padOneShot[p]) {
@@ -4188,15 +4191,13 @@ object Engine {
             val e = min(src.size, o + max(2, want))
             src.copyOfRange(o, e).let { if (it.size < want) it.copyOf(want) else it }
         } else src
-        val data = Warp.stretch(body, target, sampleRate)
-        val fade = min(data.size / 4, sampleRate * FADE_MS / 1000)
-        for (i in 0 until fade) {
-            val g = i.toFloat() / fade
-            data[i] *= g
-            data[data.size - 1 - i] *= g
-        }
+        // Audio vor dem Schnitt: das Loop-Ende blendet hinein (kein Knacks, keine Lücke auf der Eins)
+        val pre = preIn ?: if (info.cut && info.offset > 0) src.copyOfRange(max(0, info.offset - sampleRate / 20), info.offset.coerceAtMost(src.size)) else null
+        // BEATS-Warp: jeder Schlag landet exakt auf seinem 1/16-Platz (vorher WSOLA: bis zu ~20 ms daneben = Holpern)
+        val data = Warp.stretchBeats(body, target, sampleRate, info.bars, pre)
         val loop = Loop(data)
         loop.src = body
+        loop.srcPre = pre
         loop.srcBpm = info.bpm
         loop.warpBars = info.bars
         loop.start = masterStart
@@ -4226,7 +4227,7 @@ object Engine {
                 if (m <= 0L) return@Thread
                 val target = max(64L, (l.warpBars * m).toLong()).toInt()
                 if (target == l.data.size) continue
-                val data = Warp.stretch(src, target, sampleRate)
+                val data = Warp.stretchBeats(src, target, sampleRate, l.warpBars, l.srcPre)
                 if (gen != warpGen) return@Thread
                 val nl = cloneLoop(l, data)
                 nl.muted = l.muted

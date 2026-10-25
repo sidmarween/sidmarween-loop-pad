@@ -1397,7 +1397,8 @@ class MainActivity : Activity() {
         if (len < rate / 20) { runOnUiThread { toast("Zu kurz ab dem Startpunkt") }; return }
         val clip = src.copyOfRange(startFrame, startFrame + len)
         Engine.padOneShot[p] = false
-        val desc = Engine.importClip(p, clip, Warp.Info(bpm, bars, "DJ"))
+        val pre = if (startFrame > 0) src.copyOfRange(max(0, startFrame - rate / 20), startFrame) else null
+        val desc = Engine.importClip(p, clip, Warp.Info(bpm, bars, "DJ"), pre)
         Engine.padSyncStart[p] = true
         runOnUiThread { hint("Pad ${p + 1}: $title · $desc · antippen startet synchron ab dem Startpunkt") }
     }

@@ -205,6 +205,229 @@ object Warp {
         return out
     }
 
+    // ---------------------------------------------------------------- BEATS-Warp (rhythmisch exakt)
+
+    /**
+     * Rhythmus-treues Dehnen (wie Ableton „Beats“): der Loop wird in 1/16-Stücke zerlegt (Grenzen auf
+     * den nächsten Anschlag gerastet), jedes Stück einzeln gedehnt und genau auf seinen 1/16-Platz im
+     * neuen Tempo gelegt. So landet jeder Schlag exakt im Raster – kein Holpern, kein Verschmieren.
+     * [pre] = Audio direkt VOR x[0] im Original (bei Song-Ausschnitten): das Loop-Ende blendet hinein,
+     * damit der Übergang Ende → Anfang ohne Knacks ist. Ohne [pre] gilt x als nahtloser Loop.
+     */
+    fun stretchBeats(x: FloatArray, outLen: Int, sr: Int, bars: Float, pre: FloatArray? = null): FloatArray {
+        val n = x.size
+        if (outLen <= 1 || n < 2) return FloatArray(max(1, outLen))
+        if (abs(n.toDouble() / outLen - 1.0) < 0.0015) return seamEnd(fitLen(x, outLen), pre, sr)
+        var slices = max(1, (bars * 16f).roundToInt()).coerceAtMost(4096)
+        // Stücke nicht kürzer als ~45 ms (dann 1/8, 1/4 …)
+        while (slices > 1 && n / slices < sr * 0.045) slices /= 2
+        val hit = BooleanArray(slices + 1)
+        val bounds = sliceBounds(x, sr, slices, hit)
+        // geschnitten wird nur an echten Anschlägen: dazwischen läuft der Klang ungeteilt (keine Dellen
+        // in gehaltenen Tönen), jeder Anschlag sitzt aber genau auf seinem 1/16-Platz
+        val cuts = ArrayList<Int>()
+        cuts.add(0)
+        for (k in 1 until slices) if (hit[k]) cuts.add(k)
+        cuts.add(slices)
+        val out = FloatArray(outLen)
+        val xf = max(16, (sr * 0.002).toInt())
+        for (ci in 0 until cuts.size - 1) {
+            val k = cuts[ci]
+            val k2 = cuts[ci + 1]
+            val a = bounds[k]
+            val ls = bounds[k2] - a
+            val o0 = (k.toLong() * outLen / slices).toInt()
+            val lo = (k2.toLong() * outLen / slices).toInt() - o0
+            if (lo <= 0) continue
+            val last = k2 == slices
+            // An einem Anschlag: Stück endet mit 1 ms Ausblende, das nächste setzt (fast) hart ein –
+            // der Anschlag verdeckt den Schnitt und sitzt exakt. Nur der Loop-Übergang ohne [pre]
+            // (nahtloser Loop) und Stück 0 ohne Anschlag werden weich überblendet.
+            val softStart = k == 0 && pre == null && !hit[0]
+            val tail = if (last && pre == null) xf else 0
+            val seg = stretchSeg(x, a, max(1, ls), lo, tail, sr)
+            val fo = max(8, sr / 1000)
+            val fi = if (softStart) xf else max(4, sr / 4000)
+            for (j in seg.indices) {
+                var g = 1f
+                if (j < fi && !(k == 0 && pre != null)) g = (j + 1).toFloat() / (fi + 1)
+                if (tail == 0 && !last && j >= lo - fo) g *= (lo - j).toFloat() / (fo + 1)
+                if (j >= lo) g *= 1f - (j - lo + 1).toFloat() / (tail + 1)
+                out[(o0 + j) % outLen] += seg[j] * g
+            }
+        }
+        return seamEnd(out, pre, sr)
+    }
+
+    /** Ende in das Audio vor dem Anfang blenden (gleiche Leistung) – nahtloser Übergang Ende → Anfang. */
+    private fun seamEnd(out: FloatArray, pre: FloatArray?, sr: Int): FloatArray {
+        if (pre == null || pre.isEmpty()) return out
+        val xf = min(min(pre.size, out.size / 8), (sr * 0.012).toInt())
+        for (i in 0 until xf) {
+            val t = (i + 1).toFloat() / (xf + 1)
+            val k = out.size - xf + i
+            out[k] = out[k] * cos(t * PI.toFloat() / 2f) + pre[pre.size - xf + i] * kotlin.math.sin(t * PI.toFloat() / 2f)
+        }
+        return out
+    }
+
+    /** 1/16-Grenzen, jeweils auf einen Anschlag in der Nähe (±12 ms) gerastet. */
+    fun sliceBounds(x: FloatArray, sr: Int, slices: Int, hit: BooleanArray? = null): IntArray {
+        val n = x.size
+        val b = IntArray(slices + 1)
+        b[slices] = n
+        if (hit != null) {
+            // Anschlag ganz am Anfang? (Loop: davor liegt das Ende)
+            val q = max(1, sr / 1000)
+            fun en(from: Int, len: Int): Double { var s = 1e-12; for (i in 0 until len) { val k = Math.floorMod(from + i, n); val d = x[k] - x[Math.floorMod(k - 1, n)]; s += (d * d + 0.25f * x[k] * x[k]).toDouble() }; return s / len }
+            var pm = 0.0
+            for (t in 3..12) pm = max(pm, en(-t * q, q))
+            hit[0] = ln(en(0, 2 * q) / pm) > 1.4
+        }
+        if (slices == 1) return b
+        val hop = max(1, sr / 1000)
+        val nf = n / hop
+        // Anschlagsstärke: Energie-Anstieg des Hochpass-Signals (1 ms Raster)
+        val e = FloatArray(nf)
+        var prev = 0f
+        for (f in 0 until nf) {
+            var s = 0.0
+            val o = f * hop
+            for (i in 0 until hop) {
+                val v = x[o + i]
+                val h = v - prev
+                prev = v
+                s += (h * h + 0.25f * v * v).toDouble()
+            }
+            e[f] = ln(1e-9 + s / hop).toFloat()
+        }
+        // Anstieg gegenüber dem lautesten Wert der letzten ~12 ms – ausklingendes Rauschen (Hi-Hat-Fahne,
+        // Hall) zählt so nicht als Anschlag, nur ein echter neuer Einsatz
+        val e3 = FloatArray(nf)
+        for (f in 0 until nf) e3[f] = max(e[f], if (f + 1 < nf) e[f + 1] else e[f])
+        val flux = FloatArray(nf)
+        for (f in 12 until nf) {
+            var pm = e3[f - 4]
+            for (q in f - 12 until f - 3) pm = max(pm, e3[q])
+            flux[f] = max(0f, e3[f] - pm)
+        }
+        val sorted = flux.copyOf().also { it.sort() }
+        val med = if (sorted.isEmpty()) 0f else sorted[sorted.size / 2]
+        val p90 = if (sorted.isEmpty()) 0f else sorted[(sorted.size * 9) / 10]
+        // echter Anschlag: Energie springt um mind. ~6 dB (ln 4 ≈ 1,4) und hebt sich deutlich ab
+        val thr = max(max(med * 4f, p90), 1.4f)
+        val win = (0.012 * sr / hop).toInt()
+        val minGap = (sr * 0.02).toInt()
+        for (k in 1 until slices) {
+            val g = (k.toLong() * n / slices).toInt()
+            var pos = g
+            val c = g / hop
+            var bi = -1
+            var bv = thr
+            var bs = 0f
+            for (f in max(3, c - win)..min(nf - 1, c + win)) {
+                if (flux[f] <= thr) continue
+                // stärker = besser, näher am Raster = besser
+                val sc = flux[f] * (1f - 0.5f * abs(f - c).toFloat() / (win + 1))
+                if (sc > bs) { bs = sc; bv = flux[f]; bi = f }
+            }
+            if (bi >= 0) {
+                // samplegenau: erster deutlicher Sprung im Bereich des Anschlags, Grenze 0,3 ms davor
+                val lo = max(1, (bi - 3) * hop)
+                val hi = min(n - 1, (bi + 1) * hop)
+                var mx = 0f
+                for (i in lo until hi) mx = max(mx, abs(x[i] - x[i - 1]))
+                var on = lo
+                for (i in lo until hi) if (abs(x[i] - x[i - 1]) > 0.3f * mx) { on = i; break }
+                pos = max(0, on - (sr * 0.0003).toInt())
+                hit?.set(k, true)
+            }
+            pos = pos.coerceIn(b[k - 1] + minGap, n - minGap * (slices - k))
+            b[k] = pos
+        }
+        return b
+    }
+
+    /**
+     * Ein Stück [a, a+ls) auf [lo] Samples dehnen (WSOLA, erster Rahmen exakt am Anfang), plus [extra]
+     * Samples Nachlauf zum Überblenden. Liest zirkulär (Loop).
+     */
+    private fun stretchSeg(x: FloatArray, a: Int, ls: Int, lo: Int, extra: Int, sr: Int): FloatArray {
+        val n = x.size
+        val total = lo + extra
+        val out = FloatArray(total)
+        fun at(i: Int) = x[Math.floorMod(i, n)]
+        if (abs(ls.toDouble() / lo - 1.0) < 0.002) {
+            for (j in 0 until total) out[j] = at(a + j)
+            return out
+        }
+        // Anschlag (erste ~20 ms) unverändert übernehmen – sonst verdoppelt das Dehnen ihn (Flam)
+        val att = min((sr * 0.020).toInt(), min(ls, lo) / 3)
+        for (j in 0 until min(att, total)) out[j] = at(a + j)
+        val a2 = a + att
+        val ls2 = max(1, ls - att)
+        val lo2 = max(1, lo - att)
+        val total2 = total - att
+        if (total2 <= 0) return out
+        val r = ls2.toDouble() / lo2
+        val w = (min(sr * 0.030, lo2 / 2.5).toInt() / 2 * 2).coerceAtLeast(32)
+        val h = w / 2
+        val tol = min((sr * 0.006).toInt(), h / 2)
+        val wnd = FloatArray(w) { (0.5 - 0.5 * cos(2.0 * PI * it / w)).toFloat() }
+        val acc = FloatArray(total2 + w)
+        val norm = FloatArray(total2 + w)
+        var prevIn = a2
+        var f = 0
+        while (f * h < total2) {
+            val op = f * h
+            val nominal = a2 + (op * r).roundToInt()
+            var best = nominal
+            if (f > 0) {
+                val natural = prevIn + h
+                fun score(c: Int): Double {
+                    var sum = 0.0
+                    var e1 = 1e-9
+                    var j = 0
+                    while (j < h) {
+                        val u = at(c + j)
+                        sum += u * at(natural + j)
+                        e1 += u * u
+                        j += 3
+                    }
+                    return sum / kotlin.math.sqrt(e1)
+                }
+                // grob (Schritt 2), dann fein um den besten Wert
+                var bs = Double.NEGATIVE_INFINITY
+                var d = -tol
+                while (d <= tol) {
+                    val sc = score(nominal + d)
+                    if (sc > bs) { bs = sc; best = nominal + d }
+                    d += 2
+                }
+                val c0 = best
+                for (c in intArrayOf(c0 - 1, c0 + 1)) { val sc = score(c); if (sc > bs) { bs = sc; best = c } }
+            }
+            for (j in 0 until w) {
+                val o = op + j
+                if (o >= acc.size) break
+                acc[o] += at(best + j) * wnd[j]
+                norm[o] += wnd[j]
+            }
+            prevIn = best
+            f++
+        }
+        for (j in 0 until total2) {
+            out[att + j] = if (norm[j] > 0.05f) acc[j] / norm[j] else at(a2 + (j * r).roundToInt())
+        }
+        // Übergang Anschlag → gedehnter Teil: erste Hälfte des Rahmens ist exakt
+        val keep = min(h, lo2)
+        for (j in 0 until keep) {
+            val t = j.toFloat() / keep
+            out[att + j] = at(a2 + j) * (1f - t) + out[att + j] * t
+        }
+        return out
+    }
+
     /** Umrechnen auf eine neue Länge (ändert Tonhöhe und Tempo, wie ein Plattenspieler). */
     fun resampleLen(x: FloatArray, len: Int): FloatArray = resample(x, max(1, len))
 
