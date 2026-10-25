@@ -98,7 +98,14 @@ class RemoteView(context: Context) : View(context) {
         val area = RectF(m, y, w - m, h - insetBottom - m)
         if (st() == null) {
             text.textSize = dp(14f); text.color = DIM
-            c.drawText(if (conn != null) "Warte auf den Host …" else "Nicht verbunden – ✕ und neu koppeln", w / 2, area.centerY(), text)
+            val waited = System.currentTimeMillis() - Link.connectedAt
+            val msg = when {
+                conn == null -> "Nicht verbunden – ✕ und neu koppeln"
+                Link.hostError != null -> "Host meldet Fehler: ${Link.hostError}"
+                waited > 4000 -> "Verbunden, aber keine Daten vom Host – Host-App im Vordergrund lassen bzw. neu starten"
+                else -> "Verbunden – warte auf den Host …"
+            }
+            c.drawText(fitLabel(text, msg, w - 2 * m, dp(14f), dp(8f)), w / 2, area.centerY(), text)
         } else when (Link.mySurface) {
             0 -> drawDecks(c, area)
             1 -> drawMixer(c, area)

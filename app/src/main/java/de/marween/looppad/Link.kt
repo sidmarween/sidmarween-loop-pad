@@ -16,7 +16,10 @@ import java.io.BufferedReader
 import java.io.InputStream
 import java.io.InputStreamReader
 import java.io.OutputStream
+import java.net.DatagramPacket
+import java.net.DatagramSocket
 import java.net.Inet4Address
+import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.NetworkInterface
 import java.net.ServerSocket
@@ -36,6 +39,8 @@ import kotlin.math.min
 object Link {
     const val PORT = 47820
     const val SERVICE = "_marvpad._tcp."
+    /** UDP-Rundruf: der Host meldet sich jede Sekunde im Netz (falls mDNS/NSD blockiert ist). */
+    const val BEACON_PORT = 47821
     val BT_UUID: UUID = UUID.fromString("6f2c9a0e-4b7d-4c1a-9e55-3a7b1d2c8f01")
 
     /** Bedien-Oberflächen. */
@@ -64,6 +69,8 @@ object Link {
         @Volatile var offset = 0L
         @Volatile var bestRtt = Long.MAX_VALUE
         @Volatile var rttMs = 0f
+        @Volatile var lastState: String? = null
+        @Volatile var lastSent = 0L
         private val lock = Any()
 
         fun send(line: String) {
@@ -76,7 +83,8 @@ object Link {
             } catch (e: Exception) { close() }
         }
 
-        fun reader(): BufferedReader = BufferedReader(InputStreamReader(inp, Charsets.UTF_8), 8192)
+        private val rd by lazy { BufferedReader(InputStreamReader(inp, Charsets.UTF_8), 8192) }
+        fun reader(): BufferedReader = rd
 
         fun close() {
             if (!alive) return
@@ -97,6 +105,10 @@ object Link {
     private var multicastLock: WifiManager.MulticastLock? = null
     @Volatile var onClientsChanged: (() -> Unit)? = null
     @Volatile var onHostHint: ((String) -> Unit)? = null
+    /** Status für die Anzeige am Host. */
+    @Volatile var wlanStatus = "–"
+    @Volatile var btStatus = "–"
+    @Volatile var stateError: String? = null
     /** Host: was dieses Handy selbst zeigt (für die Vorlage) – setzt die Oberfläche. */
     @Volatile var onHostSurface: ((String) -> Unit)? = null
 
@@ -104,44 +116,75 @@ object Link {
         android.provider.Settings.Global.getString(ctx.contentResolver, "device_name") ?: android.os.Build.MODEL
     } catch (e: Exception) { android.os.Build.MODEL }
 
-    /** Eigene WLAN-/Hotspot-Adressen (für die manuelle Eingabe am anderen Handy). */
-    fun localIps(): List<String> {
-        val out = ArrayList<String>()
+    /** Eigene WLAN-/Hotspot-Adressen (für die manuelle Eingabe am anderen Handy) – Mobilfunk-Adressen weggelassen. */
+    fun localIps(): List<String> = localNets().map { it.first.hostAddress ?: "" }.filter { it.isNotEmpty() }
+
+    private fun isLan(name: String) = name.startsWith("wlan") || name.startsWith("ap") || name.startsWith("swlan") || name.startsWith("p2p") ||
+        name.startsWith("eth") || name.startsWith("softap") || name.startsWith("bt-pan") || name.startsWith("rndis") || name.startsWith("usb")
+
+    /** (Adresse, Rundruf-Adresse) aller WLAN/Hotspot/LAN-Schnittstellen. */
+    private fun localNets(): List<Pair<InetAddress, InetAddress?>> {
+        val lan = ArrayList<Pair<InetAddress, InetAddress?>>()
+        val other = ArrayList<Pair<InetAddress, InetAddress?>>()
         try {
             for (ni in NetworkInterface.getNetworkInterfaces()) {
                 if (!ni.isUp || ni.isLoopback) continue
-                for (a in ni.inetAddresses) if (a is Inet4Address && !a.isLoopbackAddress) out.add(a.hostAddress ?: continue)
+                for (ia in ni.interfaceAddresses) {
+                    val a = ia.address
+                    if (a !is Inet4Address || a.isLoopbackAddress) continue
+                    (if (isLan(ni.name ?: "")) lan else other).add(a to ia.broadcast)
+                }
             }
         } catch (ignored: Exception) {}
-        return out
+        return lan.ifEmpty { other.filter { it.first.isSiteLocalAddress } }
     }
 
     @SuppressLint("MissingPermission")
     fun startHost(ctx: Context, withBt: Boolean) {
         if (hosting) return
         hosting = true
-        // WLAN: TCP-Server + im Netz bekannt machen (mDNS)
+        stateError = null
+        val myName = deviceName(ctx)
+        // WLAN: TCP-Server + im Netz bekannt machen (mDNS und UDP-Rundruf)
+        wlanStatus = "startet …"
         Thread {
             try {
                 val ss = ServerSocket()
                 ss.reuseAddress = true
                 ss.bind(InetSocketAddress(PORT))
                 server = ss
+                wlanStatus = "bereit (Port $PORT)"
+                onClientsChanged?.invoke()
                 while (hosting) {
                     val s = ss.accept()
                     s.tcpNoDelay = true
                     val c = Conn(s.inetAddress?.hostAddress ?: "WLAN", s.getInputStream(), s.getOutputStream(), { s.close() }, false)
-                    hostServe(c)
+                    handshake(c, myName)
                 }
             } catch (e: Exception) {
-                if (hosting) onHostHint?.invoke("WLAN-Server: ${e.message}")
+                if (hosting) { wlanStatus = "Fehler: ${e.message}"; onHostHint?.invoke("WLAN-Server: ${e.message}"); onClientsChanged?.invoke() }
             }
+        }.apply { isDaemon = true }.start()
+        Thread {
+            var sock: DatagramSocket? = null
+            try {
+                sock = DatagramSocket().apply { broadcast = true }
+                val msg = "MARVPAD|$myName|$PORT".toByteArray(Charsets.UTF_8)
+                while (hosting) {
+                    val targets = HashSet<InetAddress>()
+                    for ((_, b) in localNets()) if (b != null) targets.add(b)
+                    try { targets.add(InetAddress.getByName("255.255.255.255")) } catch (ignored: Exception) {}
+                    for (t in targets) try { sock.send(DatagramPacket(msg, msg.size, t, BEACON_PORT)) } catch (ignored: Exception) {}
+                    Thread.sleep(1000)
+                }
+            } catch (ignored: Exception) {
+            } finally { try { sock?.close() } catch (ignored: Exception) {} }
         }.apply { isDaemon = true }.start()
         try {
             val wm = ctx.applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
             multicastLock = wm.createMulticastLock("marvpad").apply { setReferenceCounted(false); acquire() }
             val m = ctx.getSystemService(Context.NSD_SERVICE) as NsdManager
-            val info = NsdServiceInfo().apply { serviceName = "Marv PAD – " + deviceName(ctx); serviceType = SERVICE; port = PORT }
+            val info = NsdServiceInfo().apply { serviceName = "MarvPAD " + myName.filter { it.code in 32..126 }.take(40); serviceType = SERVICE; port = PORT }
             val l = object : NsdManager.RegistrationListener {
                 override fun onServiceRegistered(i: NsdServiceInfo) {}
                 override fun onRegistrationFailed(i: NsdServiceInfo, e: Int) {}
@@ -153,18 +196,23 @@ object Link {
             nsdReg = l
         } catch (ignored: Exception) {}
         // Bluetooth: auf gekoppelte Handys warten
+        btStatus = if (withBt) "startet …" else "keine Erlaubnis – nur WLAN"
         if (withBt) Thread {
             try {
-                val ad = btAdapter(ctx) ?: return@Thread
+                val ad = btAdapter(ctx)
+                if (ad == null) { btStatus = "nicht vorhanden"; onClientsChanged?.invoke(); return@Thread }
+                if (!ad.isEnabled) { btStatus = "Bluetooth ist aus – einschalten und Host neu starten"; onClientsChanged?.invoke(); return@Thread }
                 val bs = ad.listenUsingRfcommWithServiceRecord("Marv PAD", BT_UUID)
                 btServer = bs
+                btStatus = "bereit (wartet auf gekoppelte Handys)"
+                onClientsChanged?.invoke()
                 while (hosting) {
                     val s = bs.accept() ?: break
                     val c = Conn(try { s.remoteDevice?.name ?: "Bluetooth" } catch (e: SecurityException) { "Bluetooth" }, s.inputStream, s.outputStream, { s.close() }, true)
-                    hostServe(c)
+                    handshake(c, myName)
                 }
             } catch (e: Exception) {
-                if (hosting) onHostHint?.invoke("Bluetooth: ${e.message ?: "nicht verfügbar"}")
+                if (hosting) { btStatus = "Fehler: ${e.message ?: e.javaClass.simpleName}"; onHostHint?.invoke("Bluetooth: ${e.message ?: "nicht verfügbar"}"); onClientsChanged?.invoke() }
             }
         }.apply { isDaemon = true }.start()
         // Zustände senden (~25 pro Sekunde) und Uhren abgleichen
@@ -173,10 +221,23 @@ object Link {
             while (hosting) {
                 try {
                     if (clients.isNotEmpty()) {
-                        val st = "S " + hostState().toString()
+                        val st = try {
+                            "S " + hostState().toString()
+                        } catch (e: Throwable) {
+                            val msg = e.message ?: e.javaClass.simpleName
+                            if (stateError != msg) { stateError = msg; for (c in clients) c.send("E $msg") }
+                            null
+                        }
+                        val now = System.nanoTime()
                         for (c in clients) {
                             if (!c.alive) { clients.remove(c); onClientsChanged?.invoke(); continue }
-                            c.send(st)
+                            // Bluetooth ist langsamer: höchstens 10× pro Sekunde; unverändert nur alle 0,5 s
+                            val due = now - c.lastSent >= (if (c.viaBt) 100_000_000L else 35_000_000L)
+                            if (st != null && due && (st != c.lastState || now - c.lastSent > 500_000_000L)) {
+                                c.send(st)
+                                c.lastState = st
+                                c.lastSent = now
+                            }
                             if (n % 12 == 0) c.send("PING ${System.nanoTime()}")
                         }
                         // Wellenformen nur bei Bedarf (neuer Track)
@@ -212,6 +273,24 @@ object Link {
             sb.append(('0' + (m * 9 / 255)))
         }
         return sb.toString()
+    }
+
+    /** Erste Zeile entscheidet: PROBE (Netzsuche) bekommt nur eine Antwort, alles andere ist eine Oberfläche. */
+    private fun handshake(c: Conn, myName: String) {
+        Thread {
+            try {
+                val first = c.reader().readLine()
+                if (first == null) { c.close(); return@Thread }
+                if (first.startsWith("PROBE")) {
+                    c.send("MARVPAD $myName")
+                    Thread.sleep(150)
+                    c.close()
+                    return@Thread
+                }
+                hostServe(c)
+                try { hostCommand(c, first) } catch (ignored: Exception) {}
+            } catch (e: Exception) { c.close() }
+        }.apply { isDaemon = true }.start()
     }
 
     private fun hostServe(c: Conn) {
@@ -276,20 +355,27 @@ object Link {
     }
 
     /** Alles, was die Oberflächen anzeigen. */
+    /** JSON verträgt kein NaN/Unendlich – solche Werte als 0 senden. */
+    private fun JSONObject.num(k: String, v: Double): JSONObject = put(k, if (v.isNaN() || v.isInfinite()) 0.0 else v)
+    private fun JSONObject.num(k: String, v: Float): JSONObject = num(k, v.toDouble())
+
     private fun hostState(): JSONObject {
         val j = JSONObject()
-        j.put("bpm", Engine.currentBpm().toDouble())
+        j.num("bpm", Engine.currentBpm().toDouble())
         j.put("play", Engine.seqPlaying)
         j.put("rec", Engine.seqRecording)
-        j.put("vol", Engine.knobs[3].toDouble())
-        j.put("fxX", Engine.fxX.toDouble()); j.put("fxY", Engine.fxY.toDouble()); j.put("fxT", Engine.fxTouch)
-        j.put("fx", Fx.NAMES[Engine.fxType.coerceIn(0, Fx.COUNT - 1)])
-        j.put("pxA", Engine.xfA); j.put("pxB", Engine.xfB); j.put("pxP", Engine.xfPos.toDouble())
+        j.num("vol", Engine.knobs[3])
+        j.num("fxX", Engine.fxX)
+        j.num("fxY", Engine.fxY)
+        j.put("fxT", Engine.fxTouch)
+        j.put("fx", Fx.NAMES.getOrElse(Engine.fxType) { "FX" })
+        j.put("pxA", Engine.xfA)
+        j.put("pxB", Engine.xfB)
+        j.num("pxP", Engine.xfPos)
         val pa = JSONArray()
         for (p in 0 until 12) {
             val o = JSONArray()
-            val st = Engine.state(p)
-            o.put(st.ordinal)
+            o.put(Engine.state(p).ordinal)
             o.put(Math.round(Engine.levels[p] * 100))
             o.put(Engine.padName(p) ?: "")
             o.put(if (Engine.isMuted(p)) 1 else 0)
@@ -301,27 +387,35 @@ object Link {
         j.put("pads", pa)
         val da = JSONArray()
         for (k in 0..1) {
-            val d = Dj.decks[k]
             val o = JSONObject()
-            o.put("ok", d.loaded()); o.put("t", d.title)
-            o.put("pos", if (d.len > 0) d.pos / d.len else 0.0)
-            o.put("rem", if (d.loaded()) (d.len - d.pos) / d.srcRate / max(0.01, d.ratio) else 0.0)
-            o.put("bpm", d.effBpm().toDouble()); o.put("key", Keys.camelot(d.effKey()))
-            o.put("pl", d.playing); o.put("sy", d.sync); o.put("hp", d.cue); o.put("kl", d.keylock)
-            o.put("lp", d.loopOn); o.put("lb", d.loopBeats.toDouble()); o.put("rb", d.rollBeats.toDouble()); o.put("sl", d.slipOn)
-            o.put("jb", d.jumpBars.toDouble())
-            o.put("hot", JSONArray().apply { d.hot.forEach { put(if (it >= 0) 1 else 0) } })
-            o.put("fd", d.fader.toDouble()); o.put("hi", d.hi.toDouble()); o.put("mi", d.mid.toDouble()); o.put("lo", d.lo.toDouble())
-            o.put("fl", d.filter.toDouble()); o.put("gn", d.gain.toDouble()); o.put("pt", d.pitch.toDouble())
-            o.put("lv", Math.round(d.level * 100)); o.put("eo", d.echoOn); o.put("sw", d.sweepMode); o.put("ce", d.censor)
-            if (d.loaded() && d.bpm > 0f) {
-                val (inP, toNext) = Dj.phraseInfo(d, d.pos)
-                o.put("ph", "${inP + 1}/16 · noch ${Math.ceil(toNext / 4.0 - 1e-6).toInt()} T")
-            }
+            try {
+                val d = Dj.decks[k]
+                o.put("ok", d.loaded())
+                o.put("t", d.title)
+                o.num("pos", if (d.len > 0) d.pos / d.len else 0.0)
+                o.num("rem", if (d.loaded() && d.srcRate > 0) (d.len - d.pos) / d.srcRate / max(0.01, d.ratio) else 0.0)
+                o.num("bpm", d.effBpm().toDouble())
+                o.put("key", Keys.camelot(d.effKey()))
+                o.put("pl", d.playing); o.put("sy", d.sync); o.put("hp", d.cue); o.put("kl", d.keylock)
+                o.put("lp", d.loopOn)
+                o.num("lb", d.loopBeats.toDouble())
+                o.num("rb", d.rollBeats.toDouble())
+                o.put("sl", d.slipOn)
+                o.num("jb", d.jumpBars.toDouble())
+                o.put("hot", JSONArray().apply { d.hot.forEach { put(if (it >= 0) 1 else 0) } })
+                o.num("fd", d.fader.toDouble()); o.num("hi", d.hi.toDouble()); o.num("mi", d.mid.toDouble()); o.num("lo", d.lo.toDouble())
+                o.num("fl", d.filter.toDouble()); o.num("gn", d.gain.toDouble()); o.num("pt", d.pitch.toDouble())
+                o.put("lv", Math.round(d.level * 100))
+                o.put("eo", d.echoOn); o.put("sw", d.sweepMode); o.put("ce", d.censor)
+                if (d.loaded() && d.bpm > 0f) {
+                    val (inP, toNext) = Dj.phraseInfo(d, d.pos)
+                    o.put("ph", "${inP + 1}/16 · noch ${Math.ceil(toNext / 4.0 - 1e-6).toInt()} T")
+                }
+            } catch (e: Exception) { o.put("ok", false) }
             da.put(o)
         }
         j.put("decks", da)
-        j.put("xf", Dj.xfade.toDouble())
+        j.num("xf", Dj.xfade.toDouble())
         return j
     }
 
@@ -436,17 +530,31 @@ object Link {
     @Volatile var mySurface = 2
     @Volatile var onClientEvent: ((String) -> Unit)? = null
 
+    /** Letzte Fehlermeldung des Hosts (z. B. wenn er keine Daten schicken kann). */
+    @Volatile var hostError: String? = null
+        private set
+    @Volatile var connectedAt = 0L
+        private set
+
+    private fun tcpError(e: Exception, host: String): String = when (e) {
+        is java.net.SocketTimeoutException -> "Zeitüberschreitung bei $host – läuft dort der Host? Gleiches WLAN? (Gäste-WLANs blockieren Verbindungen zwischen Geräten – dann Hotspot nehmen)"
+        is java.net.ConnectException -> "$host lehnt ab – dort ist kein Host gestartet (Menü → 📡 → „macht den Klang“)"
+        is java.net.NoRouteToHostException -> "$host nicht erreichbar – anderes Netz?"
+        is java.net.UnknownHostException -> "Adresse „$host“ ungültig"
+        else -> e.message ?: e.javaClass.simpleName
+    }
+
     fun connectTcp(ctx: Context, host: String, port: Int = PORT, done: (String?) -> Unit) {
         Thread {
             try {
                 val s = Socket()
                 s.tcpNoDelay = true
-                s.connect(InetSocketAddress(host, port), 4000)
+                s.connect(InetSocketAddress(host.trim(), port), 5000)
                 val c = Conn(host, s.getInputStream(), s.getOutputStream(), { s.close() }, false)
                 clientRun(ctx, c)
                 done(null)
             } catch (e: Exception) {
-                done(e.message ?: "Verbindung fehlgeschlagen")
+                done(tcpError(e, host))
             }
         }.start()
     }
@@ -454,21 +562,44 @@ object Link {
     @SuppressLint("MissingPermission")
     fun connectBt(ctx: Context, dev: BluetoothDevice, done: (String?) -> Unit) {
         Thread {
-            try {
-                btAdapter(ctx)?.cancelDiscovery()
-                val s: BluetoothSocket = dev.createRfcommSocketToServiceRecord(BT_UUID)
-                s.connect()
-                val c = Conn(dev.name ?: "Bluetooth", s.inputStream, s.outputStream, { s.close() }, true)
-                clientRun(ctx, c)
-                done(null)
-            } catch (e: Exception) {
-                done(e.message ?: "Bluetooth-Verbindung fehlgeschlagen")
+            // Suche stoppen braucht ab Android 12 eine eigene Erlaubnis – nur versuchen
+            try { btAdapter(ctx)?.cancelDiscovery() } catch (ignored: Throwable) {}
+            var last: Exception? = null
+            val makers = listOf<() -> BluetoothSocket>(
+                { dev.createRfcommSocketToServiceRecord(BT_UUID) },
+                { dev.createInsecureRfcommSocketToServiceRecord(BT_UUID) }
+            )
+            for (mk in makers) {
+                var s: BluetoothSocket? = null
+                try {
+                    s = mk()
+                    s.connect()
+                    val sock = s
+                    val nm = try { dev.name } catch (e: SecurityException) { null } ?: "Bluetooth"
+                    val c = Conn(nm, sock.inputStream, sock.outputStream, { sock.close() }, true)
+                    clientRun(ctx, c)
+                    done(null)
+                    return@Thread
+                } catch (e: Exception) {
+                    last = e
+                    try { s?.close() } catch (ignored: Exception) {}
+                }
             }
+            val m = last?.message ?: ""
+            done(when {
+                last is SecurityException -> "Bluetooth-Erlaubnis fehlt (Einstellungen → Apps → Marv PAD → Geräte in der Nähe)"
+                m.contains("read failed") || m.contains("timeout") || m.contains("closed") ->
+                    "Das andere Handy antwortet nicht über Bluetooth. Dort Menü → 📡 → „macht den Klang“ starten und prüfen, ob „Bluetooth: bereit“ angezeigt wird."
+                else -> "Bluetooth: ${m.ifEmpty { last?.javaClass?.simpleName ?: "Fehler" }}"
+            })
         }.start()
     }
 
     private fun clientRun(ctx: Context, c: Conn) {
         client = c
+        hostError = null
+        state = null
+        connectedAt = System.currentTimeMillis()
         c.send("HELLO " + deviceName(ctx))
         Thread {
             try {
@@ -484,6 +615,7 @@ object Link {
                             val k = p.getOrNull(1)?.toIntOrNull() ?: -1
                             if (k in 0..1) waves[k] = p.getOrNull(2)?.takeIf { it != "-" } ?: ""
                         }
+                        line.startsWith("E ") -> hostError = line.substring(2)
                         line == "BYE" -> break
                     }
                 }
@@ -511,31 +643,74 @@ object Link {
     private var discovery: NsdManager.DiscoveryListener? = null
 
     /** Hosts im WLAN suchen (Name → Adresse). */
+    @Volatile private var discovering = false
+    private var clientLock: WifiManager.MulticastLock? = null
+    private val resolveQueue = java.util.concurrent.LinkedBlockingQueue<NsdServiceInfo>()
+
+    @Synchronized private fun addFound(name: String, host: String, changed: () -> Unit) {
+        if (localIps().contains(host)) return // das eigene Handy
+        if (found.none { it.second == host }) { found = found + (name to host); changed() }
+    }
+
+    /** Hosts im WLAN suchen (Name → Adresse): mDNS/NSD und UDP-Rundruf gleichzeitig. */
     fun discover(ctx: Context, changed: () -> Unit) {
         stopDiscover(ctx)
         found = emptyList()
+        discovering = true
+        try {
+            val wm = ctx.applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
+            clientLock = wm.createMulticastLock("marvpad-find").apply { setReferenceCounted(false); acquire() }
+        } catch (ignored: Exception) {}
+        // 1) UDP-Rundruf des Hosts hören
+        Thread {
+            var sock: DatagramSocket? = null
+            try {
+                sock = DatagramSocket(null).apply { reuseAddress = true; broadcast = true; soTimeout = 1000; bind(InetSocketAddress(BEACON_PORT)) }
+                val buf = ByteArray(512)
+                while (discovering) {
+                    try {
+                        val pk = DatagramPacket(buf, buf.size)
+                        sock.receive(pk)
+                        val msg = String(pk.data, 0, pk.length, Charsets.UTF_8)
+                        if (msg.startsWith("MARVPAD|")) {
+                            val name = msg.split('|').getOrNull(1) ?: "Marv PAD"
+                            val host = pk.address?.hostAddress ?: continue
+                            addFound(name, host, changed)
+                        }
+                    } catch (ignored: java.net.SocketTimeoutException) {}
+                }
+            } catch (ignored: Exception) {
+            } finally { try { sock?.close() } catch (ignored: Exception) {} }
+        }.apply { isDaemon = true }.start()
+        // 2) mDNS/NSD (Auflösungen nacheinander – Android erlaubt nur eine gleichzeitig)
         val m = ctx.getSystemService(Context.NSD_SERVICE) as NsdManager
-        nsd = m
+        resolveQueue.clear()
+        Thread {
+            while (discovering) {
+                val i = try { resolveQueue.poll(500, java.util.concurrent.TimeUnit.MILLISECONDS) } catch (e: InterruptedException) { null } ?: continue
+                val done = java.util.concurrent.CountDownLatch(1)
+                try {
+                    @Suppress("DEPRECATION")
+                    m.resolveService(i, object : NsdManager.ResolveListener {
+                        override fun onResolveFailed(si: NsdServiceInfo, e: Int) { done.countDown() }
+                        override fun onServiceResolved(si: NsdServiceInfo) {
+                            @Suppress("DEPRECATION")
+                            val h = si.host
+                            if (h is Inet4Address) addFound(si.serviceName, h.hostAddress ?: "", changed)
+                            done.countDown()
+                        }
+                    })
+                    done.await(3, java.util.concurrent.TimeUnit.SECONDS)
+                } catch (ignored: Exception) {}
+            }
+        }.apply { isDaemon = true }.start()
         val l = object : NsdManager.DiscoveryListener {
             override fun onDiscoveryStarted(t: String) {}
             override fun onDiscoveryStopped(t: String) {}
             override fun onStartDiscoveryFailed(t: String, e: Int) {}
             override fun onStopDiscoveryFailed(t: String, e: Int) {}
             override fun onServiceLost(i: NsdServiceInfo) {}
-            override fun onServiceFound(i: NsdServiceInfo) {
-                @Suppress("DEPRECATION")
-                try {
-                    m.resolveService(i, object : NsdManager.ResolveListener {
-                        override fun onResolveFailed(si: NsdServiceInfo, e: Int) {}
-                        override fun onServiceResolved(si: NsdServiceInfo) {
-                            @Suppress("DEPRECATION")
-                            val host = si.host?.hostAddress ?: return
-                            val name = si.serviceName
-                            if (found.none { it.second == host }) { found = found + (name to host); changed() }
-                        }
-                    })
-                } catch (ignored: Exception) {}
-            }
+            override fun onServiceFound(i: NsdServiceInfo) { resolveQueue.offer(i) }
         }
         try {
             m.discoverServices(SERVICE, NsdManager.PROTOCOL_DNS_SD, l)
@@ -543,7 +718,36 @@ object Link {
         } catch (ignored: Exception) {}
     }
 
+    /** 3) Gründlich: alle Adressen im eigenen WLAN (/24) auf den Marv-PAD-Port prüfen. [progress] 0..1 */
+    fun scanSubnet(changed: () -> Unit, progress: (Float) -> Unit) {
+        Thread {
+            val bases = localNets().mapNotNull { (a, _) -> a.hostAddress?.substringBeforeLast('.') }.distinct()
+            if (bases.isEmpty()) { progress(1f); return@Thread }
+            val all = bases.flatMap { b -> (1..254).map { "$b.$it" } }.filter { it !in localIps() }
+            val pool = java.util.concurrent.Executors.newFixedThreadPool(48)
+            val doneN = java.util.concurrent.atomic.AtomicInteger()
+            for (ip in all) pool.execute {
+                try {
+                    Socket().use { s ->
+                        s.connect(InetSocketAddress(ip, PORT), 400)
+                        s.soTimeout = 900
+                        s.getOutputStream().write("PROBE\n".toByteArray())
+                        s.getOutputStream().flush()
+                        val line = BufferedReader(InputStreamReader(s.getInputStream(), Charsets.UTF_8)).readLine()
+                        if (line != null && line.startsWith("MARVPAD")) addFound(line.removePrefix("MARVPAD").trim().ifEmpty { "Marv PAD" }, ip, changed)
+                    }
+                } catch (ignored: Exception) {}
+                val n = doneN.incrementAndGet()
+                if (n % 16 == 0 || n == all.size) progress(n.toFloat() / all.size)
+            }
+            pool.shutdown()
+        }.apply { isDaemon = true }.start()
+    }
+
     fun stopDiscover(ctx: Context) {
+        discovering = false
+        try { clientLock?.release() } catch (ignored: Exception) {}
+        clientLock = null
         val l = discovery ?: return
         try { (ctx.getSystemService(Context.NSD_SERVICE) as NsdManager).stopServiceDiscovery(l) } catch (ignored: Exception) {}
         discovery = null

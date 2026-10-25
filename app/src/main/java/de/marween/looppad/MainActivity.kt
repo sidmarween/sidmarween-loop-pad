@@ -3028,8 +3028,10 @@ class MainActivity : Activity() {
             val n = Link.clients.size
             val pr = Link.PRESETS.getOrNull(Link.currentPreset)
             info.text = "Host läuft: ${Link.deviceName(this)}\n" +
-                "WLAN-Adresse: ${ips.ifEmpty { "– (kein WLAN/Hotspot)" }}\n" +
-                (if (btAllowed()) "Bluetooth: bereit\n" else "Bluetooth: keine Erlaubnis (nur WLAN)\n") +
+                "WLAN: ${Link.wlanStatus}\n" +
+                "Adresse für „Adresse eingeben“: ${ips.ifEmpty { "– (kein WLAN/Hotspot verbunden)" }}\n" +
+                "Bluetooth: ${Link.btStatus}\n" +
+                (Link.stateError?.let { "⚠ Datenfehler: $it\n" } ?: "") +
                 "\nGekoppelt: $n ${if (n == 1) "Handy" else "Handys"}" +
                 (if (pr != null) "\nVorlage: ${pr.name}" else "") +
                 (if (n == 0) "\n\nAuf dem anderen Handy: Menü → 📡 Handys koppeln → Bedienfeld." else "")
@@ -3092,11 +3094,12 @@ class MainActivity : Activity() {
         val d = resources.displayMetrics.density
         fun px(v: Float) = (v * d).toInt()
         val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(px(18f), px(8f), px(18f), px(4f)) }
-        val status = TextView(this).apply { textSize = 13f; setTextColor(0xFFCCCCCC.toInt()); text = "Suche Marv-PAD-Hosts im WLAN …" }
+        val status = TextView(this).apply { textSize = 13f; setTextColor(0xFFCCCCCC.toInt()); text = "Suche Marv-PAD-Hosts im WLAN …\n(Auf dem anderen Handy muss der Host laufen: Menü → 📡 → „macht den Klang“)" }
         box.addView(status)
         val list = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         box.addView(list)
         var dlg: AlertDialog? = null
+        var scanning = false
         fun connecting(name: String) { status.text = "Verbinde mit $name …"; list.isEnabled = false }
         val done: (String?) -> Unit = { err ->
             runOnUiThread {
@@ -3118,6 +3121,21 @@ class MainActivity : Activity() {
                 setOnClickListener { connecting(nm); Link.connectBt(this@MainActivity, dev, done) }
             })
             list.addView(Button(this).apply {
+                isAllCaps = false; text = if (scanning) "🔍 Suche im ganzen WLAN …" else "🔍 Nichts gefunden? Gründlich im WLAN suchen"
+                isEnabled = !scanning
+                setOnClickListener {
+                    scanning = true
+                    build()
+                    Link.scanSubnet({ runOnUiThread { build() } }) { f ->
+                        runOnUiThread {
+                            status.text = if (f >= 1f) (if (Link.found.isEmpty()) "Kein Host gefunden. Läuft er auf dem anderen Handy? Gäste-WLANs blockieren Geräte untereinander – dann den Hotspot eines Handys nutzen." else "Gefunden – antippen zum Verbinden:")
+                                else "Suche im WLAN … ${(f * 100).toInt()} %"
+                            if (f >= 1f) { scanning = false; build() }
+                        }
+                    }
+                }
+            })
+            list.addView(Button(this).apply {
                 isAllCaps = false; text = "⌨ Adresse eingeben (steht am Host)"
                 setOnClickListener {
                     val ed = EditText(this@MainActivity).apply { hint = "z. B. 192.168.43.1"; inputType = android.text.InputType.TYPE_CLASS_TEXT }
@@ -3128,7 +3146,7 @@ class MainActivity : Activity() {
                         }.setNegativeButton("Abbrechen", null).show()
                 }
             })
-            if (Link.found.isNotEmpty()) status.text = "Gefunden – antippen zum Verbinden:"
+            if (Link.found.isNotEmpty() && !scanning) status.text = "Gefunden – antippen zum Verbinden:"
         }
         build()
         Link.discover(this) { runOnUiThread { build() } }
