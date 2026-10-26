@@ -4182,21 +4182,21 @@ class MainActivity : Activity() {
         val bar = android.widget.ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply { max = 1000; isIndeterminate = true }
         val tv = TextView(this).apply { textSize = 12f; setTextColor(Color.rgb(200, 200, 200)); setPadding(0, pad / 3, 0, 0) }
         val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(pad, pad / 2, pad, 0); addView(bar); addView(tv) }
-        @Volatile var cancelled = false
-        val dlg = ui().setTitle(title).setView(box).setCancelable(false).setNegativeButton("Abbrechen") { _, _ -> cancelled = true }.create()
+        val cancelled = java.util.concurrent.atomic.AtomicBoolean(false)
+        val dlg = ui().setTitle(title).setView(box).setCancelable(false).setNegativeButton("Abbrechen") { _, _ -> cancelled.set(true) }.create()
         dlg.show()
         var lastUi = 0L
         Thread {
             try {
-                val files = job({ cancelled }) { p, n ->
+                val files = job({ cancelled.get() }, prog@{ p, n ->
                     val now = android.os.SystemClock.uptimeMillis()
-                    if (now - lastUi < 120 && p < 1f) return@job
+                    if (now - lastUi < 120 && p < 1f) return@prog
                     lastUi = now
                     runOnUiThread {
                         if (p < 0f) bar.isIndeterminate = true else { bar.isIndeterminate = false; bar.progress = (p * 1000).toInt() }
                         tv.text = n + if (p >= 0f) "  ·  ${(p * 100).toInt()} %" else ""
                     }
-                }
+                })
                 runOnUiThread {
                     dlg.dismiss()
                     cloudDeliver(target, files)
