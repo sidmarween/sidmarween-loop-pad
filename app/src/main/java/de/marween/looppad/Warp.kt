@@ -221,10 +221,18 @@ object Warp {
      * Wie [stretchBeats], aber für ganze Songs speichersparend: in Stücken zu 8 Takten gedehnt und direkt
      * in das Ergebnis geschrieben. Passt das Tempo schon, wird gar nicht kopiert.
      */
-    fun stretchBeatsLong(x: FloatArray, outLen: Int, sr: Int, bars: Float, pre: FloatArray? = null): FloatArray {
+    fun stretchBeatsLong(x: FloatArray, outLen: Int, sr: Int, bars: Float, pre: FloatArray? = null): FloatArray =
+        stretchBeatsLong(ArraySource(x), outLen, sr, bars, pre)
+
+    /**
+     * Wie oben, aber die Quelle wird nur stückweise gelesen (8 Takte) – sie kann ein Ausschnitt sein oder
+     * auf dem Handy-Speicher liegen. So braucht ein Song beim Dehnen nur den Platz für das Ergebnis.
+     */
+    fun stretchBeatsLong(x: PcmSource, outLen: Int, sr: Int, bars: Float, pre: FloatArray? = null): FloatArray {
         val n = x.size
-        if (n < sr * 60 || bars < 16f || outLen <= 1) return stretchBeats(x, outLen, sr, bars, pre)
-        if (abs(n.toDouble() / outLen - 1.0) < 0.0015) return seamEnd(if (n == outLen) x else x.copyOf(outLen), pre, sr)
+        fun whole(): FloatArray = if (x is ArraySource && x.whole) x.a else x.copy(0, n)
+        if (n < sr * 60 || bars < 16f || outLen <= 1) return stretchBeats(whole(), outLen, sr, bars, pre)
+        if (abs(n.toDouble() / outLen - 1.0) < 0.0015) return seamEnd(if (n == outLen && x is ArraySource && x.whole) x.a else x.copy(0, outLen), pre, sr)
         val out = FloatArray(outLen)
         val chunk = 8f
         var b0 = 0f
@@ -236,8 +244,8 @@ object Warp {
             val o0 = (b0.toDouble() / bars * outLen).toInt()
             val o1 = min(outLen, (b1.toDouble() / bars * outLen).toInt())
             if (s1 - s0 > 1 && o1 - o0 > 1) {
-                val seg = x.copyOfRange(s0, s1)
-                val segPre = if (s0 > 0) x.copyOfRange(max(0, s0 - sr / 20), s0) else pre
+                val seg = x.copy(s0, s1)
+                val segPre = if (s0 > 0) x.copy(max(0, s0 - sr / 20), s0) else pre
                 val r = stretchBeats(seg, o1 - o0, sr, b1 - b0, segPre, seam = false)
                 val len = min(r.size, o1 - o0)
                 for (j in 0 until len) {

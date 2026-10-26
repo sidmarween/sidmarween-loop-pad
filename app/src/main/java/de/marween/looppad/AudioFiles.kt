@@ -148,8 +148,25 @@ object AudioFiles {
 
             // Länge vorab schätzen: kein mehrfaches Verdoppeln des Puffers (spart bei Songs viel Speicher)
             val durUs = try { if (fmt.containsKey(MediaFormat.KEY_DURATION)) fmt.getLong(MediaFormat.KEY_DURATION) else 0L } catch (e: Exception) { 0L }
-            val est = if (durUs > 0) (durUs * rate / 1_000_000L + rate).coerceAtMost(rate.toLong() * maxSeconds + rate) else rate * 4L
-            val list = FloatList(est.toInt().coerceAtLeast(rate))
+            // gleich in der Ziel-Rate sammeln (kein zweites Array fürs Umrechnen)
+            val est = if (durUs > 0) (durUs * targetRate / 1_000_000L + targetRate / 4).coerceAtMost(targetRate.toLong() * maxSeconds + targetRate) else targetRate * 4L
+            val list = FloatList(est.toInt().coerceAtLeast(targetRate))
+            // lineare Umrechnung beim Sammeln: nächste Ausgabe liegt bei Quell-Position [nextOut]
+            var step = -1.0
+            var nextOut = 0.0
+            var srcIdx = 0L
+            var prev = 0f
+            fun push(v: Float) {
+                if (step < 0) step = rate.toDouble() / targetRate
+                if (step == 1.0) { list.add(v); srcIdx++; return }
+                while (nextOut <= srcIdx) {
+                    val f = (nextOut - (srcIdx - 1)).toFloat()
+                    list.add(if (srcIdx == 0L) v else prev + (v - prev) * f)
+                    nextOut += step
+                }
+                prev = v
+                srcIdx++
+            }
             val info = MediaCodec.BufferInfo()
             var inputDone = false
             var outputDone = false
@@ -195,7 +212,7 @@ object AudioFiles {
                                 if (frames >= maxFrames) break
                                 var s = 0f
                                 for (ch in 0 until channels) s += fb.get(f * channels + ch)
-                                list.add(s / channels)
+                                push(s / channels)
                                 frames++
                             }
                         } else {
@@ -205,7 +222,7 @@ object AudioFiles {
                                 if (frames >= maxFrames) break
                                 var s = 0f
                                 for (ch in 0 until channels) s += sb.get(f * channels + ch) / 32768f
-                                list.add(s / channels)
+                                push(s / channels)
                                 frames++
                             }
                         }
@@ -217,8 +234,10 @@ object AudioFiles {
                 }
             }
             if (list.size == 0) throw IllegalStateException("Datei enthält kein Audio")
-            if (rate == targetRate) return if (list.size == list.data.size) list.data else list.toArray()
-            return resample(list.data, list.size, rate, targetRate)
+            if (list.size == list.data.size) return list.data
+            // Songs: bis zu ½ s Stille am Ende stehen lassen statt alles nochmal zu kopieren (spart den doppelten Speicher)
+            if (list.size > targetRate * 60 && list.data.size - list.size <= targetRate / 2) return list.data
+            return list.toArray()
         } finally {
             try { codec?.stop() } catch (ignored: Exception) {}
             try { codec?.release() } catch (ignored: Exception) {}

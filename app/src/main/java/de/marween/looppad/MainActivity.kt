@@ -77,6 +77,7 @@ class MainActivity : Activity() {
             window.attributes = lp
         }
         volumeControlStream = AudioManager.STREAM_MUSIC
+        Engine.initSpill(filesDir)
         applyFrameRate(getSharedPreferences("marvpad", MODE_PRIVATE).getBoolean("fps60", true))
         pads = PadView(this)
         pads.onMessageTap = { onMessageTapped() }
@@ -716,7 +717,8 @@ class MainActivity : Activity() {
         System.gc()
         val rt = Runtime.getRuntime()
         val free = rt.maxMemory() - (rt.totalMemory() - rt.freeMemory())
-        return (free / (rate * 4.0 * 3.6)).toInt().coerceIn(30, Engine.MAX_IMPORT_SECONDS)
+        // Laden braucht jetzt etwa 2× den Song (Dekodieren + Dehnen) – das Original wandert danach auf den Handy-Speicher
+        return (free / (rate * 4.0 * 2.3)).toInt().coerceIn(30, Engine.MAX_IMPORT_SECONDS)
     }
 
     // ---------------------------------------------------------------- Musik-Sammlung (Ordner → katalogisiert)

@@ -41,7 +41,11 @@ class Loop(val data: FloatArray) {
     /** Länge in Takten (bei Slices), passt sich dem Master-Tempo an. */
     @Volatile var bars: Float = 1f
     /** Warp: Original-Audio, sein Tempo und seine Länge in Takten – bei Tempowechsel wird neu gedehnt. */
-    @Volatile var src: FloatArray? = null
+    @Volatile var srcRef: PcmSource? = null
+    /** Original als Array (bei ausgelagerten Songs wird es dafür von der Platte gelesen – nur selten nutzen). */
+    var src: FloatArray?
+        get() = srcRef?.let { s -> if (s is ArraySource && s.whole) s.a else s.copy(0, s.size) }
+        set(v) { srcRef = v?.let { ArraySource(it) } }
     @Volatile var srcBpm: Float = 0f
     @Volatile var warpBars: Float = 0f
     /** Audio direkt vor [src] im Original (Song-Ausschnitt) – für den nahtlosen Übergang Ende → Anfang. */
@@ -2021,6 +2025,7 @@ object Engine {
 
     @Synchronized
     fun start(context: Context) {
+        DiskPcm.init(context.filesDir)
         if (running) return
         error = null
         val am = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
@@ -3844,10 +3849,46 @@ object Engine {
 
     // ---------------------------------------------------------------- Undo / Redo
 
-    private class PadSnap(val p: Int, val loop: Loop?, val muted: Boolean, val oneShot: Boolean, val semi: Int)
+    /**
+     * Undo-Stand eines Pads. Bei langen Loops (Songs) wird das Audio im Hintergrund auf den Handy-Speicher
+     * ausgelagert ([spill]) – Undo hält dann keine ganzen Songs mehr im Arbeitsspeicher.
+     */
+    private class PadSnap(val p: Int, @Volatile var loop: Loop?, val muted: Boolean, val oneShot: Boolean, val semi: Int) {
+        @Volatile var spill: DiskPcm? = null
+        var cue = 0
+        fun memBytes(): Long = if (spill != null) 0L else (loop?.data?.size ?: 0).toLong() * 4L
+    }
 
     private class UndoEntry(val label: String, val pads: List<PadSnap>, val pat: PatternSnap?) {
-        val bytes: Long = pads.sumOf { (it.loop?.data?.size ?: 0).toLong() * 4L }
+        val bytes: Long get() = pads.sumOf { it.memBytes() }
+    }
+
+    private val EMPTY_AUDIO = FloatArray(0)
+    private val spillExec = java.util.concurrent.Executors.newSingleThreadExecutor { r -> Thread(r, "Undo-Auslagerung").apply { priority = Thread.MIN_PRIORITY } }
+
+    /** Langen Loop eines Undo-Stands im Hintergrund auslagern. */
+    private fun spillSnap(snap: PadSnap) {
+        val l = snap.loop ?: return
+        if (l.data.size <= SPILL_MIN) return
+        spillExec.execute {
+            val d = DiskPcm.write(l.data) ?: return@execute
+            synchronized(snap) {
+                if (snap.loop === l && snap.spill == null) {
+                    snap.cue = l.cue
+                    snap.loop = cloneLoop(l, EMPTY_AUDIO)
+                    snap.spill = d
+                }
+            }
+        }
+    }
+
+    /** Loop eines Undo-Stands (ausgelagert → wieder einlesen). */
+    private fun snapLoop(s: PadSnap): Loop? = synchronized(s) {
+        val sp = s.spill ?: return@synchronized s.loop
+        val light = s.loop ?: return@synchronized null
+        val c = cloneLoop(light, sp.copy(0, sp.size))
+        c.cue = s.cue.coerceIn(0, max(0, c.data.size - 1))
+        c
     }
 
     private val undoStack = ArrayList<UndoEntry>()
@@ -3946,7 +3987,7 @@ object Engine {
         pushPadUndo(label, p)
         val c = cloneLoop(l, op(l.data.copyOf()))
         c.fade = l.fade
-        l.src?.let { c.src = op(it.copyOf()) }
+        l.src?.let { c.srcRef = keepSrc(op(it.copyOf())) }
         if (l.slices != null) { buildSliceBufs(c) }
         loops.set(p, c)
         return true
@@ -4008,12 +4049,24 @@ object Engine {
                 val so = FloatArray(sn)
                 System.arraycopy(src, sr, so, 0, sn - sr)
                 System.arraycopy(src, 0, so, sn - sr, sr)
-                c.src = so
+                c.srcRef = keepSrc(so)
             }
         }
         loops.set(p, c)
         return true
     }
+
+    /** Ab dieser Länge (≈ 20 s) wird das Original ausgelagert. */
+    private val SPILL_MIN: Int get() = max(1, sampleRate) * 20
+
+    /** Spätestens beim Start der Engine bzw. der App: Auslagerungs-Ordner. */
+    fun initSpill(base: java.io.File) = DiskPcm.init(base)
+
+    private fun spill(a: ArraySource): PcmSource =
+        DiskPcm.write(a.a, a.off, min(a.size, a.a.size - a.off), a.size) ?: ArraySource(a.copy(0, a.size))
+
+    /** Original eines Loops merken – große auf dem Handy-Speicher. */
+    private fun keepSrc(a: FloatArray): PcmSource = if (a.size > SPILL_MIN) (DiskPcm.write(a) ?: ArraySource(a)) else ArraySource(a)
 
     private fun cloneLoop(l: Loop, data: FloatArray): Loop {
         val c = Loop(data)
@@ -4025,7 +4078,7 @@ object Engine {
         c.slices = l.slices?.copyOf()
         c.sliceBufs = l.sliceBufs
         c.bars = l.bars
-        c.src = l.src
+        c.srcRef = l.srcRef
         c.srcBpm = l.srcBpm
         c.warpBars = l.warpBars
         c.srcPre = l.srcPre
@@ -4039,7 +4092,7 @@ object Engine {
     private fun snapPad(p: Int, copy: FloatArray? = null): PadSnap {
         val l = loops.get(p)
         val keep = if (copy != null && l != null) cloneLoop(l, copy) else l
-        return PadSnap(p, keep, l?.muted ?: false, padOneShot[p], padSemi[p])
+        return PadSnap(p, keep, l?.muted ?: false, padOneShot[p], padSemi[p]).also { spillSnap(it) }
     }
 
     private fun snapPattern(): PatternSnap =
@@ -4117,7 +4170,7 @@ object Engine {
         val back = UndoEntry(e.label, e.pads.map { snapPad(it.p) }, if (e.pat != null) snapPattern() else null)
         for (s in e.pads) {
             takes.set(s.p, null)
-            val l = s.loop
+            val l = snapLoop(s)
             val live = loops.get(s.p)
             padOneShot[s.p] = s.oneShot
             padSemi[s.p] = s.semi
@@ -4977,15 +5030,15 @@ object Engine {
         val m = masterLen
         val target = max(64L, (info.bars * m).toLong()).toInt()
         // Song-Ausschnitt: ab dem ersten Schlag genau [bars] Takte im erkannten Tempo – danach exakt aufs Master-Tempo dehnen
-        val body = if (info.cut) {
+        // (als Ausschnitt ohne Kopie – spart bei Songs den doppelten Speicher)
+        val body: PcmSource = if (info.cut) {
             // Schnitt genau vor den Anfang der ersten Kick (die Analyse rastet nur auf ~5 ms) – sonst fehlt ihr Anschlag
             val o0 = info.offset.coerceIn(0, max(0, src.size - 2))
             val o = if (o0 > 0) max(0, Warp.onsetStart(src, o0, sampleRate) - sampleRate / 3000) else 0
             val want = (info.bars * 240.0 / info.bpm * sampleRate).toLong().toInt()
             val e = min(src.size, o + max(2, want))
-            if (o == 0 && e == src.size && src.size >= want) src
-            else src.copyOfRange(o, e).let { if (it.size < want) it.copyOf(want) else it }
-        } else src
+            ArraySource(src, o, max(e - o, want).coerceAtLeast(1))
+        } else ArraySource(src)
         // Audio vor dem Schnitt: das Loop-Ende blendet hinein (kein Knacks, keine Lücke auf der Eins)
         val bodyStart = if (info.cut) (info.offset.coerceIn(0, max(0, src.size - 2)).let { if (it > 0) max(0, Warp.onsetStart(src, it, sampleRate) - sampleRate / 3000) else 0 }) else 0
         val pre = preIn ?: if (info.cut && bodyStart > 0) src.copyOfRange(max(0, bodyStart - sampleRate / 20), bodyStart) else null
@@ -4994,7 +5047,13 @@ object Engine {
         LoadProgress.stage(0.7f, 1f)
         val data = Warp.stretchBeatsLong(body, target, sampleRate, info.bars, pre)
         val loop = Loop(data)
-        loop.src = body
+        // Original fürs spätere Neu-Dehnen: bei Songs auf den Handy-Speicher (16 Bit), nicht in den Arbeitsspeicher
+        loop.srcRef = when {
+            body !is ArraySource -> body
+            body.size > SPILL_MIN -> spill(body)
+            body.whole -> body
+            else -> ArraySource(body.copy(0, body.size))
+        }
         loop.srcPre = pre
         loop.srcBpm = info.bpm
         loop.warpBars = info.bars
@@ -5018,7 +5077,7 @@ object Engine {
             for (p in 0 until PADS) {
                 if (gen != warpGen) return@Thread
                 val l = loops.get(p) ?: continue
-                val src = l.src ?: continue
+                val src = l.srcRef ?: continue
                 if (l.oneShot || l.slices != null || l.warpBars <= 0f) continue
                 if (takes.get(p) != null) continue
                 val m = masterLen
