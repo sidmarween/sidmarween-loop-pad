@@ -37,6 +37,17 @@ class ShotTest {
         pv.theme = 0; shot(pv, w, h, "pad_${tag}_metro", h / 3)
         Engine.metronome = false
         shot(pv, h, w, "pad_${tag}_quer", w / 2)
+        // eigene Anordnung: Sequenzer oben, Regler aus, Auswahl-Leiste unter den Pads
+        pv.theme = PadView.CLAUDE
+        pv.applyLayout("5,2,4,3,1,0|0")
+        shot(pv, w, h, "lay_${tag}_custom")
+        pv.applyLayout("0,1,2,3,4,5|2")
+        shot(pv, w, h, "lay_${tag}_noxy")
+        pv.applyLayout(null)
+        shot(pv, w, h, "lay_${tag}_std")
+        pv.startLayoutEdit()
+        shot(pv, w, h, "lay_${tag}_edit")
+        pv.endLayoutEdit()
     }
 
     private fun dj(tag: String) {

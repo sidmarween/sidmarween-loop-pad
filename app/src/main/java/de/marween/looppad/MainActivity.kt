@@ -181,6 +181,8 @@ class MainActivity : Activity() {
         pads.onSidechain = { showSidechain() }
         pads.onSlicerSource = { pickSlicerSource() }
         pads.onPanelExport = { showPanelExport(it) }
+        pads.applyLayout(getSharedPreferences("marvpad", MODE_PRIVATE).getString("padLayout", null))
+        pads.onLayoutChanged = { str -> getSharedPreferences("marvpad", MODE_PRIVATE).edit().putString("padLayout", str).apply() }
         pads.onTourDone = {
             val pr = getSharedPreferences("marvpad", MODE_PRIVATE)
             pr.edit().putBoolean("tourDone", true).apply()
@@ -2467,6 +2469,7 @@ class MainActivity : Activity() {
             }
             4 -> {
                 sec("Aussehen")
+                add("🧩 Pad-Ansicht anpassen (Bereiche verschieben / ausblenden)") { if (djMode) toast("Bitte erst in die Pad-Ansicht wechseln") else pads.startLayoutEdit() }
                 group(2)
                 sec("Audio, Latenz & MIDI")
                 group(3)
@@ -3282,6 +3285,7 @@ class MainActivity : Activity() {
 
     @Deprecated("Zurück-Taste")
     override fun onBackPressed() {
+        if (pads.layoutEdit) { pads.endLayoutEdit(); return }
         if (pads.slicerOpen) { pads.closeSlicer(); return }
         if (pads.stationOpen) { pads.closeStation(); return }
         if (pads.launcherOpen) { pads.closeLauncher(); return }

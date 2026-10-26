@@ -377,6 +377,7 @@ class PadView(context: Context) : View(context) {
     }
 
     private fun drawFuncRow(canvas: Canvas) {
+        if (SEC_FUNC in secHidden) return
         val cols = overlayColors()
         val blink = 0.5f + 0.5f * sin(time * 8f)
         for (b in 0 until 6) {
@@ -587,87 +588,118 @@ class PadView(context: Context) : View(context) {
         setRecBtn.set(masterBtn.left, by + topH / 2f + dp(2f), masterBtn.right, by + topH - dp(5f))
         displayRect.set(logoDst.right + dp(12f), by + dp(4f), masterBtn.left - dp(8f), by + topH - dp(4f))
 
-        // Drehregler
-        val knobTop = by + topH + dp(8f)
+        fun off(r: RectF) = r.set(-9999f, -9999f, -9998f, -9998f)
+        // Bereiche in der vom Nutzer gewählten Reihenfolge (ausgeblendete fallen weg, der Platz geht an XY/Pads)
+        val vis = secOrder.filter { it !in secHidden }
         val kh = dp(80f)
-        val kw = (inner - 4 * gap) / 5f
-        knobSize = min(kw, kh - dp(16f))
-        for (k in 0 until 5) {
-            val x = margin + k * (kw + gap)
-            knobRects[k].set(x, knobTop, x + kw, knobTop + kh)
-        }
-
-        val zs = dp(22f)
-        if (zoomEnabled) zoomFx.set(knobRects[4].right - zs, knobRects[4].top, knobRects[4].right, knobRects[4].top + zs) else zoomFx.setEmpty()
-        // Reihe: ALLE | Effekt-Knopf | CLEAR
-        val rowTop = knobTop + kh + dp(4f)
         val rh = dp(46f)
-        val cx = w / 2f
-        fxBtn.set(cx - rh / 2f, rowTop, cx + rh / 2f, rowTop + rh)
-        muteBtn.setEmpty()
-        clearBtn.setEmpty()
-        // Funktionsleiste wie bei Maschine: SZENE · MUTE · SOLO | Effekt | ERASE · DUPL · REPEAT
-        val side = (inner - rh) / 2f - dp(10f)
-        val fg = dp(4f)
-        val fw = (side - 2 * fg) / 3f
-        val fh = min(rh, dp(38f))
-        val fy = rowTop + (rh - fh) / 2f
-        for (k in 0 until 3) {
-            val lx = margin + k * (fw + fg)
-            funcRects[k].set(lx, fy, lx + fw, fy + fh)
-            val rx = fxBtn.right + dp(10f) + k * (fw + fg)
-            funcRects[3 + k].set(rx, fy, rx + fw, fy + fh)
-        }
-
-        // XY-Fläche und Pads (mit •••-Knopf darunter)
-        val contentTop = rowTop + rh + gap
-        val bottom = h - insetBottom - dp(36f)
-        val avail = bottom - contentTop
-        val colGap = dp(10f)
-        val rowGap = dp(8f)
-        // Raster: 4×3 (alle 12), 3×3 groß (+ Seite 10–12), 4×2 Performance (+ Seite 9–12)
-        val cols = gridCols()
-        val rows = gridRows()
         val seqH = if (seqFold) dp(50f) else dp(84f)
         val selH = dp(34f)
-        val cellW = (inner - (cols - 1) * colGap) / cols
-        var cellH = min(cellW, (avail * 0.72f - seqH - gap - (rows - 1) * rowGap - selH) / rows)
-        var gridH = rows * cellH + (rows - 1) * rowGap + gap + seqH + selH
-        var xyH = avail - gridH - gap
-        val minXy = dp(110f)
-        if (xyH < minXy) {
-            cellH -= (minXy - xyH) / rows
-            gridH = rows * cellH + (rows - 1) * rowGap + gap + seqH + selH
-            xyH = minXy
-        }
-        val cell = min(cellW, cellH)
-        xyRect.set(margin, contentTop, w - margin, contentTop + xyH)
-        // Reiter über der XY-Fläche: Effekte | Instrumente (303 · 909 · SYNTH)
         val tabH = dp(26f)
-        val w0 = (xyRect.width() - dp(6f)) * 0.36f
-        modeRects[0].set(xyRect.left, contentTop, xyRect.left + w0, contentTop + tabH)
-        val zb = if (zoomEnabled) tabH + dp(4f) else 0f
-        modeRects[1].set(modeRects[0].right + dp(6f), contentTop, xyRect.right - zb, contentTop + tabH)
-        if (zoomEnabled) zoomXy.set(xyRect.right - tabH, contentTop, xyRect.right, contentTop + tabH) else zoomXy.setEmpty()
-        xyRect.top = contentTop + tabH + dp(5f)
-
-        val gridTop = xyRect.bottom + gap + selH
+        val colGap = dp(10f)
+        val rowGap = dp(8f)
+        val cols = gridCols()
+        val rows = gridRows()
+        val cellW = (inner - (cols - 1) * colGap) / cols
         val gridW = cols * cellW + (cols - 1) * colGap
         val left = (w - gridW) / 2f
-        // Auswahl-Leiste über den Pads: SELECT · Pad · WAVE · NOTEN · FX · ⋯
-        selRow.set(left, xyRect.bottom + gap - dp(2f), left + gridW, gridTop - dp(6f))
-        run {
-            val g = dp(5f)
-            val paged = gridPages() > 1
-            val ws = if (paged) floatArrayOf(1.35f, 0.9f, 1f, 1f, 0.8f, 0.6f, 0.95f) else floatArrayOf(1.35f, 0.9f, 1f, 1f, 0.8f, 0.6f)
-            val unit = (selRow.width() - (ws.size - 1) * g) / ws.sum()
-            var x = selRow.left
-            for (i in ws.indices) {
-                selBtns[i].set(x, selRow.top, x + unit * ws[i], selRow.bottom)
-                x += unit * ws[i] + g
-            }
-            if (!paged) selBtns[6].set(-9999f, -9999f, -9998f, -9998f)
+        val top0 = by + topH + dp(8f)
+        val bottom = h - insetBottom - dp(36f)
+        fun fixedH(id: Int) = when (id) {
+            SEC_KNOBS -> kh + dp(4f)
+            SEC_FUNC -> rh + gap
+            SEC_SEL -> selH
+            SEC_SEQ -> seqH + gap
+            else -> 0f
         }
+        val avail = bottom - top0 - vis.sumOf { fixedH(it).toDouble() }.toFloat()
+        val padsOn = SEC_PADS in vis
+        val xyOn = SEC_XY in vis
+        var cellH: Float
+        var xyTot: Float   // Reiter + XY-Fläche + Abstand
+        if (padsOn && xyOn) {
+            cellH = min(cellW, (avail * 0.72f - gap - (rows - 1) * rowGap) / rows)
+            xyTot = avail - (rows * cellH + (rows - 1) * rowGap + gap)
+            val minXy = dp(110f) + tabH + dp(5f) + gap
+            if (xyTot < minXy) { cellH -= (minXy - xyTot) / rows; xyTot = minXy }
+        } else if (padsOn) {
+            cellH = min(cellW * 1.15f, (avail - gap - (rows - 1) * rowGap) / rows)
+            xyTot = 0f
+        } else {
+            cellH = 0f
+            xyTot = max(dp(140f), avail)
+        }
+        val gridH = if (padsOn) rows * cellH + (rows - 1) * rowGap + gap else 0f
+        val cell = min(cellW, max(cellH, 1f))
+        // erst alles aus, dann die sichtbaren Bereiche der Reihe nach platzieren
+        for (r in knobRects) off(r)
+        zoomFx.setEmpty()
+        off(fxBtn); for (r in funcRects) off(r)
+        muteBtn.setEmpty(); clearBtn.setEmpty()
+        xyRect.setEmpty(); for (r in modeRects) r.setEmpty(); zoomXy.setEmpty()
+        off(selRow); for (r in selBtns) off(r)
+        var gridTop = -99999f
+        var seqTop = -99999f
+        var y = top0
+        for (id in vis) {
+            when (id) {
+                SEC_KNOBS -> {
+                    val kw = (inner - 4 * gap) / 5f
+                    knobSize = min(kw, kh - dp(16f))
+                    for (k in 0 until 5) {
+                        val x = margin + k * (kw + gap)
+                        knobRects[k].set(x, y, x + kw, y + kh)
+                    }
+                    val zs = dp(22f)
+                    if (zoomEnabled) zoomFx.set(knobRects[4].right - zs, knobRects[4].top, knobRects[4].right, knobRects[4].top + zs)
+                }
+                SEC_FUNC -> {
+                    // Funktionsleiste wie bei Maschine: SZENE · MUTE · SOLO | Effekt | ERASE · DUPL · REPEAT
+                    val cx = w / 2f
+                    fxBtn.set(cx - rh / 2f, y, cx + rh / 2f, y + rh)
+                    val side = (inner - rh) / 2f - dp(10f)
+                    val fg = dp(4f)
+                    val fw = (side - 2 * fg) / 3f
+                    val fh = min(rh, dp(38f))
+                    val fy = y + (rh - fh) / 2f
+                    for (k in 0 until 3) {
+                        val lx = margin + k * (fw + fg)
+                        funcRects[k].set(lx, fy, lx + fw, fy + fh)
+                        val rx = fxBtn.right + dp(10f) + k * (fw + fg)
+                        funcRects[3 + k].set(rx, fy, rx + fw, fy + fh)
+                    }
+                }
+                SEC_XY -> {
+                    // Reiter über der XY-Fläche: Effekte | Instrumente (303 · 909 · SYNTH → großer Editor)
+                    val w0 = (inner - dp(6f)) * 0.36f
+                    modeRects[0].set(margin, y, margin + w0, y + tabH)
+                    val zb = if (zoomEnabled) tabH + dp(4f) else 0f
+                    modeRects[1].set(modeRects[0].right + dp(6f), y, w - margin - zb, y + tabH)
+                    if (zoomEnabled) zoomXy.set(w - margin - tabH, y, w - margin, y + tabH)
+                    xyRect.set(margin, y + tabH + dp(5f), w - margin, y + xyTot - gap)
+                }
+                SEC_SEL -> {
+                    // Auswahl-Leiste über den Pads: SELECT · Pad · WAVE · NOTEN · FX · ⋯
+                    selRow.set(left, y, left + gridW, y + selH - dp(6f))
+                    val g = dp(5f)
+                    val paged = gridPages() > 1
+                    val ws = if (paged) floatArrayOf(1.35f, 0.9f, 1f, 1f, 0.8f, 0.6f, 0.95f) else floatArrayOf(1.35f, 0.9f, 1f, 1f, 0.8f, 0.6f)
+                    val unit = (selRow.width() - (ws.size - 1) * g) / ws.sum()
+                    var x = selRow.left
+                    for (i in ws.indices) {
+                        selBtns[i].set(x, selRow.top, x + unit * ws[i], selRow.bottom)
+                        x += unit * ws[i] + g
+                    }
+                    if (!paged) off(selBtns[6])
+                }
+                SEC_PADS -> gridTop = y
+                SEC_SEQ -> seqTop = y
+            }
+            secTop[id] = y
+            y += if (id == SEC_XY) xyTot else if (id == SEC_PADS) gridH else fixedH(id)
+            secBottom[id] = y
+        }
+        for (id in secHidden) { secTop[id] = -1f; secBottom[id] = -1f }
         radius = when (theme) {
             STUDIO -> cell * 0.10f
             HUD -> dp(5f)
@@ -676,7 +708,7 @@ class PadView(context: Context) : View(context) {
             in GLASS..CLAUDE -> cell * SKINS[theme - GLASS].padRadius
             else -> cell * 0.17f
         }
-        if (theme == RETRO) {
+        if (theme == RETRO && !xyRect.isEmpty) {
             // XY in der Mitte, links/rechts Spektrum-Anzeigen
             val lab = dp(16f)
             val hh = xyRect.height() - lab
@@ -696,7 +728,7 @@ class PadView(context: Context) : View(context) {
             // die kleinen Knöpfe unter den Pads gibt es nicht mehr (Pad-Menü/Tastatur: SELECT-Leiste)
             moreRects[i].set(-9999f, -9999f, -9998f, -9998f)
             keyRects[i].set(-9999f, -9999f, -9998f, -9998f)
-            if (i >= VISIBLE_PADS || i / perPage != padPage) {
+            if (i >= VISIBLE_PADS || i / perPage != padPage || !padsOn) {
                 padRects[i].setEmpty()
                 continue
             }
@@ -711,8 +743,7 @@ class PadView(context: Context) : View(context) {
             padMeasures[i].setPath(path, true)
             padLengths[i] = padMeasures[i].length
         }
-        // Sequenzer an Stelle der unteren Pad-Reihe
-        val seqTop = gridTop + rows * (cellH + rowGap) - rowGap + gap
+        // Sequenzer (eigener Bereich, Reihenfolge frei)
         seqRect.set(left, seqTop, left + gridW, seqTop + seqH)
         val sp = dp(8f)
         val stripH = dp(30f)
@@ -741,8 +772,15 @@ class PadView(context: Context) : View(context) {
         if (zoomEnabled) zoomPads.set(seqRect.right - sp - dp(30f), bTop, seqRect.right - sp, bTop + bH) else zoomPads.setEmpty()
         val fr = if (zoomPads.isEmpty) seqRect.right - sp else zoomPads.left - dp(6f)
         seqFoldBtn.set(fr - dp(30f), bTop, fr, bTop + bH)
-        // Mischpult nutzt auch den Platz der Auswahl-Leiste (die im MIX ausgeblendet ist)
-        mixRect.set(left, selRow.top, left + gridW, gridTop + rows * (cellH + rowGap) - rowGap)
+        if (SEC_SEQ in secHidden) {
+            off(seqRect); for (r in stepRects) off(r)
+            for (r in arrayOf(recBtn, playBtn, stopBtn, undoBtn, redoBtn, mixBtn, seqFoldBtn)) off(r)
+            zoomPads.setEmpty()
+        }
+        // Mischpult nutzt auch den Platz der Auswahl-Leiste (die im MIX ausgeblendet ist), wenn sie direkt darüber liegt
+        val gridBottom = gridTop + rows * (cellH + rowGap) - rowGap
+        val selAbove = vis.indexOf(SEC_SEL) >= 0 && vis.indexOf(SEC_SEL) == vis.indexOf(SEC_PADS) - 1
+        mixRect.set(left, if (selAbove) selRow.top else gridTop, left + gridW, gridBottom)
         buildHudLines(w, h)
         buildLightCaches()
         buildSkinCaches()
@@ -755,6 +793,7 @@ class PadView(context: Context) : View(context) {
     private fun buildHudLines(w: Float, h: Float) {
         hudLines.reset()
         hudAccents.reset()
+        if (xyRect.isEmpty || fxBtn.left < 0f) return
         val m = dp(6f)
         val top = xyRect.top - dp(14f)
         val bot = h - insetBottom - dp(30f)
@@ -853,24 +892,26 @@ class PadView(context: Context) : View(context) {
         }
         drawBackground(canvas)
         drawTopBar(canvas)
-        drawKnobs(canvas)
-        drawFxButton(canvas, dt)
+        if (SEC_KNOBS !in secHidden) drawKnobs(canvas)
+        if (SEC_FUNC !in secHidden) drawFxButton(canvas, dt)
         if (Engine.motionState == Engine.MOT_PLAY && xyPointer < 0) {
             xyDispX = Engine.motCurX
             xyDispY = Engine.motCurY
         }
-        drawModeTabs(canvas)
-        if (xyMode == 0) {
-            drawXy(canvas, dt)
-            drawSlotChips(canvas)
-            drawHoldButton(canvas)
-            drawMotionButton(canvas)
-        } else {
-            drawInstrument(canvas)
+        if (SEC_XY !in secHidden) {
+            drawModeTabs(canvas)
+            if (xyMode == 0) {
+                drawXy(canvas, dt)
+                drawSlotChips(canvas)
+                drawHoldButton(canvas)
+                drawMotionButton(canvas)
+            } else {
+                drawInstrument(canvas)
+            }
         }
         if (!zoomXy.isEmpty) zoomBtn(canvas, zoomXy, overlayColors())
         if (!zoomFx.isEmpty) zoomBtn(canvas, zoomFx, overlayColors())
-        drawSelRow(canvas)
+        if (SEC_SEL !in secHidden) drawSelRow(canvas)
         if (mixView) drawMixer(canvas) else for (i in 0 until VISIBLE_PADS) {
             drawPad(canvas, i, dt)
             if (!sceneView) drawStatus(canvas, i)
@@ -882,8 +923,10 @@ class PadView(context: Context) : View(context) {
             drawPadName(canvas, i)
         }
         if (!mixView) drawSelOutline(canvas)
-        drawSequencer(canvas)
-        drawSeqFold(canvas)
+        if (SEC_SEQ !in secHidden) {
+            drawSequencer(canvas)
+            drawSeqFold(canvas)
+        }
         drawShocks(canvas, dt)
         drawParticles(canvas, dt)
         drawFooter(canvas)
@@ -899,6 +942,7 @@ class PadView(context: Context) : View(context) {
         drawInfo(canvas)
         message?.let { drawMessage(canvas, it) }
         if (tourStep >= 0) drawTour(canvas)
+        if (layoutEdit) drawLayoutEdit(canvas)
         if (lesson != null) drawLesson(canvas, dt)
 
         postInvalidateOnAnimation()
@@ -4163,6 +4207,7 @@ class PadView(context: Context) : View(context) {
     private fun touchInner(e: MotionEvent): Boolean {
         if (tourStep >= 0) { tourTouch(e); return true }
         if (lesson != null && lessonTouch(e)) return true
+        if (layoutEdit) { layoutEditTouch(e); return true }
         if (infoMode && message == null && (e.actionMasked == MotionEvent.ACTION_DOWN || e.actionMasked == MotionEvent.ACTION_POINTER_DOWN)) {
             val ix = e.getX(e.actionIndex)
             val iy = e.getY(e.actionIndex)
@@ -4375,11 +4420,12 @@ class PadView(context: Context) : View(context) {
                 }
                 for (t in 0 until 2) {
                     if (modeRects[t].contains(x, y)) {
-                        val nm = if (t == 0) 0 else if (xyMode == 0) instSel else 1 + instSegAt(x)
-                        if (xyMode != nm) {
-                            instRelease()
-                            xyMode = nm
-                            if (nm > 0) instSel = nm
+                        // Instrumente öffnen direkt den großen Editor (keine Mini-Ansicht mehr in der Pad-Ansicht)
+                        if (xyMode != 0) { instRelease(); xyMode = 0 }
+                        if (t == 1) {
+                            instSel = 1 + instSegAt(x)
+                            instEd.open(instSel)
+                            lessonInstOpened = true
                         }
                         performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
                         burst(x, y, overlayColors()[2], 14, 180f)
@@ -4795,7 +4841,7 @@ class PadView(context: Context) : View(context) {
             val y1 = displayRect.bottom + dp(6f)
             val y2 = knobRects[0].bottom + dp(3f)
             canvas.drawLine(m, y1, width - m, y1, strokePaint)
-            canvas.drawLine(m, y2, width - m, y2, strokePaint)
+            if (SEC_KNOBS !in secHidden) canvas.drawLine(m, y2, width - m, y2, strokePaint)
         }
     }
 
@@ -8524,7 +8570,7 @@ class PadView(context: Context) : View(context) {
         // ---- Umschalter & Instrumente
         for (t in 0 until 2) if (modeRects[t].contains(x, y)) {
             if (t == 0) return Triple(modeRects[0], "🎛 EFFEKTE", "Die Fläche darunter ist die XY-Effektfläche mit Effekt-Kette, HOLD und Bewegungs-Aufnahme.")
-            return Triple(modeRects[1], "🎹 INSTRUMENTE", "Drei Instrumente in einem Reiter – antippen wählt: 303 (Acid-Bass mit Accent und Slide), 909 (Drumcomputer mit 11 Klängen, Presets und Finger-Pads) und SYNTH (polyfoner Synth mit Akkorden, 5 Klangarten). Alle laufen synchron mit dem Sequenzer (▶), lassen sich mit FX durch die Effekt-Kette schicken und können als Eingang eines Pads aufgenommen werden (Pad-Menü → Eingang → Instrumente).")
+            return Triple(modeRects[1], "🎹 INSTRUMENTE", "Drei Instrumente – antippen öffnet den großen Editor: 303 (Acid-Bass mit Accent und Slide), 909 (Drumcomputer mit 11 Klängen, Presets und Finger-Pads) und SYNTH (polyfoner Synth mit Akkorden, 5 Klangarten). Alle laufen synchron mit dem Sequenzer (▶), lassen sich mit FX durch die Effekt-Kette schicken und können als Eingang eines Pads aufgenommen werden (Pad-Menü → Eingang → Instrumente).")
         }
         if (xyMode == 3 && xyRect.contains(x, y)) {
             layoutSynth()
@@ -8689,7 +8735,7 @@ class PadView(context: Context) : View(context) {
         TourStep({ fxBtn }, "Effekt wählen", "Links/rechts tippen wechselt den Effekt (45 Stück: Filter, Delay, Hall, Looper, Roboter …). Lange drücken öffnet die Liste."),
         TourStep({ union(knobRects) }, "Regler", "Mischung, die zwei Effekt-Parameter, Gesamtlautstärke und Swing. Regler hoch/runter ziehen."),
         TourStep({ union(funcRects) }, "Funktionen", "SZENE: Pad-Kombinationen speichern und im Takt wechseln · MUTE/SOLO · ERASE löscht · DUPL kopiert Pads · REPEAT wiederholt im Rhythmus."),
-        TourStep({ modeRects[1] }, "🎹 Instrumente", "Acid-Bass (303), Drumcomputer (909) und 3 Synth-Spuren mit Piano-Roll, Akkordfolgen, Arpeggiator und Patterns A–D. ⤢ öffnet den großen Editor."),
+        TourStep({ modeRects[1] }, "🎹 Instrumente", "Acid-Bass (303), Drumcomputer (909) und 3 Synth-Spuren mit Piano-Roll, Akkordfolgen, Arpeggiator und Patterns A–D. Antippen öffnet den großen Editor."),
         TourStep({ displayRect }, "Tempo & Display", "Zeigt Effekt und Tempo. Rechts im Display tippen stellt das Tempo ein (Tap-Tempo, Metronom)."),
         TourStep({ union(arrayOf(masterBtn, setRecBtn)) }, "MASTER & Set-Aufnahme", "MASTER: Equalizer, Kompressor, Limiter für den Gesamtklang. REC nimmt alles, was du spielst, als Set auf – zum Exportieren oder Teilen."),
         TourStep({ designBtn }, "☰ Menü", "Hier findest du: 🎧 DJ-Modus, 🔁 Loop Station, ✂ Slicer, 💿 Musik-Sammlung, 📤 Export, 📲 Teilen, 📡 Handys koppeln, Projekte und Einstellungen."),
@@ -8827,11 +8873,12 @@ class PadView(context: Context) : View(context) {
             LStep("🎵 Dein erster Song", "In etwa 10 Minuten baust du einen kompletten Song: Beat → Bass → Akkorde → Melodie → eigene Aufnahme → Effekte → Ablauf → Aufnahme. Der Finger ☝ zeigt dir, wo du tippen musst. Ein grüner Haken heißt: geschafft – dann geht es von selbst weiter."),
             LStep("⏱ 1 · Das Tempo", "Jeder Song hat ein Tempo. Ich stelle 122 BPM ein – typisch für House. Später änderst du es rechts im Display (Tap-Tempo, Metronom).", { displayRect }, G_TAP,
                 setup = { Engine.setBpm(122f) }),
-            LStep("🎹 2 · Zu den Instrumenten", "Tippe auf den Reiter 🎹 INSTRUMENTE (rechts neben den Effekten).", { modeRects[1] }, G_TAP, done = { xyMode != 0 }),
+            LStep("🎹 2 · Zu den Instrumenten", "Rechts neben den Effekten sind die Instrumente: 303 (Bass), 909 (Drums) und SYNTH. Tippe eins an – der große Editor öffnet sich. Mit ✕ kommst du zurück.", { modeRects[1] }, G_TAP,
+                done = { lessonInstOpened }, setup = { lessonInstOpened = false }),
             LStep("🥁 3 · Der Beat", "Ich lege einen House-Beat in den Drumcomputer (909): Kick auf jedem Viertel, Clap auf 2 und 4, offene Hi-Hat dazwischen. Drück jetzt ▶ zum Abspielen!", { playBtn }, G_TAP,
                 done = { Engine.seqPlaying },
-                setup = { InstState.drumApplyPreset(0); InstState.drumOn = true; InstState.drumLen = 16 }),
-            LStep("🎸 4 · Der Bass", "Hörst du ihn? Ein Acid-Bass (303) auf den Offbeats – das typische Pumpen zwischen den Kicks. Im Reiter 303 kannst du Töne, Filter und Akzente ändern.", { modeRects[1] }, G_NONE,
+                setup = { if (instEd.isOpen) instEd.close(); InstState.drumApplyPreset(0); InstState.drumOn = true; InstState.drumLen = 16 }),
+            LStep("🎸 4 · Der Bass", "Hörst du ihn? Ein Acid-Bass (303) auf den Offbeats – das typische Pumpen zwischen den Kicks. Tippe auf 🎹 303 – im Editor änderst du Töne, Filter und Akzente.", { modeRects[1] }, G_NONE,
                 setup = {
                     val st = InstState
                     st.acidClear()
@@ -8845,12 +8892,12 @@ class PadView(context: Context) : View(context) {
                     InstState.synTracks[1].on = true
                     InstState.scaleSnap = true
                 }),
-            LStep("✏ 6 · Deine Melodie", "Jetzt du! Wähle im Reiter 🎹 das Instrument SYNTH und tippe ein paar Noten in die Piano-Roll (⤢ öffnet den großen Editor). Dank Tonleiter klingt jeder Ton passend. Tipp: Menü → Mikro → „Summen → Melodie“ geht auch mit der Stimme.", { modeRects[1] }, G_TAP,
+            LStep("✏ 6 · Deine Melodie", "Jetzt du! Tippe auf 🎹 SYNTH und setze im Editor ein paar Noten in die Piano-Roll. Dank Tonleiter klingt jeder Ton passend. Tipp: Menü → Mikro → „Summen → Melodie“ geht auch mit der Stimme.", { modeRects[1] }, G_TAP,
                 done = { InstState.synTracks[0].hasNotes() },
                 setup = { InstState.synCur = 0; InstState.synTracks[0].on = true }),
             LStep("🎙 7 · Eigene Aufnahme", "Jetzt wird es persönlich: HALTE ein leeres Pad gedrückt und klatsche, singe oder klopfe etwas – beim Loslassen läuft es als Loop im Takt mit.", { padRects[firstEmptyPad()] }, G_HOLD,
                 done = { loopCount() > lBase },
-                setup = { lBase = loopCount() }),
+                setup = { if (instEd.isOpen) instEd.close(); lBase = loopCount() }),
             LStep("✨ 8 · Effekte", "Tippe auf den Reiter ✨ EFFEKTE und lege dann den Finger auf die Effekt-Fläche. Bewege ihn – oben/unten und links/rechts steuern den Effekt. Ideal für einen Filter-Sweep vor dem Drop!", { if (xyMode == 0) xyRect else modeRects[0] }, G_DRAG,
                 done = { xyMode == 0 && xyPointer >= 0 }),
             LStep("🎬 9 · Der Ablauf", "Ein Song lebt von Abwechslung: Intro (nur Drums) → Aufbau → Drop (alles) → Break. Mit SZENE speicherst du solche Kombinationen und wechselst sie im Takt. Einen festen Ablauf baust du in der Song-Matrix (Menü → Studio). Probier: Pads stumm schalten und wieder starten – genau so entsteht Spannung.", { union(funcRects) }, G_TAP),
@@ -9141,6 +9188,229 @@ class PadView(context: Context) : View(context) {
     /** Preset-Bibliothek für ACID (1) / DRUM (2). */
     var onInstPresets: ((Int) -> Unit)? = null
     private val modeRects = Array(2) { RectF() }
+
+    // ---------------------------------------------------------------- Ansicht anpassen (Bereiche verschieben / ausblenden)
+
+    /** Reihenfolge aller Bereiche (auch ausgeblendeter – sie behalten ihren Platz in der Reihe). */
+    val secOrder = ArrayList(SEC_DEFAULT)
+    val secHidden = HashSet<Int>()
+    private val secTop = FloatArray(6) { -1f }
+    private val secBottom = FloatArray(6) { -1f }
+    /** Gespeicherte Form: „0,1,2,3,4,5|5“ (Reihenfolge | ausgeblendet). */
+    var onLayoutChanged: ((String) -> Unit)? = null
+    var layoutEdit = false
+        private set
+    private var editDrag = -1
+    private var editDragY = 0f
+    private var editGrabDy = 0f
+    private var editPtr = -1
+    private val editDone = RectF()
+    private val editReset = RectF()
+    private val editEyes = Array(6) { RectF() }
+    private val editChips = Array(6) { RectF() }
+
+    fun layoutString(): String = secOrder.joinToString(",") + "|" + secHidden.joinToString(",")
+
+    fun applyLayout(str: String?) {
+        val ord = ArrayList<Int>()
+        val hid = HashSet<Int>()
+        if (!str.isNullOrBlank()) {
+            val parts = str.split("|")
+            parts[0].split(",").mapNotNull { it.trim().toIntOrNull() }.filter { it in 0..5 && it !in ord }.forEach { ord.add(it) }
+            if (parts.size > 1) parts[1].split(",").mapNotNull { it.trim().toIntOrNull() }.filter { it in 0..5 }.forEach { hid.add(it) }
+        }
+        for (d in SEC_DEFAULT) if (d !in ord) ord.add(d)
+        hid.remove(SEC_PADS)
+        secOrder.clear(); secOrder.addAll(ord)
+        secHidden.clear(); secHidden.addAll(hid)
+        layoutPads()
+        invalidate()
+    }
+
+    fun startLayoutEdit() {
+        closeFocus()
+        if (instEd.isOpen) instEd.close()
+        layoutEdit = true
+        editDrag = -1
+        hint("Bereiche mit dem Finger nach oben/unten ziehen · 👁 blendet aus · unten wieder einblenden")
+        invalidate()
+    }
+
+    fun endLayoutEdit() {
+        layoutEdit = false
+        editDrag = -1
+        layoutPads()
+        onLayoutChanged?.invoke(layoutString())
+        invalidate()
+    }
+
+    private fun drawLayoutEdit(canvas: Canvas) {
+        val cols = overlayColors()
+        val acc = cols[2]
+        val w = width.toFloat()
+        val h = height.toFloat()
+        fillPaint.shader = null
+        // alles abdunkeln
+        fillPaint.color = Color.argb(150, 0, 0, 0)
+        canvas.drawRect(0f, 0f, w, h, fillPaint)
+        // Kopf: Titel + Knöpfe
+        val by = insetTop + dp(8f)
+        val bh = dp(36f)
+        editDone.set(w - dp(16f) - dp(96f), by + dp(14f), w - dp(16f), by + dp(14f) + bh)
+        editReset.set(editDone.left - dp(8f) - dp(96f), editDone.top, editDone.left - dp(8f), editDone.bottom)
+        fillPaint.color = Color.rgb(18, 19, 24)
+        tmpRect.set(dp(6f), insetTop + dp(2f), w - dp(6f), by + dp(64f))
+        canvas.drawRoundRect(tmpRect, dp(12f), dp(12f), fillPaint)
+        textPaint.textAlign = Paint.Align.LEFT
+        textPaint.color = Color.WHITE
+        val title = fitLabel(textPaint, "🧩 ANSICHT ANPASSEN", editReset.left - dp(28f), dp(15f), dp(9f))
+        canvas.drawText(title, dp(18f), editDone.centerY() - dp(3f), textPaint)
+        textPaint.color = Color.argb(180, 255, 255, 255)
+        val sub = fitLabel(textPaint, "ziehen = verschieben · 👁 = ausblenden", editReset.left - dp(28f), dp(10f), dp(7f))
+        canvas.drawText(sub, dp(18f), editDone.centerY() + dp(12f), textPaint)
+        textPaint.textAlign = Paint.Align.CENTER
+        editBtn(canvas, editReset, "↺ STANDARD", false, acc)
+        editBtn(canvas, editDone, "✓ FERTIG", true, acc)
+        // Bereiche
+        for (r in editEyes) r.setEmpty()
+        val vis = secOrder.filter { it !in secHidden }
+        for (id in vis) {
+            if (id == editDrag) continue
+            drawSecBand(canvas, id, secTop[id], secBottom[id], acc, false)
+        }
+        if (editDrag >= 0) {
+            val hgt = secBottom[editDrag] - secTop[editDrag]
+            val top = editDragY - editGrabDy
+            // Einfügemarke
+            val target = dropIndex(top + hgt / 2f)
+            val others = vis.filter { it != editDrag }
+            val ly = if (target >= others.size) secBottom[others.lastOrNull() ?: editDrag] else secTop[others[target]]
+            strokePaint.strokeWidth = dp(4f)
+            strokePaint.color = acc
+            canvas.drawLine(dp(10f), ly, w - dp(10f), ly, strokePaint)
+            drawSecBand(canvas, editDrag, top, top + hgt, acc, true)
+        }
+        // ausgeblendete Bereiche unten als Chips
+        for (r in editChips) r.setEmpty()
+        val hidden = secOrder.filter { it in secHidden }
+        val trayTop = h - insetBottom - dp(46f)
+        fillPaint.color = Color.rgb(18, 19, 24)
+        tmpRect.set(dp(6f), trayTop, w - dp(6f), h - insetBottom - dp(4f))
+        canvas.drawRoundRect(tmpRect, dp(12f), dp(12f), fillPaint)
+        if (hidden.isEmpty()) {
+            textPaint.color = Color.argb(150, 255, 255, 255)
+            textPaint.textSize = dp(10f)
+            canvas.drawText("Ausgeblendete Bereiche erscheinen hier – antippen holt sie zurück", w / 2f, tmpRect.centerY() + dp(3.5f), textPaint)
+        } else {
+            val g = dp(6f)
+            val cw = (tmpRect.width() - dp(12f) - (hidden.size - 1) * g) / hidden.size
+            for ((i, id) in hidden.withIndex()) {
+                val x = tmpRect.left + dp(6f) + i * (cw + g)
+                editChips[id].set(x, tmpRect.top + dp(6f), x + cw, tmpRect.bottom - dp(6f))
+                editBtn(canvas, editChips[id], "＋ " + SEC_NAMES[id], false, acc)
+            }
+        }
+    }
+
+    private fun editBtn(c: Canvas, r: RectF, label: String, on: Boolean, acc: Int) {
+        fillPaint.color = if (on) acc else Color.rgb(40, 42, 52)
+        c.drawRoundRect(r, dp(9f), dp(9f), fillPaint)
+        strokePaint.strokeWidth = dp(1.2f)
+        strokePaint.color = if (on) Color.WHITE else alpha(acc, 0.7f)
+        c.drawRoundRect(r, dp(9f), dp(9f), strokePaint)
+        textPaint.color = Color.WHITE
+        val lb = fitLabel(textPaint, label, r.width() - dp(8f), dp(12f), dp(7f))
+        c.drawText(lb, r.centerX(), r.centerY() + textPaint.textSize * 0.36f, textPaint)
+    }
+
+    private fun drawSecBand(c: Canvas, id: Int, top: Float, bottom: Float, acc: Int, lifted: Boolean) {
+        if (top < 0f || bottom <= top) return
+        val r = RectF(dp(8f), top + dp(2f), width - dp(8f), bottom - dp(2f))
+        if (lifted) softShadow(c, r, dp(12f))
+        fillPaint.color = if (lifted) alpha(acc, 0.55f) else alpha(acc, 0.22f)
+        c.drawRoundRect(r, dp(12f), dp(12f), fillPaint)
+        strokePaint.strokeWidth = dp(if (lifted) 3f else 2f)
+        strokePaint.color = if (lifted) Color.WHITE else acc
+        c.drawRoundRect(r, dp(12f), dp(12f), strokePaint)
+        textPaint.color = Color.WHITE
+        val eyeW = if (id == SEC_PADS) 0f else dp(84f)
+        val lb = fitLabel(textPaint, "☰  " + SEC_NAMES[id], r.width() - eyeW - dp(24f), min(dp(16f), r.height() * 0.45f), dp(8f))
+        textPaint.textAlign = Paint.Align.LEFT
+        c.drawText(lb, r.left + dp(12f), r.centerY() + textPaint.textSize * 0.36f, textPaint)
+        textPaint.textAlign = Paint.Align.CENTER
+        if (id != SEC_PADS && !lifted) {
+            val eh = min(dp(32f), r.height() - dp(8f))
+            editEyes[id].set(r.right - dp(8f) - eyeW, r.centerY() - eh / 2f, r.right - dp(8f), r.centerY() + eh / 2f)
+            editBtn(c, editEyes[id], "👁 AUS", false, acc)
+        }
+    }
+
+    /** Ziel-Position (Index unter den übrigen sichtbaren Bereichen) für die Mitte [cy] des gezogenen Bereichs. */
+    private fun dropIndex(cy: Float): Int {
+        val others = secOrder.filter { it !in secHidden && it != editDrag }
+        var k = 0
+        for (id in others) if ((secTop[id] + secBottom[id]) / 2f < cy) k++
+        return k
+    }
+
+    private fun layoutEditTouch(e: MotionEvent) {
+        when (e.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                val x = e.x; val y = e.y
+                when {
+                    editDone.contains(x, y) -> { performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY); endLayoutEdit(); hint("Ansicht gespeichert"); return }
+                    editReset.contains(x, y) -> {
+                        performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+                        secOrder.clear(); secOrder.addAll(SEC_DEFAULT); secHidden.clear()
+                        layoutPads(); hint("Standard-Ansicht"); return
+                    }
+                }
+                for (id in 0 until 6) {
+                    if (editChips[id].contains(x, y)) {
+                        secHidden.remove(id); layoutPads()
+                        performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+                        hint("${SEC_NAMES[id]} wieder eingeblendet")
+                        return
+                    }
+                    if (editEyes[id].contains(x, y)) {
+                        secHidden.add(id); layoutPads()
+                        performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+                        hint("${SEC_NAMES[id]} ausgeblendet – unten antippen holt ihn zurück")
+                        return
+                    }
+                }
+                for (id in secOrder) {
+                    if (id in secHidden) continue
+                    if (y >= secTop[id] && y < secBottom[id]) {
+                        editDrag = id
+                        editPtr = e.getPointerId(0)
+                        editDragY = y
+                        editGrabDy = y - secTop[id]
+                        performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+                        return
+                    }
+                }
+            }
+            MotionEvent.ACTION_MOVE -> if (editDrag >= 0) {
+                val pi = e.findPointerIndex(editPtr)
+                if (pi >= 0) editDragY = e.getY(pi)
+            }
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> if (editDrag >= 0) {
+                val id = editDrag
+                val hgt = secBottom[id] - secTop[id]
+                val target = dropIndex(editDragY - editGrabDy + hgt / 2f)
+                // neu einsortieren: hinter den [target]-ten sichtbaren Bereich (ausgeblendete behalten ihren Platz)
+                val others = secOrder.filter { it !in secHidden && it != id }
+                secOrder.remove(id)
+                if (target >= others.size) secOrder.add(id)
+                else secOrder.add(secOrder.indexOf(others[target]), id)
+                editDrag = -1
+                layoutPads()
+                performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+            }
+        }
+        invalidate()
+    }
     /** Zuletzt gewähltes Instrument (1 = ACID, 2 = DRUM, 3 = SYNTH). */
     private var instSel = 1
     private val instSegNames = arrayOf("303", "909", "SYNTH")
@@ -9177,11 +9447,12 @@ class PadView(context: Context) : View(context) {
             val lb = fitLabel(textPaint, "🎛 EFFEKTE", r.width() - dp(10f), dp(11f), dp(7f))
             canvas.drawText(lb, r.centerX(), r.centerY() + textPaint.textSize * 0.36f, textPaint)
         }
-        // Reiter INSTRUMENTE: zu = ein Knopf, offen = 303 | 909 | SYNTH
+        // Reiter INSTRUMENTE: 303 | 909 | SYNTH – antippen öffnet den großen Editor
         val r = modeRects[1]
+        if (r.width() <= 0f) return
         val rr = r.height() / 2f
-        val open = xyMode != 0
-        fillPaint.color = if (open) alpha(cols[0], 0.9f) else alpha(cols[0], 0.85f)
+        val open = true
+        fillPaint.color = alpha(cols[0], 0.85f)
         canvas.drawRoundRect(r, rr, rr, fillPaint)
         if (!open) {
             strokePaint.strokeWidth = dp(1.2f)
@@ -9201,7 +9472,7 @@ class PadView(context: Context) : View(context) {
         }
         val sw = r.width() / 3f
         for (k in 0 until 3) {
-            val on = xyMode == k + 1
+            val on = false
             tmpRect.set(r.left + k * sw + dp(1.5f), r.top + dp(1.5f), r.left + (k + 1) * sw - dp(1.5f), r.bottom - dp(1.5f))
             val rr2 = tmpRect.height() / 2f
             if (on) {
@@ -9209,7 +9480,7 @@ class PadView(context: Context) : View(context) {
                 canvas.drawRoundRect(tmpRect, rr2, rr2, fillPaint)
             }
             textPaint.color = if (on) Color.WHITE else alpha(cols[1], 0.8f)
-            val lb = fitLabel(textPaint, instSegNames[k], tmpRect.width() - dp(14f), dp(11f), dp(7f))
+            val lb = fitLabel(textPaint, "🎹 " + instSegNames[k], tmpRect.width() - dp(14f), dp(11f), dp(7f))
             canvas.drawText(lb, tmpRect.centerX() - dp(3f), tmpRect.centerY() + textPaint.textSize * 0.36f, textPaint)
             if (instRunning(k + 1)) {
                 dotPaint.color = if (on) Color.WHITE else cols[2]
@@ -9217,9 +9488,15 @@ class PadView(context: Context) : View(context) {
             }
         }
         strokePaint.strokeWidth = dp(1.2f)
-        strokePaint.color = Color.WHITE
+        strokePaint.color = alpha(cols[1], 0.4f)
         canvas.drawRoundRect(r, rr, rr, strokePaint)
+        // Trennstriche zwischen den drei Instrumenten
+        strokePaint.strokeWidth = dp(1f)
+        for (k in 1..2) canvas.drawLine(r.left + k * sw, r.top + dp(5f), r.left + k * sw, r.bottom - dp(5f), strokePaint)
     }
+
+    /** Für die Lektion: wurde ein Instrument-Editor geöffnet? */
+    private var lessonInstOpened = false
 
     // ---- gemeinsame Bausteine
     private val instHdr = Array(8) { RectF() }
@@ -9801,6 +10078,15 @@ class PadView(context: Context) : View(context) {
         private val BRAND_ORANGE = Color.rgb(255, 95, 0)
 
         const val VISIBLE_PADS = 12
+        // Bereiche der Pad-Ansicht (Reihenfolge und Sichtbarkeit frei wählbar)
+        const val SEC_KNOBS = 0
+        const val SEC_FUNC = 1
+        const val SEC_XY = 2
+        const val SEC_SEL = 3
+        const val SEC_PADS = 4
+        const val SEC_SEQ = 5
+        val SEC_NAMES = arrayOf("Drehregler", "Funktionsleiste", "Effekt-Fläche & Instrumente", "Auswahl-Leiste", "Pads", "Sequenzer & Transport")
+        val SEC_DEFAULT = listOf(SEC_KNOBS, SEC_FUNC, SEC_XY, SEC_SEL, SEC_PADS, SEC_SEQ)
         private const val SYN_LIVE_TAG = 1
         private const val SYN_LANE_TAG = 2
         const val F_NONE = 0
