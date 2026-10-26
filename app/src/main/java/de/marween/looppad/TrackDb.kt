@@ -155,8 +155,25 @@ object TrackDb {
         } catch (ignored: Exception) {}
     }
 
-    @Synchronized
+    private val saver = java.util.concurrent.Executors.newSingleThreadExecutor()
+    private val savePending = java.util.concurrent.atomic.AtomicBoolean(false)
+
+    /**
+     * Speichern im Hintergrund (bei großen Sammlungen dauert das JSON spürbar) – mehrere Aufrufe kurz
+     * hintereinander werden zu einem Schreibvorgang zusammengefasst.
+     */
     fun save(ctx: Context) {
+        val app = ctx.applicationContext
+        if (!savePending.compareAndSet(false, true)) return
+        saver.execute {
+            savePending.set(false)
+            for (attempt in 0 until 3) if (saveNow(app)) break
+        }
+    }
+
+    /** Sofort schreiben; false = wurde währenddessen geändert, nochmal versuchen. */
+    @Synchronized
+    fun saveNow(ctx: Context): Boolean {
         try {
             val a = JSONArray()
             for (t in tracks) {
@@ -183,7 +200,12 @@ object TrackDb {
             val tmp = File(ctx.filesDir, "djtracks.json.tmp")
             tmp.writeText(j.toString())
             tmp.renameTo(file(ctx))
-        } catch (ignored: Exception) {}
+            return true
+        } catch (e: java.util.ConcurrentModificationException) {
+            return false
+        } catch (ignored: Exception) {
+            return true
+        }
     }
 
     @Synchronized fun all(): List<Track> = ArrayList(tracks)

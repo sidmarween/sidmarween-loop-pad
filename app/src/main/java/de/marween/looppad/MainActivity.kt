@@ -77,6 +77,7 @@ class MainActivity : Activity() {
             window.attributes = lp
         }
         volumeControlStream = AudioManager.STREAM_MUSIC
+        applyFrameRate(getSharedPreferences("marvpad", MODE_PRIVATE).getBoolean("fps60", true))
         pads = PadView(this)
         pads.onMessageTap = { onMessageTapped() }
         pads.onPadMenu = { p -> showPadMenu(p) }
@@ -4470,6 +4471,28 @@ class MainActivity : Activity() {
         }
     }
 
+    /**
+     * Bei 90/120-Hz-Displays zeichnet die Oberfläche sonst doppelt so oft – das kostet CPU, die dem Audio fehlt,
+     * und heizt das Handy auf (dann drosselt es den Takt → Knackser).
+     */
+    private fun applyFrameRate(limit: Boolean) {
+        try {
+            val lp = window.attributes
+            var mode = 0
+            if (limit && Build.VERSION.SDK_INT >= 23) {
+                @Suppress("DEPRECATION")
+                val d = windowManager.defaultDisplay
+                val cur = d.mode
+                // gleicher Bildschirmmodus, nur mit ~60 Hz
+                mode = d.supportedModes.filter { it.physicalWidth == cur.physicalWidth && it.physicalHeight == cur.physicalHeight && it.refreshRate in 55f..65f }
+                    .minByOrNull { kotlin.math.abs(it.refreshRate - 60f) }?.modeId ?: 0
+            }
+            lp.preferredDisplayModeId = mode
+            lp.preferredRefreshRate = if (limit) 60f else 0f
+            window.attributes = lp
+        } catch (ignored: Throwable) {}
+    }
+
     private fun showLatency() {
         val prefs = getSharedPreferences("marvpad", MODE_PRIVATE)
         val (box, scroll) = dialogBox()
@@ -4513,6 +4536,10 @@ class MainActivity : Activity() {
                 Engine.launchIdx = prefs.getInt("launchIdxBefore", 3).coerceIn(1, Engine.LAUNCH_Q.size - 1)
                 prefs.edit().putInt("launchIdx", Engine.launchIdx).apply()
             }
+        }
+        check(box, "Bildrate auf 60 Hz begrenzen – mehr Rechenzeit fürs Audio, weniger Wärme und Akku (Touch und Ton reagieren genauso schnell)", prefs.getBoolean("fps60", true)) {
+            prefs.edit().putBoolean("fps60", it).apply()
+            applyFrameRate(it)
         }
         note(box, "ONE SHOTS und Noten klingen immer im nächsten Audio-Block (wenige Millisekunden). Touch-Ereignisse werden ohne Bildtakt-Verzögerung zugestellt.")
         ui()

@@ -155,9 +155,13 @@ object AudioFiles {
             var outputDone = false
             var frames = 0L
             while (!outputDone) {
-                if (!inputDone) {
-                    val ii = c.dequeueInputBuffer(10_000)
-                    if (ii >= 0) {
+                // alle freien Eingangspuffer füllen (statt einer pro Runde) – der Decoder hat immer Arbeit
+                var feeds = 0
+                while (!inputDone && feeds < 8) {
+                    val ii = c.dequeueInputBuffer(if (feeds == 0) 1_000 else 0)
+                    if (ii < 0) break
+                    feeds++
+                    run {
                         val buf = c.getInputBuffer(ii)!!
                         val n = ex.readSampleData(buf, 0)
                         if (n < 0) {
@@ -169,7 +173,7 @@ object AudioFiles {
                         }
                     }
                 }
-                val oi = c.dequeueOutputBuffer(info, 10_000)
+                val oi = c.dequeueOutputBuffer(info, 3_000)
                 if (oi == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
                     val of = c.outputFormat
                     rate = of.getInteger(MediaFormat.KEY_SAMPLE_RATE)

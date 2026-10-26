@@ -1897,6 +1897,28 @@ object Engine {
     }
     private var recordThread: Thread? = null
     private var mixThread: Thread? = null
+    /** Android 12+: dem System sagen, wie viel Zeit der Mix-Thread pro Block braucht → CPU-Takt passt sich an (weniger Aussetzer). */
+    private var hintMgr: Any? = null
+
+    private fun openHint(block: Int): Any? {
+        if (android.os.Build.VERSION.SDK_INT < 31) return null
+        val m = hintMgr as? android.os.PerformanceHintManager ?: return null
+        return try {
+            // Ziel: 70 % der Blockdauer – Reserve für Spitzen
+            val target = (block * 1_000_000_000L / max(1, sampleRate)) * 7 / 10
+            m.createHintSession(intArrayOf(Process.myTid()), max(500_000L, target))
+        } catch (e: Throwable) { null }
+    }
+
+    private fun reportHint(h: Any?, ns: Long) {
+        if (h == null || android.os.Build.VERSION.SDK_INT < 31) return
+        try { (h as android.os.PerformanceHintManager.Session).reportActualWorkDuration(max(1L, ns)) } catch (e: Throwable) {}
+    }
+
+    private fun closeHint(h: Any?) {
+        if (h == null || android.os.Build.VERSION.SDK_INT < 31) return
+        try { (h as android.os.PerformanceHintManager.Session).close() } catch (e: Throwable) {}
+    }
 
     // ---------------------------------------------------------------- Lifecycle
 
@@ -1986,6 +2008,7 @@ object Engine {
             releaseDevices()
             return
         }
+        hintMgr = if (android.os.Build.VERSION.SDK_INT >= 31) try { context.getSystemService(android.os.PerformanceHintManager::class.java) } catch (e: Throwable) { null } else null
         recordThread = Thread({ recordLoop(r, burst) }, "LoopPad-Record").also { it.start() }
         mixThread = Thread({ mixLoop(t, block) }, "LoopPad-Mix").also { it.start() }
     }
@@ -2354,7 +2377,9 @@ object Engine {
         micCursor = -1L
         monCursor = -1L
         val ts = AudioTimestamp()
+        val hint = openHint(block)
         while (running) {
+            val workStart = System.nanoTime()
             java.util.Arrays.fill(out, 0f)
             java.util.Arrays.fill(bus, 0f)
             val w = written
@@ -2724,6 +2749,7 @@ object Engine {
                     }
                 }
             }
+            reportHint(hint, System.nanoTime() - workStart)
             var off = 0
             val outBuf = if (quadOn) quad else stereo
             val total = block * (if (quadOn) 4 else 2)
@@ -2754,6 +2780,7 @@ object Engine {
             written = w + block
             updateOutClock(t, ts)
         }
+        closeHint(hint)
     }
 
     private var micCursor = -1L

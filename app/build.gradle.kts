@@ -28,7 +28,10 @@ android {
 
     buildTypes {
         release {
-            isMinifyEnabled = false
+            // R8: Kotlin-Bibliothek verkleinern und den Code optimieren (Inlining, weniger Prüfungen) –
+            // eigener Code bleibt vollständig erhalten (siehe proguard-rules.pro)
+            isMinifyEnabled = true
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
             signingConfig = signingConfigs.getByName("app")
         }
         debug {
@@ -42,6 +45,8 @@ android {
     }
     kotlinOptions {
         jvmTarget = "17"
+        // keine Null-Prüfungen an jedem Methodenaufruf (spart Zeit in den Audio-Schleifen)
+        freeCompilerArgs += listOf("-Xno-param-assertions", "-Xno-call-assertions", "-Xno-receiver-assertions")
     }
     lint {
         checkReleaseBuilds = false

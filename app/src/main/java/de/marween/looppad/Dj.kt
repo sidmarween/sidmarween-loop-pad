@@ -1003,9 +1003,13 @@ object Dj {
             var inputDone = false
             var outputDone = false
             while (!outputDone) {
-                if (!inputDone) {
-                    val ii = c.dequeueInputBuffer(10_000)
-                    if (ii >= 0) {
+                // alle freien Eingangspuffer füllen (statt einer pro Runde) – der Decoder hat immer Arbeit
+                var feeds = 0
+                while (!inputDone && feeds < 8) {
+                    val ii = c.dequeueInputBuffer(if (feeds == 0) 1_000 else 0)
+                    if (ii < 0) break
+                    feeds++
+                    run {
                         val ib = c.getInputBuffer(ii)!!
                         val sz = ex.readSampleData(ib, 0)
                         if (sz < 0) {
@@ -1017,7 +1021,7 @@ object Dj {
                         }
                     }
                 }
-                val oi = c.dequeueOutputBuffer(info, 10_000)
+                val oi = c.dequeueOutputBuffer(info, 3_000)
                 if (oi == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
                     val of = c.outputFormat
                     val nr = of.getInteger(MediaFormat.KEY_SAMPLE_RATE)
@@ -1033,7 +1037,18 @@ object Dj {
                         val fb = if (floatPcm) b.asFloatBuffer() else null
                         val sb = if (!floatPcm) b.asShortBuffer() else null
                         val nf = (if (floatPcm) fb!!.remaining() else sb!!.remaining()) / max(1, inCh)
-                        for (f in 0 until nf) {
+                        if (!floatPcm && inCh == outCh && nf > 0) {
+                            // schneller Weg: 16 Bit, gleiche Kanalzahl → in einem Stück kopieren
+                            val take = min(nf.toLong(), maxFrames - frames).toInt()
+                            if (take > 0) {
+                                if (frames + take > cap) {
+                                    cap = min(maxFrames.toInt(), max(frames + take, cap + cap / 2 + rate))
+                                    buf = buf.copyOf(cap * outCh)
+                                }
+                                sb!!.get(buf, frames * outCh, take * outCh)
+                                frames += take
+                            }
+                        } else for (f in 0 until nf) {
                             if (frames >= maxFrames) break
                             if (frames >= cap) {
                                 cap = min(maxFrames.toInt(), cap + cap / 2 + rate)
@@ -1101,16 +1116,20 @@ object Dj {
             var outputDone = false
             var started = false
             while (!outputDone) {
-                if (!inputDone) {
-                    val ii = c.dequeueInputBuffer(10_000)
-                    if (ii >= 0) {
+                // alle freien Eingangspuffer füllen (statt einer pro Runde) – der Decoder hat immer Arbeit
+                var feeds = 0
+                while (!inputDone && feeds < 8) {
+                    val ii = c.dequeueInputBuffer(if (feeds == 0) 1_000 else 0)
+                    if (ii < 0) break
+                    feeds++
+                    run {
                         val ib = c.getInputBuffer(ii)!!
                         val sz = ex.readSampleData(ib, 0)
                         if (sz < 0) { c.queueInputBuffer(ii, 0, 0, 0, MediaCodec.BUFFER_FLAG_END_OF_STREAM); inputDone = true }
                         else { c.queueInputBuffer(ii, 0, sz, ex.sampleTime, 0); ex.advance() }
                     }
                 }
-                val oi = c.dequeueOutputBuffer(info, 10_000)
+                val oi = c.dequeueOutputBuffer(info, 3_000)
                 if (oi == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
                     val of = c.outputFormat
                     val nr = of.getInteger(MediaFormat.KEY_SAMPLE_RATE)

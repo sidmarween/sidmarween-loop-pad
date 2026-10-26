@@ -5416,6 +5416,8 @@ class PadView(context: Context) : View(context) {
     private var woodShader: Shader? = null
     private var linenShader: Shader? = null
     private val dashEffect = android.graphics.DashPathEffect(floatArrayOf(10f, 7f), 0f)
+    /** wiederverwendet (kein neuer Path pro Pad und Bild) */
+    private val progSeg = Path()
 
     private fun buildSkinCaches() {
         if (!skinned || width <= 0 || height <= 0) return
@@ -6010,7 +6012,8 @@ class PadView(context: Context) : View(context) {
         // Lauflicht – Claudes Design: durchgehende Linie am Rand statt Punkte
         if (sk.padStyle == PS_CLAUDE && progress >= 0f && padLengths[i] > 0f) {
             val len = padLengths[i]
-            val seg = Path()
+            val seg = progSeg
+            seg.reset()
             padMeasures[i].getSegment(0f, progress.coerceIn(0f, 1f) * len, seg, true)
             strokePaint.strokeWidth = dp(3f)
             strokePaint.strokeCap = Paint.Cap.ROUND
