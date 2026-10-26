@@ -50,6 +50,8 @@ android {
         // keine Null-Prüfungen an jedem Methodenaufruf (spart Zeit in den Audio-Schleifen)
         freeCompilerArgs += listOf("-Xno-param-assertions", "-Xno-call-assertions", "-Xno-receiver-assertions")
     }
+    // native Bibliotheken (KI) gepackt ausliefern – kleinere APK
+    packaging { jniLibs { useLegacyPackaging = true } }
     lint {
         checkReleaseBuilds = false
         abortOnError = false
