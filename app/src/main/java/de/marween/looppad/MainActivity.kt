@@ -3123,6 +3123,10 @@ class MainActivity : Activity() {
     private fun openGhost() {
         val g = if (djMode) dj.ghost else pads.ghost
         g.onKeyPick = { pickGhostKey() }
+        g.onPickLoopFile = {
+            val i = Intent(Intent.ACTION_OPEN_DOCUMENT).apply { addCategory(Intent.CATEGORY_OPENABLE); type = "audio/*" }
+            try { startActivityForResult(i, REQ_GHOST_LOOP) } catch (e: Exception) { toast("Kein Dateimanager gefunden") }
+        }
         if (djMode) dj.openGhost() else pads.openGhost()
         hint("Karte antippen oder auf eine Spur ziehen – Tempo, Takt-Eins und Tonart kommen vom laufenden Deck")
     }
@@ -4683,6 +4687,22 @@ class MainActivity : Activity() {
             if (uris.isNotEmpty()) importLibraryUris(uris)
             return
         }
+        if (requestCode == REQ_GHOST_LOOP) {
+            val u = data?.data
+            if (resultCode != RESULT_OK || u == null) return
+            val name = (displayName(u) ?: "Loop").substringBeforeLast('.')
+            hint("∞ $name: Tempo und Tonart werden erkannt …")
+            Thread {
+                try {
+                    val x = AudioFiles.decode(this, u, Engine.sampleRate, 60)
+                    GhostLoop.load(x, Engine.sampleRate, name)
+                    runOnUiThread { (if (djMode) dj.ghost else pads.ghost).loopLoaded(); hint("∞ $name läuft im Takt") }
+                } catch (e: Throwable) {
+                    runOnUiThread { toast("Loop konnte nicht geladen werden: ${e.message ?: e}") }
+                }
+            }.start()
+            return
+        }
         if (requestCode == REQ_EXPORT_DIR) {
             val tree = data?.data
             if (resultCode != RESULT_OK || tree == null) return
@@ -5072,5 +5092,6 @@ class MainActivity : Activity() {
         private const val REQ_COL_FILES = 23
         private const val REQ_BT = 24
         private const val REQ_EXPORT_DIR = 25
+        private const val REQ_GHOST_LOOP = 26
     }
 }

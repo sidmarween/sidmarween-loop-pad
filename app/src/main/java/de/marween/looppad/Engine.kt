@@ -535,6 +535,7 @@ object Engine {
     }
 
     fun masterFrames(): Long = masterLen
+    fun masterStartFrame(): Long = masterStart
 
     /** Zuletzt gerenderter Ausgabe-Frame (Zeitbasis der DJ-Automationen). */
     fun outFrameNow(): Long = written
@@ -2607,7 +2608,7 @@ object Engine {
                     0 -> acid?.render(rt, block, w)
                     1 -> drum?.render(rt, block)
                     in 2 until 2 + InstState.SYN_TRACKS -> synths?.getOrNull(kk - 2)?.render(rt, block, w)
-                    else -> Slicer.render(rt, block, w)
+                    else -> { Slicer.render(rt, block, w); GhostLoop.render(rt, block, w) }
                 }
                 if (duck || stemNow) {
                     val sb = if (stemNow && !soloed) stemBufs[min(kk, StemRecorder.COUNT - 1)] else null

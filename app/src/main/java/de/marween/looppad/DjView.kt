@@ -571,6 +571,7 @@ class DjView(context: Context) : View(context) {
 
     override fun onDraw(c: Canvas) {
         if (panel.width() <= 0f) layoutAll()
+        GhostLoop.poll()
         if (ghost.isOpen) {
             c.drawColor(skin.bg)
             ghost.draw(c, RectF(dp(6f), insetTop + dp(6f), width - dp(6f), height - insetBottom - dp(6f)), skin.accent)

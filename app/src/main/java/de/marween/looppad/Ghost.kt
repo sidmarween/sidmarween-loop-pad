@@ -129,25 +129,34 @@ object Ghost {
             }
             if (keyAuto) key = d.effKey()
         } else followed = -1
+        curKey = key
         // Tonart: Bass/Synth so verschieben, dass ihr Grundton zum Track passt (Moll ↔ Dur über die Parallele)
         if (key >= 0) {
-            val root = Keys.root(key)
-            val minor = Keys.isMinor(key)
-            fun shiftFor(tonic: Int, pMinor: Boolean): Int {
-                val target = when {
-                    minor == pMinor -> root
-                    minor -> root + 3       // Track Moll, Pattern Dur → Paralleltonart
-                    else -> root + 9        // Track Dur, Pattern Moll
-                }
-                var s = Math.floorMod(target - tonic, 12)
-                if (s > 6) s -= 12
-                return s
-            }
-            val sa = shiftFor(acidTonic, acidMinor)
+            val sa = shiftTo(acidTonic, acidMinor) ?: 0
             InstState.acidTune = sa
-            InstState.synTracks[0].transpose = shiftFor(synTonic, synMinor)
+            InstState.synTracks[0].transpose = shiftTo(synTonic, synMinor) ?: 0
             shiftNow = sa
         }
+    }
+
+    /** Tonart, nach der gerade transponiert wird (-1 = keine). */
+    @Volatile var curKey = -1
+        private set
+
+    /** Halbtöne, um die ein Pattern/Loop mit Grundton [tonic] (Moll/Dur) in die aktuelle Tonart muss – null = keine Tonart. */
+    fun shiftTo(tonic: Int, pMinor: Boolean): Int? {
+        val key = curKey
+        if (key < 0) return null
+        val root = Keys.root(key)
+        val minor = Keys.isMinor(key)
+        val target = when {
+            minor == pMinor -> root
+            minor -> root + 3       // Track Moll, Pattern Dur → Paralleltonart
+            else -> root + 9        // Track Dur, Pattern Moll
+        }
+        var s = Math.floorMod(target - tonic, 12)
+        if (s > 6) s -= 12
+        return s
     }
 
     fun stop() {

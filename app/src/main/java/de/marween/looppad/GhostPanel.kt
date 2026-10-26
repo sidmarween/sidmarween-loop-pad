@@ -26,17 +26,32 @@ class GhostPanel(private val host: View) {
     private val stroke = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE }
     private val text = Paint(Paint.ANTI_ALIAS_FLAG).apply { textAlign = Paint.Align.CENTER; typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL) }
 
-    private val LANE_COLS = intArrayOf(Color.rgb(255, 110, 80), Color.rgb(90, 200, 255), Color.rgb(190, 130, 255))
-    private val LANE_NAMES = arrayOf("🥁 DRUMS", "🔊 BASS (303)", "🎹 SYNTH")
+    private val LANE_COLS = intArrayOf(Color.rgb(255, 110, 80), Color.rgb(90, 200, 255), Color.rgb(190, 130, 255), Color.rgb(120, 230, 160))
+    private val LANE_NAMES = arrayOf("🥁 DRUMS", "🔊 BASS (303)", "🎹 SYNTH", "∞ AUDIO-LOOP")
+    private val TAB_NAMES = arrayOf("DRUMS", "BASS", "SYNTH", "LOOPS")
+    private val L = 4
+    /** Datei als Loop wählen (MainActivity). */
+    var onPickLoopFile: (() -> Unit)? = null
+
+    /** Audio-Loops: Bibliothek (mitgeliefert) und eigene Loops. */
+    private class LoopCard(val genre: String, val title: String, val asset: String?, val file: java.io.File?)
+    private var loopCards: List<LoopCard> = emptyList()
+    private fun refreshLoops() {
+        val out = ArrayList<LoopCard>()
+        out.add(LoopCard("Datei", "📂 Eigene WAV/MP3 wählen …", null, null))
+        for (smp in SampleLibrary.samples) if (!smp.oneShot) out.add(LoopCard(smp.category.substringAfter(' '), smp.title, smp.file, null))
+        try { for (u in Projects.userSamples(host.context)) if (!u.oneShot) out.add(LoopCard("Eigene · " + u.category, u.title, null, u.file)) } catch (ignored: Exception) {}
+        loopCards = out
+    }
 
     private val box = RectF()
     private val bClose = RectF(); private val bOn = RectF()
     private val bFollow = RectF(); private val bKey = RectF(); private val bFilter = RectF()
-    private val lanes = Array(3) { RectF() }
-    private val laneMute = Array(3) { RectF() }
-    private val laneVary = Array(3) { RectF() }
-    private val laneGrid = Array(3) { RectF() }
-    private val tabs = Array(3) { RectF() }
+    private val lanes = Array(4) { RectF() }
+    private val laneMute = Array(4) { RectF() }
+    private val laneVary = Array(4) { RectF() }
+    private val laneGrid = Array(4) { RectF() }
+    private val tabs = Array(4) { RectF() }
     private val list = RectF()
     private var tab = 0
     private var scroll = 0f
@@ -50,13 +65,14 @@ class GhostPanel(private val host: View) {
     private var dragX = 0f; private var dragY = 0f
     private var scroll0 = 0f
 
-    fun open() { isOpen = true }
+    fun open() { isOpen = true; refreshLoops() }
     fun close() { isOpen = false }
 
     private fun cards(t: Int): List<Pair<String, String>> = when (t) {
         0 -> InstPresets.DRUMS.map { it.genre to it.name }
         1 -> InstPresets.ACIDS.map { it.genre to it.name }
-        else -> InstPresets.SYNTHS.map { it.genre to it.name }
+        2 -> InstPresets.SYNTHS.map { it.genre to it.name }
+        else -> loopCards.map { it.genre to it.title }
     }
 
     private fun drumRows(): List<Int> {
@@ -77,8 +93,8 @@ class GhostPanel(private val host: View) {
         bKey.set(bFollow.right + dp(6f), y, bFollow.right + dp(6f) + cw, y + dp(30f))
         bFilter.set(bKey.right + dp(6f), y, box.right - m, y + dp(30f))
         y += dp(38f)
-        val laneH = max(dp(70f), box.height() * 0.13f)
-        for (i in 0 until 3) {
+        val laneH = max(dp(62f), box.height() * 0.105f)
+        for (i in 0 until L) {
             lanes[i].set(box.left + m, y, box.right - m, y + laneH)
             laneMute[i].set(lanes[i].right - dp(118f), lanes[i].top + dp(4f), lanes[i].right - dp(64f), lanes[i].top + dp(26f))
             laneVary[i].set(lanes[i].right - dp(58f), lanes[i].top + dp(4f), lanes[i].right - dp(4f), lanes[i].top + dp(26f))
@@ -86,8 +102,8 @@ class GhostPanel(private val host: View) {
             y += laneH + dp(6f)
         }
         y += dp(4f)
-        val tw = (box.width() - 2 * m - 2 * dp(6f)) / 3f
-        for (i in 0 until 3) tabs[i].set(box.left + m + i * (tw + dp(6f)), y, box.left + m + i * (tw + dp(6f)) + tw, y + dp(32f))
+        val tw = (box.width() - 2 * m - 3 * dp(6f)) / 4f
+        for (i in 0 until L) tabs[i].set(box.left + m + i * (tw + dp(6f)), y, box.left + m + i * (tw + dp(6f)) + tw, y + dp(32f))
         y += dp(38f)
         list.set(box.left + m, y, box.right - m, box.bottom - m)
     }
@@ -129,8 +145,9 @@ class GhostPanel(private val host: View) {
         btn(c, bFollow, "FOLGT: " + when (Ghost.follow) { 0 -> "DECK A"; 1 -> "DECK B"; else -> "AUTO" }, false, acc)
         btn(c, bKey, "TONART: " + if (Ghost.keyAuto) "AUTO" else Keys.name(Ghost.keyManual), !Ghost.keyAuto, acc)
         btn(c, bFilter, "DRUMS: " + Ghost.FILTERS[Ghost.drumFilter], Ghost.drumFilter != 0, LANE_COLS[0])
-        for (i in 0 until 3) drawLane(c, i)
-        for (i in 0 until 3) btn(c, tabs[i], arrayOf("DRUMS", "BASS", "SYNTH")[i] + " · Karten", tab == i, LANE_COLS[i])
+        GhostLoop.poll()
+        for (i in 0 until L) drawLane(c, i)
+        for (i in 0 until L) btn(c, tabs[i], TAB_NAMES[i], tab == i, LANE_COLS[i])
         drawCards(c)
         if (dragging && downCard >= 0) {
             val (g, n) = cards(tab)[downCard]
@@ -145,7 +162,7 @@ class GhostPanel(private val host: View) {
         host.postInvalidateOnAnimation()
     }
 
-    private fun laneOn(i: Int): Boolean = when (i) { 0 -> InstState.drumOn; 1 -> InstState.acidOn; else -> InstState.synTracks[0].on }
+    private fun laneOn(i: Int): Boolean = when (i) { 0 -> InstState.drumOn; 1 -> InstState.acidOn; 2 -> InstState.synTracks[0].on; else -> GhostLoop.on }
 
     private fun drawLane(c: Canvas, i: Int) {
         val r = lanes[i]
@@ -162,13 +179,48 @@ class GhostPanel(private val host: View) {
         c.drawText(fitLabel(text, Ghost.laneName[i], laneMute[i].left - r.left - dp(100f), dp(9.5f), dp(7f)), r.left + dp(100f), r.top + dp(18f), text)
         text.textAlign = Paint.Align.CENTER
         btn(c, laneMute[i], if (laneOn(i)) "AN" else "STUMM", laneOn(i), col)
-        btn(c, laneVary[i], "🎲", false, col)
+        btn(c, laneVary[i], if (i == 3) "✕" else "🎲", false, col)
         // Mini-Sequencer: erster Takt (16 Schritte)
         val g = laneGrid[i]
         val cur = Engine.instCurrentStep(16)
         val sw = g.width() / 16f
         val st = InstState
-        if (i == 0) {
+        if (i == 3) {
+            val d0 = GhostLoop.data
+            text.textAlign = Paint.Align.LEFT
+            text.textSize = dp(9.5f); text.color = Color.argb(200, 255, 255, 255)
+            val info = if (GhostLoop.src == null) "Loop-Karte hierher ziehen (Tab LOOPS)" else
+                String.format(java.util.Locale.GERMANY, "%s · %s Takt%s · %s%s", GhostLoop.name, if (GhostLoop.srcBars % 1f == 0f) GhostLoop.srcBars.toInt().toString() else GhostLoop.srcBars.toString(),
+                    if (GhostLoop.srcBars == 1f) "" else "e", if (GhostLoop.srcKey >= 0) "Tonart " + Keys.name(GhostLoop.srcKey) else "ohne Tonart (wird nicht gepitcht)",
+                    if (GhostLoop.builtShift != 0) " → ${if (GhostLoop.builtShift > 0) "+" else ""}${GhostLoop.builtShift} HT" else "") + if (GhostLoop.building) " · wird angepasst …" else ""
+            text.textAlign = Paint.Align.CENTER
+            if (d0 != null) {
+                stroke.strokeWidth = max(1f, g.width() / 200f)
+                stroke.color = col
+                val cols = 200
+                for (px in 0 until cols) {
+                    val a = (px.toLong() * d0.size / cols).toInt()
+                    val b = min(d0.size, ((px + 1).toLong() * d0.size / cols).toInt())
+                    var pk = 0f
+                    var j = a
+                    while (j < b) { val v = abs(d0[j]); if (v > pk) pk = v; j += 8 }
+                    val x = g.left + (px + 0.5f) * g.width() / cols
+                    val h = min(1f, pk) * g.height() * 0.42f
+                    c.drawLine(x, g.centerY() - h, x, g.centerY() + h, stroke)
+                }
+                // Abspielpunkt
+                val m = Engine.masterFrames()
+                if (m > 0L && Engine.seqPlaying && Ghost.on) {
+                    val loopLen = max(1L, (GhostLoop.srcBars * m).toLong())
+                    val heard = Engine.heardFrame()
+                    val px = Math.floorMod(heard - Engine.masterStartFrame(), loopLen).toFloat() / loopLen
+                    stroke.color = Color.WHITE; stroke.strokeWidth = dp(1.5f)
+                    c.drawLine(g.left + px * g.width(), g.top, g.left + px * g.width(), g.bottom, stroke)
+                }
+            }
+            text.textSize = dp(9f); text.color = Color.argb(220, 255, 255, 255)
+            c.drawText(fitLabel(text, info, g.width() - dp(8f), dp(9f), dp(7f)), g.centerX(), g.bottom - dp(2f), text)
+        } else if (i == 0) {
             val rows = drumRows()
             val rh = g.height() / max(1, rows.size)
             for ((ri, v) in rows.withIndex()) {
@@ -248,6 +300,29 @@ class GhostPanel(private val host: View) {
 
     private fun haptic() = host.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
 
+    private fun loadLoopCard(i: Int) {
+        val card = loopCards.getOrNull(i) ?: return
+        if (card.asset == null && card.file == null) { onPickLoopFile?.invoke(); return }
+        onHint?.invoke("∞ ${card.title}: Tempo und Tonart werden erkannt …")
+        haptic()
+        val sr = Engine.sampleRate
+        Thread {
+            try {
+                val x = if (card.asset != null) AudioFiles.decodeAsset(host.context, card.asset, sr, 60) else AudioFiles.decodeFile(card.file!!, sr, 60)
+                GhostLoop.load(x, sr, card.title)
+                host.post {
+                    startGhost()
+                    onHint?.invoke("∞ ${card.title} läuft im Takt" + if (GhostLoop.srcKey >= 0) " · wird in die Tonart des Tracks gepitcht" else "")
+                }
+            } catch (e: Throwable) {
+                host.post { onHint?.invoke("Loop konnte nicht geladen werden: ${e.message ?: e}") }
+            }
+        }.start()
+    }
+
+    /** Für MainActivity: eigene Datei wurde dekodiert. */
+    fun loopLoaded() { startGhost() }
+
     private fun startGhost() {
         if (!Ghost.on) {
             Ghost.on = true
@@ -256,6 +331,7 @@ class GhostPanel(private val host: View) {
     }
 
     private fun applyCard(lane: Int, i: Int) {
+        if (lane == 3) { loadLoopCard(i); return }
         Engine.pushPatternUndo("Ghost")
         when (lane) {
             0 -> Ghost.applyDrum(InstPresets.DRUMS[i])
@@ -298,7 +374,7 @@ class GhostPanel(private val host: View) {
                     val lane = lanes.indexOfFirst { it.contains(x, y) }
                     when {
                         lane == tab -> applyCard(lane, downCard)
-                        lane >= 0 -> onHint?.invoke("Diese Karte gehört auf die ${arrayOf("DRUMS", "BASS", "SYNTH")[tab]}-Spur")
+                        lane >= 0 -> onHint?.invoke("Diese Karte gehört auf die ${TAB_NAMES[tab]}-Spur")
                     }
                 } else if (!scrolling && downCard >= 0 && list.contains(x, y)) applyCard(tab, downCard)
                 dragging = false; scrolling = false; downCard = -1
@@ -319,12 +395,14 @@ class GhostPanel(private val host: View) {
             bKey.contains(x, y) -> onKeyPick?.invoke()
             bFilter.contains(x, y) -> { Ghost.drumFilter = (Ghost.drumFilter + 1) % Ghost.FILTERS.size; onHint?.invoke("Neue Drum-Karten: " + Ghost.FILTERS[Ghost.drumFilter] + " – „nur Hats“ legt sich über die Kick des Tracks, ohne doppelte Bassdrum") }
             else -> {
-                for (i in 0 until 3) {
-                    if (tabs[i].contains(x, y)) { tab = i; scroll = 0f; return }
+                for (i in 0 until L) {
+                    if (tabs[i].contains(x, y)) { tab = i; scroll = 0f; if (i == 3) refreshLoops(); return }
                     if (laneMute[i].contains(x, y)) {
-                        when (i) { 0 -> st.drumOn = !st.drumOn; 1 -> st.acidOn = !st.acidOn; else -> st.synTracks[0].on = !st.synTracks[0].on }
+                        when (i) { 0 -> st.drumOn = !st.drumOn; 1 -> st.acidOn = !st.acidOn; 2 -> st.synTracks[0].on = !st.synTracks[0].on; else -> GhostLoop.on = !GhostLoop.on }
                         haptic(); return
                     }
+                    if (i == 3 && laneVary[i].contains(x, y)) { GhostLoop.clear(); onHint?.invoke("Audio-Loop entfernt"); haptic(); return }
+                    if (i == 3) continue
                     if (laneVary[i].contains(x, y)) {
                         Engine.pushPatternUndo("Ghost Variation")
                         when (i) { 0 -> Ghost.varyDrums(); 1 -> Ghost.varyBass(); else -> Ghost.varySynth() }

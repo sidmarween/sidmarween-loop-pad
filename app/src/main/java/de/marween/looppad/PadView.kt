@@ -812,6 +812,7 @@ class PadView(context: Context) : View(context) {
     // ---------------------------------------------------------------- Zeichnen
 
     override fun onDraw(canvas: Canvas) {
+        GhostLoop.poll()
         // SELECT + gewähltes Pad: die Effekt-Fläche wirkt nur auf dieses Pad
         Engine.fxOnlyPad = if (selectMode && selPad >= 0 && Engine.hasLoop(selPad)) selPad else -1
         val now = System.nanoTime()
