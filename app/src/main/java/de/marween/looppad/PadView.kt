@@ -575,8 +575,11 @@ class PadView(context: Context) : View(context) {
         // Kopfzeile: Logo | Display | Design-Knopf
         val by = insetTop + dp(8f)
         val topH = dp(64f)
-        val lh = dp(44f)
-        val lw = logo.width * lh / logo.height
+        // Logo schrumpft auf schmalen Handys, damit das Display genug Platz für seine Schrift behält
+        val aspect = logo.width.toFloat() / logo.height
+        val avail = w - 2 * margin - dp(36f + 6f + 46f + 8f + 12f)
+        val lh = ((avail - dp(122f)) / aspect).coerceIn(dp(28f), dp(44f))
+        val lw = aspect * lh
         logoDst.set(margin, by + (topH - lh) / 2f, margin + lw, by + (topH + lh) / 2f)
         val db = dp(36f)
         designBtn.set(w - margin - db, by + (topH - db) / 2f, w - margin, by + (topH + db) / 2f)
@@ -968,6 +971,68 @@ class PadView(context: Context) : View(context) {
         drawFuncRow(canvas)
     }
 
+    /** Text auf [maxW] kürzen (mit „…“), bei der aktuellen Schriftgröße von [textPaint]. */
+    private fun fitText(t: String, maxW: Float): String {
+        if (maxW <= 0f) return ""
+        if (textPaint.measureText(t) <= maxW) return t
+        var n = t.length
+        while (n > 0 && textPaint.measureText(t, 0, n) + textPaint.measureText("…") > maxW) n--
+        return if (n <= 0) "" else t.substring(0, n).trimEnd() + "…"
+    }
+
+    /**
+     * Schrift im kleinen Display – für alle Designs gleich aufgeteilt, damit sich nichts überlagert:
+     * oben links Kettenplatz/Effekt (gekürzt bis vor das Tempo), oben rechts Tempo, darunter der Effektname
+     * (verkleinert, falls zu breit), „TEMPO ▸“ nur wenn daneben Platz ist, unten die X/Y-Werte.
+     */
+    private fun drawDisplayTexts(canvas: Canvas, r: RectF, pad: Float, y0: Float, info: Int, bpmCol: Int, hint: Int, name: Int, xyCol: Int, glow: Boolean) {
+        val type = Engine.fxType
+        val touching = xyPointer >= 0 || xyHold || autoTouching()
+        val inner = r.width() - 2 * pad
+        // Tempo oben rechts
+        textPaint.textAlign = Paint.Align.RIGHT
+        textPaint.textSize = dp(10f)
+        val bpm = fitText(bpmLabel(), inner * 0.55f)
+        val bw = textPaint.measureText(bpm)
+        textPaint.color = bpmCol
+        canvas.drawText(bpm, r.right - pad, y0 + dp(1f), textPaint)
+        // Zeile 1 links
+        textPaint.textAlign = Paint.Align.LEFT
+        textPaint.textSize = dp(9f)
+        textPaint.color = info
+        val num = String.format(Locale.GERMANY, "%d·FX %02d/%d %s %s", Engine.editSlot + 1, type + 1, Fx.COUNT, if (touching) "●" else "○", fxTargetLabel()).trim()
+        canvas.drawText(fitText(num, inner - bw - dp(6f)), r.left + pad, y0, textPaint)
+        // Effektname
+        var ns = min(dp(17f), r.height() * 0.32f)
+        textPaint.textSize = ns
+        val nm = Fx.NAMES[type]
+        val nw0 = textPaint.measureText(nm)
+        if (nw0 > inner) { ns = max(dp(10f), ns * inner / nw0); textPaint.textSize = ns }
+        val nmFit = fitText(nm, inner)
+        val nw = textPaint.measureText(nmFit)
+        textPaint.color = name
+        if (glow) textPaint.setShadowLayer(dp(6f), 0f, 0f, alpha(name, 0.8f))
+        canvas.drawText(nmFit, r.left + pad, y0 + dp(18f), textPaint)
+        textPaint.setShadowLayer(0f, 0f, 0f, 0)
+        // „TEMPO ▸“ nur, wenn es neben dem Namen Platz hat
+        textPaint.textSize = dp(8f)
+        val tw = textPaint.measureText("TEMPO ▸")
+        if (r.left + pad + nw + dp(8f) + tw <= r.right - pad) {
+            textPaint.textAlign = Paint.Align.RIGHT
+            textPaint.color = hint
+            canvas.drawText("TEMPO ▸", r.right - pad, y0 + dp(12f), textPaint)
+            textPaint.textAlign = Paint.Align.LEFT
+        }
+        // X/Y-Werte (verkleinert bzw. gekürzt, falls zu breit)
+        textPaint.textSize = dp(8.5f)
+        val xy = "X ${Fx.X_LABELS[type]} ${(xyDispX * 100).toInt()}  Y ${Fx.Y_LABELS[type]} ${(xyDispY * 100).toInt()}"
+        val xw = textPaint.measureText(xy)
+        if (xw > inner) textPaint.textSize = max(dp(7f), dp(8.5f) * inner / xw)
+        textPaint.color = xyCol
+        canvas.drawText(fitText(xy, inner), r.left + pad, y0 + dp(30f), textPaint)
+        textPaint.textAlign = Paint.Align.CENTER
+    }
+
     /** Kleines Display: aktueller Effekt, X/Y-Werte, Takt. */
     private fun drawDisplay(canvas: Canvas) {
         val r = displayRect
@@ -1005,32 +1070,7 @@ class PadView(context: Context) : View(context) {
             yy += dp(3f)
         }
         val pad = dp(8f)
-        val touching = xyPointer >= 0 || xyHold || autoTouching()
-        textPaint.textAlign = Paint.Align.LEFT
-        // Zeile 1: Nummer + Name
-        textPaint.textSize = dp(9f)
-        textPaint.color = alpha(txt, 0.7f)
-        val num = String.format(Locale.GERMANY, "%d·FX %02d/%d %s %s", Engine.editSlot + 1, type + 1, Fx.COUNT, if (touching) "●" else "○", fxTargetLabel())
-        canvas.drawText(num, r.left + pad, r.top + dp(13f), textPaint)
-        textPaint.textAlign = Paint.Align.RIGHT
-        textPaint.textSize = dp(10f)
-        textPaint.color = txt
-        canvas.drawText(bpmLabel(), r.right - pad, r.top + dp(14f), textPaint)
-        textPaint.textSize = dp(8f)
-        textPaint.color = alpha(txt, 0.5f)
-        canvas.drawText("TEMPO ▸", r.right - pad, r.top + dp(25f), textPaint)
-        textPaint.textAlign = Paint.Align.LEFT
-        textPaint.textSize = min(dp(17f), r.height() * 0.32f)
-        textPaint.color = txt
-        textPaint.setShadowLayer(dp(6f), 0f, 0f, alpha(txt, 0.8f))
-        canvas.drawText(Fx.NAMES[type], r.left + pad, r.top + dp(31f), textPaint)
-        textPaint.setShadowLayer(0f, 0f, 0f, 0)
-        // Zeile 3: X/Y
-        textPaint.textSize = dp(8.5f)
-        textPaint.color = alpha(txt, 0.8f)
-        val xy = "X ${Fx.X_LABELS[type]} ${(xyDispX * 100).toInt()}  Y ${Fx.Y_LABELS[type]} ${(xyDispY * 100).toInt()}"
-        canvas.drawText(xy, r.left + pad, r.top + dp(43f), textPaint)
-        textPaint.textAlign = Paint.Align.CENTER
+        drawDisplayTexts(canvas, r, pad, r.top + dp(13f), alpha(txt, 0.7f), txt, alpha(txt, 0.5f), txt, alpha(txt, 0.8f), true)
         // Taktleiste unten im Display
         val mp = Engine.masterProgress()
         val ly = r.bottom - dp(6f)
@@ -4763,16 +4803,20 @@ class PadView(context: Context) : View(context) {
         if (theme == RETRO) {
             // Pixel-Titel wie im Entwurf
             textPaint.textAlign = Paint.Align.LEFT
-            textPaint.textSize = logoDst.height() * 0.62f
             textPaint.typeface = Typeface.create(Typeface.MONOSPACE, Typeface.BOLD)
+            val ts = min(logoDst.height() * 0.5f, logoDst.width() / 2.6f)
+            textPaint.textSize = ts
             val bx = logoDst.left
-            val by = logoDst.centerY() + textPaint.textSize * 0.36f
+            // zwei Zeilen (Großbuchstaben-Höhe ≈ 0,72 · Schriftgröße), Abstand 1,08 · Schriftgröße, mittig in der Logo-Fläche
+            val y1 = logoDst.centerY() - (ts * 1.08f + ts * 0.72f) / 2f + ts * 0.72f
+            val y2 = y1 + ts * 1.08f
+            val sh = max(dp(1f), ts * 0.07f)
             textPaint.color = R_INK
-            canvas.drawText("Marv", bx + dp(2f), by - textPaint.textSize * 0.5f + dp(2f), textPaint)
-            canvas.drawText("PAD", bx + dp(2f), by + textPaint.textSize * 0.5f + dp(2f), textPaint)
+            canvas.drawText("Marv", bx + sh, y1 + sh, textPaint)
+            canvas.drawText("PAD", bx + sh, y2 + sh, textPaint)
             textPaint.color = R_ORANGE
-            canvas.drawText("Marv", bx, by - textPaint.textSize * 0.5f, textPaint)
-            canvas.drawText("PAD", bx, by + textPaint.textSize * 0.5f, textPaint)
+            canvas.drawText("Marv", bx, y1, textPaint)
+            canvas.drawText("PAD", bx, y2, textPaint)
             textPaint.textAlign = Paint.Align.CENTER
         } else {
             val rr = dp(10f)
@@ -4815,26 +4859,7 @@ class PadView(context: Context) : View(context) {
         canvas.save()
         canvas.clipRect(r.left + dp(3f), r.top + dp(3f), r.right - dp(3f), r.bottom - dp(3f))
         val pad = dp(9f)
-        val touching = xyPointer >= 0 || xyHold || autoTouching()
-        textPaint.textAlign = Paint.Align.LEFT
-        textPaint.textSize = dp(9f)
-        textPaint.color = alpha(txt, 0.7f)
-        canvas.drawText(String.format(Locale.GERMANY, "%d·FX %02d/%d %s %s", Engine.editSlot + 1, type + 1, Fx.COUNT, if (touching) "●" else "○", fxTargetLabel()), r.left + pad, r.top + dp(14f), textPaint)
-        textPaint.textAlign = Paint.Align.RIGHT
-        textPaint.textSize = dp(10f)
-        textPaint.color = if (theme == COMIC) COMIC_MAGENTA else R_ORANGE
-        canvas.drawText(bpmLabel(), r.right - pad, r.top + dp(15f), textPaint)
-        textPaint.textSize = dp(8f)
-        textPaint.color = alpha(txt, 0.5f)
-        canvas.drawText("TEMPO ▸", r.right - pad, r.top + dp(26f), textPaint)
-        textPaint.textAlign = Paint.Align.LEFT
-        textPaint.textSize = min(dp(17f), r.height() * 0.32f)
-        textPaint.color = txt
-        canvas.drawText(Fx.NAMES[type], r.left + pad, r.top + dp(32f), textPaint)
-        textPaint.textSize = dp(8.5f)
-        textPaint.color = alpha(txt, 0.8f)
-        canvas.drawText("X ${Fx.X_LABELS[type]} ${(xyDispX * 100).toInt()}  Y ${Fx.Y_LABELS[type]} ${(xyDispY * 100).toInt()}", r.left + pad, r.top + dp(44f), textPaint)
-        textPaint.textAlign = Paint.Align.CENTER
+        drawDisplayTexts(canvas, r, pad, r.top + dp(14f), alpha(txt, 0.7f), if (theme == COMIC) COMIC_MAGENTA else R_ORANGE, alpha(txt, 0.5f), txt, alpha(txt, 0.8f), false)
         val mp = Engine.masterProgress()
         val ly = r.bottom - dp(7f)
         strokePaint.strokeWidth = dp(3f)
@@ -5566,28 +5591,9 @@ class PadView(context: Context) : View(context) {
         val txt = sk.lcdText
         val type = Engine.fxType
         val pad = dp(9f)
-        val touching = xyPointer >= 0 || xyHold || autoTouching()
         canvas.save()
         canvas.clipRect(r.left + dp(2f), r.top + dp(2f), r.right - dp(2f), r.bottom - dp(2f))
-        textPaint.textAlign = Paint.Align.LEFT
-        textPaint.textSize = dp(9f)
-        textPaint.color = alpha(txt, 0.65f)
-        canvas.drawText(String.format(Locale.GERMANY, "%d·FX %02d/%d %s %s", Engine.editSlot + 1, type + 1, Fx.COUNT, if (touching) "●" else "○", fxTargetLabel()), r.left + pad, r.top + dp(14f), textPaint)
-        textPaint.textAlign = Paint.Align.RIGHT
-        textPaint.textSize = dp(10f)
-        textPaint.color = sk.accent
-        canvas.drawText(bpmLabel(), r.right - pad, r.top + dp(15f), textPaint)
-        textPaint.textSize = dp(8f)
-        textPaint.color = alpha(txt, 0.5f)
-        canvas.drawText("TEMPO ▸", r.right - pad, r.top + dp(26f), textPaint)
-        textPaint.textAlign = Paint.Align.LEFT
-        textPaint.textSize = min(dp(17f), r.height() * 0.32f)
-        textPaint.color = txt
-        canvas.drawText(Fx.NAMES[type], r.left + pad, r.top + dp(32f), textPaint)
-        textPaint.textSize = dp(8.5f)
-        textPaint.color = alpha(txt, 0.75f)
-        canvas.drawText("X ${Fx.X_LABELS[type]} ${(xyDispX * 100).toInt()}  Y ${Fx.Y_LABELS[type]} ${(xyDispY * 100).toInt()}", r.left + pad, r.top + dp(44f), textPaint)
-        textPaint.textAlign = Paint.Align.CENTER
+        drawDisplayTexts(canvas, r, pad, r.top + dp(14f), alpha(txt, 0.65f), sk.accent, alpha(txt, 0.5f), txt, alpha(txt, 0.75f), false)
         val mp = Engine.masterProgress()
         val ly = r.bottom - dp(7f)
         strokePaint.strokeWidth = dp(2.5f)

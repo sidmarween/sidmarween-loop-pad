@@ -265,6 +265,21 @@ class DjView(context: Context) : View(context) {
         texture = null
     }
 
+    /** Logo-Höhe in der Kopfzeile (wird auf schmalen Handys kleiner, damit nichts überlappt). */
+    private var logoH = 0f
+
+    /** Logo links, Tempo-Anzeige bis [right]: das Tempo bekommt mindestens Platz für „128,0 BPM“, das Logo den Rest. */
+    private fun fitHeaderLogo(L: Float, right: Float, top: Float, bottom: Float) {
+        val lg = logo
+        val asp = if (lg != null && lg.height > 0) lg.width.toFloat() / lg.height else 2.9f
+        val bpmMin = dp(74f)
+        val badge = dp(6f)   // Schild um das Logo auf hellen Oberflächen
+        val space = right - bpmMin - dp(8f) - L - 2 * badge
+        logoH = (space / asp).coerceIn(dp(16f), dp(30f))
+        val logoRight = L + badge + logoH * asp + badge
+        bpmChip.set(max(logoRight + dp(6f), right - dp(96f)), top, right, bottom)
+    }
+
     private fun layoutAll() {
         val w = width.toFloat()
         val h = height.toFloat()
@@ -279,11 +294,11 @@ class DjView(context: Context) : View(context) {
         var y = panel.top + dp(6f)
         header.set(L, y, R, y + dp(52f))
         menuBtn.set(R - dp(40f), y + dp(10f), R, y + dp(42f))
-        padsBtn.set(menuBtn.left - dp(78f), y + dp(10f), menuBtn.left - dp(6f), y + dp(42f))
+        padsBtn.set(menuBtn.left - dp(62f), y + dp(10f), menuBtn.left - dp(6f), y + dp(42f))
         // MASTER und darunter die Set-Aufnahme
-        masterBtn.set(padsBtn.left - dp(72f), y + dp(1f), padsBtn.left - dp(6f), y + dp(25f))
+        masterBtn.set(padsBtn.left - dp(64f), y + dp(1f), padsBtn.left - dp(6f), y + dp(25f))
         setRecBtn.set(masterBtn.left, y + dp(27f), masterBtn.right, y + dp(51f))
-        bpmChip.set(masterBtn.left - dp(92f), y + dp(10f), masterBtn.left - dp(6f), y + dp(42f))
+        fitHeaderLogo(L, masterBtn.left - dp(6f), y + dp(10f), y + dp(42f))
         y = header.bottom + dp(6f)
         val avail = panel.bottom - m - y
         // Höhenaufteilung (passt sich an kleine Displays an)
@@ -315,7 +330,8 @@ class DjView(context: Context) : View(context) {
             val tg = dp(14f)
             val tx0 = (L + R) / 2f - (3 * tw + 2 * tg) / 2f
             for (i in 0..2) tops[i].set(tx0 + i * (tw + tg), y, tx0 + i * (tw + tg) + tw, y + th)
-            y += th + dp(10f)
+            // Platz für die Beschriftung unter den Knöpfen, damit sie nicht in „LINE A/B“ läuft
+            y += th + dp(22f)
             val midH = max(dp(140f), avail * 0.25f)
             val pw = dp(30f)
             val vw = dp(36f)
@@ -385,7 +401,7 @@ class DjView(context: Context) : View(context) {
         padsBtn.set(menuBtn.left - dp(78f), y + dp(4f), menuBtn.left - dp(6f), y + dp(36f))
         setRecBtn.set(padsBtn.left - dp(78f), y + dp(4f), padsBtn.left - dp(6f), y + dp(36f))
         masterBtn.set(setRecBtn.left - dp(78f), y + dp(4f), setRecBtn.left - dp(6f), y + dp(36f))
-        bpmChip.set(masterBtn.left - dp(96f), y + dp(4f), masterBtn.left - dp(6f), y + dp(36f))
+        fitHeaderLogo(L, masterBtn.left - dp(6f), y + dp(4f), y + dp(36f))
         y = header.bottom + dp(6f)
         val bottom = panel.bottom - m
         val gap = dp(10f)
@@ -894,9 +910,9 @@ class DjView(context: Context) : View(context) {
         val s = skin
         val lg = logo
         if (lg != null) {
-            val hh = dp(30f)
+            val hh = if (logoH > 0f) logoH else dp(30f)
             val ww = hh * lg.width / lg.height
-            tmp.set(header.left, header.centerY() - hh / 2, header.left + ww, header.centerY() + hh / 2)
+            tmp.set(header.left + dp(6f), header.centerY() - hh / 2, header.left + ww, header.centerY() + hh / 2)
             if (!s.dark) {
                 // auf hellen Oberflächen ein dunkles Schild hinter das Logo
                 fill.color = Color.argb(220, 22, 25, 30)
