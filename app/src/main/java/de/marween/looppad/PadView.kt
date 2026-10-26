@@ -871,6 +871,7 @@ class PadView(context: Context) : View(context) {
         if (masterPanel.isOpen) masterPanel.draw(canvas, RectF(dp(6f), insetTop + dp(6f), width - dp(6f), height - insetBottom - dp(6f)), overlayColors()[2])
         drawInfo(canvas)
         message?.let { drawMessage(canvas, it) }
+        if (tourStep >= 0) drawTour(canvas)
 
         postInvalidateOnAnimation()
     }
@@ -1544,6 +1545,7 @@ class PadView(context: Context) : View(context) {
         canvas.drawText("✕", focusClose.centerX(), focusClose.centerY() + dp(6f), textPaint)
         drawInfo(canvas)
         message?.let { drawMessage(canvas, it) }
+        if (tourStep >= 0) drawTour(canvas)
     }
 
     // ---------------------------------------------------------------- Pad-Auswahl (SELECT) und Wellenform-Ansicht
@@ -4094,6 +4096,7 @@ class PadView(context: Context) : View(context) {
     }
 
     private fun touchInner(e: MotionEvent): Boolean {
+        if (tourStep >= 0) { tourTouch(e); return true }
         if (infoMode && message == null && (e.actionMasked == MotionEvent.ACTION_DOWN || e.actionMasked == MotionEvent.ACTION_POINTER_DOWN)) {
             val ix = e.getX(e.actionIndex)
             val iy = e.getY(e.actionIndex)
@@ -8559,6 +8562,132 @@ class PadView(context: Context) : View(context) {
         ed.onChords = { onInstChords?.invoke() }
         ed.onSidechain = { onSidechain?.invoke() }
     }
+    // ---------------------------------------------------------------- Tutorial-Tour
+
+    private var tourStep = -1
+    var onTourDone: (() -> Unit)? = null
+    private val tourCard = RectF()
+    private val tourPrev = RectF()
+    private val tourNext = RectF()
+    private val tourEnd = RectF()
+
+    private class TourStep(val rect: () -> RectF?, val title: String, val text: String)
+
+    private fun union(rs: Array<RectF>): RectF? {
+        val u = RectF()
+        var any = false
+        for (r in rs) if (r.width() > 0f) { if (!any) u.set(r) else u.union(r); any = true }
+        return if (any) u else null
+    }
+
+    private val tour by lazy { listOf(
+        TourStep({ null }, "👋 Willkommen bei Marv PAD", "Looper, Sampler, Groovebox und DJ-Tool in einem. Diese Tour zeigt dir in einer Minute das Wichtigste. „Weiter“ tippen."),
+        TourStep({ union(padRects.copyOfRange(0, VISIBLE_PADS)) }, "▦ Die Pads", "Leeres Pad GEDRÜCKT HALTEN = mit dem Mikro aufnehmen, loslassen = der Loop läuft. Kurz tippen = Loop starten/stoppen (im Takt). Auf leeren Pads lädt 📂 oben rechts Songs, Samples oder Drums."),
+        TourStep({ union(padRects.copyOfRange(0, VISIBLE_PADS)) }, "⟲ Loop & Lautstärke im Pad", "Laufende Pads haben unten links [− ⟲ +]: ein Stück des Loops wiederholen und die Größe ändern. Auf einem Pad hoch/runter wischen ändert seine Lautstärke."),
+        TourStep({ selRow }, "◉ SELECT & Werkzeuge", "SELECT an + Pad antippen wählt es aus, ohne es zu spielen. Dann gelten Wellen-Editor (〰 WAVE), Noten (🎹), Effekte (✨ FX), ⋯-Menü und die Effekt-Fläche nur für dieses Pad."),
+        TourStep({ xyRect }, "✨ Effekt-Fläche", "Finger drauf = Effekt an, bewegen = X/Y steuern (Achsen stehen in der Ecke). HOLD hält ihn, ● REC nimmt die Bewegung auf. Bis zu 3 Effekte als Kette (1 · 2 · 3)."),
+        TourStep({ fxBtn }, "Effekt wählen", "Links/rechts tippen wechselt den Effekt (45 Stück: Filter, Delay, Hall, Looper, Roboter …). Lange drücken öffnet die Liste."),
+        TourStep({ union(knobRects) }, "Regler", "Mischung, die zwei Effekt-Parameter, Gesamtlautstärke und Swing. Regler hoch/runter ziehen."),
+        TourStep({ union(funcRects) }, "Funktionen", "SZENE: Pad-Kombinationen speichern und im Takt wechseln · MUTE/SOLO · ERASE löscht · DUPL kopiert Pads · REPEAT wiederholt im Rhythmus."),
+        TourStep({ modeRects[1] }, "🎹 Instrumente", "Acid-Bass (303), Drumcomputer (909) und 3 Synth-Spuren mit Piano-Roll, Akkordfolgen, Arpeggiator und Patterns A–D. ⤢ öffnet den großen Editor."),
+        TourStep({ displayRect }, "Tempo & Display", "Zeigt Effekt und Tempo. Rechts im Display tippen stellt das Tempo ein (Tap-Tempo, Metronom)."),
+        TourStep({ union(arrayOf(masterBtn, setRecBtn)) }, "MASTER & Set-Aufnahme", "MASTER: Equalizer, Kompressor, Limiter für den Gesamtklang. REC nimmt alles, was du spielst, als Set auf – zum Exportieren oder Teilen."),
+        TourStep({ designBtn }, "☰ Menü", "Hier findest du: 🎧 DJ-Modus, 🔁 Loop Station, ✂ Slicer, 💿 Musik-Sammlung, 📤 Export, 📲 Teilen, 📡 Handys koppeln, Projekte und Einstellungen."),
+        TourStep({ null }, "🎉 Los geht's!", "Tipp: Im Menü unter „Hilfe & Info“ gibt es den ℹ Info-Modus – dann erklärt jedes angetippte Element sich selbst. Diese Tour startest du dort auch jederzeit neu.")
+    ) }
+
+    fun startTour() {
+        closeFocus()
+        tourStep = 0
+        invalidate()
+    }
+
+    private fun endTour() {
+        tourStep = -1
+        onTourDone?.invoke()
+        invalidate()
+    }
+
+    private fun drawTour(canvas: Canvas) {
+        val st = tour.getOrNull(tourStep) ?: return
+        val cols = overlayColors()
+        val hl = st.rect()?.let { RectF(it).apply { inset(-dp(6f), -dp(6f)) } }
+        fillPaint.shader = null
+        fillPaint.color = Color.argb(185, 0, 0, 0)
+        val w = width.toFloat()
+        val h = height.toFloat()
+        if (hl == null) canvas.drawRect(0f, 0f, w, h, fillPaint) else {
+            canvas.drawRect(0f, 0f, w, hl.top, fillPaint)
+            canvas.drawRect(0f, hl.bottom, w, h, fillPaint)
+            canvas.drawRect(0f, hl.top, hl.left, hl.bottom, fillPaint)
+            canvas.drawRect(hl.right, hl.top, w, hl.bottom, fillPaint)
+            val pulse = 0.5f + 0.5f * sin(time * 4f)
+            strokePaint.strokeWidth = dp(2.5f + pulse * 1.5f)
+            strokePaint.color = cols[2]
+            canvas.drawRoundRect(hl, dp(12f), dp(12f), strokePaint)
+        }
+        // Karte: gegenüber vom markierten Bereich
+        val m = dp(16f)
+        val cardH = dp(210f)
+        val top = if (hl == null) (h - cardH) / 2f else if (hl.centerY() > h / 2f) max(insetTop + m, hl.top - cardH - m) else min(h - insetBottom - m - cardH, hl.bottom + m)
+        tourCard.set(m, top, w - m, top + cardH)
+        fillPaint.color = Color.rgb(24, 25, 32)
+        canvas.drawRoundRect(tourCard, dp(16f), dp(16f), fillPaint)
+        strokePaint.strokeWidth = dp(1.5f); strokePaint.color = cols[2]
+        canvas.drawRoundRect(tourCard, dp(16f), dp(16f), strokePaint)
+        textPaint.textAlign = Paint.Align.LEFT
+        textPaint.textSize = dp(17f); textPaint.color = Color.WHITE
+        canvas.drawText(st.title, tourCard.left + dp(16f), tourCard.top + dp(30f), textPaint)
+        textPaint.textSize = dp(10f); textPaint.color = alpha(Color.WHITE, 0.5f)
+        textPaint.textAlign = Paint.Align.RIGHT
+        canvas.drawText("${tourStep + 1} / ${tour.size}", tourCard.right - dp(16f), tourCard.top + dp(28f), textPaint)
+        textPaint.textAlign = Paint.Align.LEFT
+        textPaint.textSize = dp(13.5f); textPaint.color = alpha(Color.WHITE, 0.88f)
+        // Zeilenumbruch
+        val maxW = tourCard.width() - dp(32f)
+        var y = tourCard.top + dp(56f)
+        val words = st.text.split(' ')
+        var line = ""
+        for (wd in words) {
+            val t = if (line.isEmpty()) wd else "$line $wd"
+            if (textPaint.measureText(t) > maxW && line.isNotEmpty()) {
+                canvas.drawText(line, tourCard.left + dp(16f), y, textPaint)
+                y += dp(19f); line = wd
+            } else line = t
+        }
+        if (line.isNotEmpty()) canvas.drawText(line, tourCard.left + dp(16f), y, textPaint)
+        textPaint.textAlign = Paint.Align.CENTER
+        val bh = dp(40f)
+        val by = tourCard.bottom - bh - dp(12f)
+        val bw = (tourCard.width() - dp(32f) - dp(16f)) / 3f
+        tourEnd.set(tourCard.left + dp(16f), by, tourCard.left + dp(16f) + bw, by + bh)
+        tourPrev.set(tourEnd.right + dp(8f), by, tourEnd.right + dp(8f) + bw, by + bh)
+        tourNext.set(tourPrev.right + dp(8f), by, tourCard.right - dp(16f), by + bh)
+        val last = tourStep == tour.size - 1
+        for ((r, lab, on) in arrayOf(Triple(tourEnd, "Beenden", false), Triple(tourPrev, "◀ Zurück", false), Triple(tourNext, if (last) "Fertig ✓" else "Weiter ▶", true))) {
+            if (r == tourPrev && tourStep == 0) continue
+            fillPaint.color = if (on) cols[2] else Color.rgb(44, 46, 56)
+            canvas.drawRoundRect(r, dp(10f), dp(10f), fillPaint)
+            textPaint.textSize = dp(14f)
+            textPaint.color = if (on) Color.BLACK else Color.WHITE
+            canvas.drawText(lab, r.centerX(), r.centerY() + dp(5f), textPaint)
+        }
+        postInvalidateOnAnimation()
+    }
+
+    private fun tourTouch(e: MotionEvent) {
+        if (e.actionMasked != MotionEvent.ACTION_DOWN) return
+        val x = e.x
+        val y = e.y
+        when {
+            tourNext.contains(x, y) -> if (tourStep >= tour.size - 1) endTour() else tourStep++
+            tourPrev.contains(x, y) && tourStep > 0 -> tourStep--
+            tourEnd.contains(x, y) -> endTour()
+        }
+        performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+        invalidate()
+    }
+
     /** Slicer: 16 Stücke auf 16 Pads. */
     private val slicer = SlicerPanel(this).also { sp ->
         sp.onHint = { hint(it) }

@@ -176,6 +176,8 @@ class MainActivity : Activity() {
         pads.onInstChords = { showChordProgression() }
         pads.onSidechain = { showSidechain() }
         pads.onSlicerSource = { pickSlicerSource() }
+        pads.onTourDone = { getSharedPreferences("marvpad", MODE_PRIVATE).edit().putBoolean("tourDone", true).apply() }
+        if (!prefs.getBoolean("tourDone", false)) pads.postDelayed({ if (!djMode && pads.parent != null) pads.startTour() }, 2500L)
         pads.onSlicerToPads = {
             val n = Engine.slicerToPads(PadView.VISIBLE_PADS)
             hint(if (n > 0) "✂ $n Slices als ⚡ One-Shots auf freie Pads gelegt" else "Keine freien Pads – erst Pads leeren")
@@ -2440,6 +2442,7 @@ class MainActivity : Activity() {
                     prefs.edit().putBoolean("info", pads.infoMode).apply()
                     if (pads.infoMode) toast("Info-Modus an: tippe auf ein Element, um es erklärt zu bekommen")
                 }, false))
+                items.add(Triple("🎓 Tour: die App in einer Minute", { if (djMode) switchMode(false); pads.startTour() }, false))
                 items.add(Triple("📄 Info-Seite: Version & alle Änderungen", { showAbout() }, false))
                 items.add(Triple("⏻ Programm schließen", { requestClose() }, false))
             }
