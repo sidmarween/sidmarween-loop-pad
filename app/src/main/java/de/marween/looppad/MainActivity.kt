@@ -3161,6 +3161,64 @@ class MainActivity : Activity() {
 
     private fun splitStems(p: Int) {
         val free = (0 until PadView.VISIBLE_PADS).count { it != p && !Engine.hasLoop(it) }
+        if (Engine.loopData(p) == null) { toast("Pad ${p + 1} ist leer"); return }
+        if (!AiStems.ready(this)) {
+            ui().setTitle("🧠 Stems trennen – Pad ${p + 1}").setItems(arrayOf(
+                "🧠 KI-Trennung (Vocals · Drums · Bass · Melodie) – einmalig ~80 MB Modelle laden",
+                "⚡ Schnell (Drums · Bass · Melodie & Gesang, ohne KI)"
+            )) { _, w ->
+                if (w == 0) progressJob("🧠 KI-Modelle laden", { cancel, prog -> AiStems.download(this, cancel, prog) }) { splitStemsAi(p) }
+                else splitStemsFast(p, free)
+            }.setNegativeButton("Abbrechen", null).show()
+            return
+        }
+        if (free < 4) {
+            if (free >= 3) {
+                ui().setTitle("Nur $free freie Pads").setMessage("Die KI-Trennung braucht 4 freie Pads (Vocals, Drums, Bass, Melodie). Die schnelle Trennung kommt mit 3 aus.")
+                    .setPositiveButton("Schnell trennen") { _, _ -> splitStemsFast(p, free) }
+                    .setNegativeButton("Abbrechen", null).show()
+            } else toast("Für die KI-Stems werden 4 freie Pads gebraucht (frei: $free)")
+            return
+        }
+        splitStemsAi(p)
+    }
+
+    /** KI-Trennung eines Pads auf 4 freie Pads (synchron, Original wird stumm). */
+    private fun splitStemsAi(p: Int) {
+        val free = (0 until PadView.VISIBLE_PADS).count { it != p && !Engine.hasLoop(it) }
+        if (free < 4) { toast("Für die KI-Stems werden 4 freie Pads gebraucht (frei: $free)"); return }
+        val len = Engine.padDataLen(p)
+        System.gc()
+        val rt = Runtime.getRuntime()
+        val freeMem = rt.maxMemory() - (rt.totalMemory() - rt.freeMemory())
+        if (len.toLong() * 4 * 10 > freeMem) { toast("Zu lang für den Speicher – erst kürzen (Wave-Editor) oder andere Pads leeren"); return }
+        val secs = len / Engine.sampleRate.toFloat()
+        hint(String.format(Locale.GERMANY, "🧠 KI trennt Pad %d (%.0f s) – das dauert etwas, die App bleibt bedienbar …", p + 1, secs))
+        Thread {
+            try {
+                Engine.padLoadText[p] = "🧠 KI-Stems"
+                Engine.padLoadProg[p] = 0f
+                val data = Engine.loopData(p) ?: return@Thread
+                val stems = AiStems.separatePad(this, data, Engine.sampleRate, { false }) { f -> Engine.padLoadProg[p] = f } ?: return@Thread
+                val base = Engine.padName(p)?.take(10) ?: "P${p + 1}"
+                val names = arrayOf("Vocals · $base", "Drums · $base", "Bass · $base", "Melodie · $base")
+                val t = Engine.stemsToPads(p, stems, names, PadView.VISIBLE_PADS)
+                runOnUiThread {
+                    if (t.isEmpty()) toast("Keine freien Pads mehr")
+                    else hint("🧠 Vocals → Pad ${t[0] + 1}, Drums → Pad ${t[1] + 1}, Bass → Pad ${t[2] + 1}, Melodie → Pad ${t[3] + 1} · Original stumm (antippen = wieder an)")
+                }
+            } catch (e: OutOfMemoryError) {
+                runOnUiThread { toast("Zu lang für den Speicher – erst kürzen") }
+            } catch (e: Throwable) {
+                val c = (e as? java.util.concurrent.ExecutionException)?.cause ?: e
+                runOnUiThread { toast("KI-Stems fehlgeschlagen: ${c.message ?: c}") }
+            } finally {
+                Engine.padLoadProg[p] = -1f
+            }
+        }.start()
+    }
+
+    private fun splitStemsFast(p: Int, free: Int) {
         if (free < 3) { toast("Für die 3 Stems werden 3 freie Pads gebraucht (frei: $free)"); return }
         val len = Engine.padDataLen(p)
         System.gc()

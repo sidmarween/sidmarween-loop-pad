@@ -224,6 +224,51 @@ object AiStems {
         return maskOf(frames, out, rate)
     }
 
+    /**
+     * Pad-Audio (mono, [sr]) in 4 fertige Spuren trennen: [vocals, drums, bass, other], gleich lang wie [data].
+     * Läuft in der KI-Warteschlange (nach evtl. laufenden Deck-Aufträgen) und wartet auf das Ergebnis. null = abgebrochen.
+     */
+    fun separatePad(ctx: Context, data: FloatArray, sr: Int, cancel: () -> Boolean, progress: (Float) -> Unit): Array<FloatArray>? {
+        val app = ctx.applicationContext
+        val fut = exec.submit(java.util.concurrent.Callable {
+            try {
+                val ss = sessions(app)
+                val env = OrtEnvironment.getEnvironment()
+                val inName = ss[0].inputNames.first()
+                val shape = longArrayOf(2, 1, SpleeterCore.T.toLong(), SpleeterCore.F.toLong())
+                val runner = SpleeterCore.Runner { st, x ->
+                    OnnxTensor.createTensor(env, FloatBuffer.wrap(x), shape).use { inp ->
+                        ss[st].run(mapOf(inName to inp)).use { r ->
+                            val fb = (r[0] as OnnxTensor).floatBuffer
+                            FloatArray(fb.remaining()).also { fb.get(it) }
+                        }
+                    }
+                }
+                // auf 44,1 kHz (Modell), danach zurück
+                val x44 = resample(data, sr, SpleeterCore.SR, -1)
+                val st = SpleeterCore.separateMono(x44, runner, progress, cancel) ?: return@Callable null
+                Array(4) { k -> resample(st[k], SpleeterCore.SR, sr, data.size).also { st[k] = FloatArray(0) } }
+            } finally {
+                lastUse = System.currentTimeMillis()
+                scheduleClose()
+            }
+        })
+        return fut.get()
+    }
+
+    /** Lineare Abtastraten-Wandlung; [outLen] < 0 = passend berechnen. */
+    private fun resample(x: FloatArray, from: Int, to: Int, outLen: Int): FloatArray {
+        if (from == to && (outLen < 0 || outLen == x.size)) return x
+        val n = if (outLen >= 0) outLen else (x.size.toLong() * to / from).toInt()
+        val step = from.toDouble() / to
+        val last = x.size - 1
+        return FloatArray(n) { i ->
+            val p = i * step
+            val i0 = p.toInt()
+            if (i0 >= last) x[last.coerceAtLeast(0)] else { val f = (p - i0).toFloat(); x[i0] + (x[i0 + 1] - x[i0]) * f }
+        }
+    }
+
     private fun maskOf(frames: Int, data: ByteArray, rate: Int) = DeckStems.Mask(
         frames, SpleeterCore.HOP * rate.toDouble() / SpleeterCore.SR, data, SpleeterCore.OUT_BINS,
         SpleeterCore.SR.toDouble() / SpleeterCore.N_FFT * 2, SpleeterCore.CENTER_SHIFT.toDouble() / SpleeterCore.HOP, true)

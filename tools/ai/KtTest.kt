@@ -54,5 +54,18 @@ fun main(args: Array<String>) {
     println("Abweichung zur Python-Referenz: max %.5f  mittel %.6f".format(maxD, sum / ref.size))
     // einzelne Ausreißer nur in fast stillen Bins (Rundung) – entscheidend ist der Mittelwert
     check(sum / ref.size < 0.002) { "Kotlin weicht zu stark ab" }
+    // Pad-Stems: Audio trennen, die Summe muss das Original ergeben
+    val mono = FloatArray(n) { (sig[it] + sig[n + it]) * 0.5f }
+    val t1 = System.nanoTime()
+    val st = SpleeterCore.separateMono(mono, runner)!!
+    var err = 0.0; var en = 0.0
+    val e = DoubleArray(4)
+    for (i in 44100 until n - 44100) {
+        val sum = st[0][i] + st[1][i] + st[2][i] + st[3][i]
+        err += (sum - mono[i]).toDouble().let { it * it }; en += mono[i].toDouble() * mono[i]
+        for (k in 0..3) e[k] += st[k][i].toDouble() * st[k][i]
+    }
+    println("Pad-Stems: %.2f s, Summe-Original: %.1f dB, Energie V/D/B/O: %s".format((System.nanoTime() - t1) / 1e9, 10 * Math.log10(err / en + 1e-30), e.map { "%.0f%%".format(it / en * 100) }))
+    check(err / en < 1e-4) { "Pad-Stems ergeben nicht das Original" }
     println("OK")
 }

@@ -115,6 +115,93 @@ object SpleeterCore {
         return true
     }
 
+    /**
+     * Fertige Audio-Stems (für Pads): Mono-Signal [x] bei 44,1 kHz → [vocals, drums, bass, other], gleich lang.
+     * Masken in voller Auflösung (2049 Bins, oberhalb 11 kHz Rahmen-Mittelwert), Phase vom Original,
+     * Rücktransformation mit Overlap-Add. Die vier Stems ergeben zusammen wieder das Original. null = abgebrochen.
+     */
+    fun separateMono(x: FloatArray, runner: Runner, progress: (Float) -> Unit = {}, cancel: () -> Boolean = { false }): Array<FloatArray>? {
+        val n = x.size
+        val total = frames(n)
+        val splits = (total + T - 1) / T
+        val bins = N_FFT / 2 + 1
+        val win = FloatArray(N_FFT) { (0.5 - 0.5 * cos(2 * PI * it / N_FFT)).toFloat() }
+        val norm = 1f / 1.5f / N_FFT // Σ hann² bei 75 % Überlappung = 1,5; inverse FFT / N
+        val fft = Fft(N_FFT)
+        val re = FloatArray(N_FFT)
+        val im = FloatArray(N_FFT)
+        val inp = FloatArray(2 * T * F)
+        val sRe = Array(T) { FloatArray(bins) }
+        val sIm = Array(T) { FloatArray(bins) }
+        val outs = Array(4) { FloatArray(n) }
+        val m = Array(4) { FloatArray(bins) }
+        for (s in 0 until splits) {
+            if (cancel()) return null
+            val t0 = s * T
+            for (t in 0 until T) {
+                val start = (t0 + t) * HOP - PAD
+                for (i in 0 until N_FFT) {
+                    val idx = start + i
+                    re[i] = if (idx in 0 until n) x[idx] * win[i] else 0f
+                    im[i] = 0f
+                }
+                fft.forward(re, im)
+                System.arraycopy(re, 0, sRe[t], 0, bins)
+                System.arraycopy(im, 0, sIm[t], 0, bins)
+                for (k in 0 until F) {
+                    val a = sqrt(re[k] * re[k] + im[k] * im[k])
+                    inp[t * F + k] = a
+                    inp[(T + t) * F + k] = a
+                }
+            }
+            val ys = arrayOfNulls<FloatArray>(4)
+            for (st in 0..3) {
+                if (cancel()) return null
+                ys[st] = runner.run(st, inp)
+                progress((s + (st + 1) * 0.2f) / splits)
+            }
+            for (t in 0 until T) {
+                val tf = t0 + t
+                if (tf >= total) break
+                val sums = FloatArray(4)
+                for (k in 0 until F) {
+                    // beide Kanäle bekamen dasselbe Signal → Schätzungen mitteln
+                    val i0 = t * F + k
+                    val i1 = (T + t) * F + k
+                    var den = EPS
+                    for (st in 0..3) {
+                        val ya = ys[st]!!
+                        val y = (ya[i0] + ya[i1]) * 0.5f
+                        val a = y * y
+                        m[st][k] = a
+                        den += a
+                    }
+                    for (st in 0..3) { val v = (m[st][k] + EPS / 4) / den; m[st][k] = v; sums[st] += v }
+                }
+                for (st in 0..3) {
+                    val mean = sums[st] / F
+                    for (k in F until bins) m[st][k] = mean
+                }
+                val start = tf * HOP - PAD
+                val rr = sRe[t]; val ii = sIm[t]
+                for (st in 0..3) {
+                    val mk = m[st]
+                    // Spektrum × Maske, konjugiert-symmetrisch ergänzen, inverse FFT über konjugieren
+                    for (k in 0 until bins) { re[k] = rr[k] * mk[k]; im[k] = -ii[k] * mk[k] }
+                    for (k in 1 until N_FFT / 2) { re[N_FFT - k] = re[k]; im[N_FFT - k] = -im[k] }
+                    fft.forward(re, im)
+                    val o = outs[st]
+                    for (i in 0 until N_FFT) {
+                        val idx = start + i
+                        if (idx in 0 until n) o[idx] += re[i] * win[i] * norm
+                    }
+                }
+            }
+            progress((s + 1f) / splits)
+        }
+        return outs
+    }
+
     /** Radix-2-FFT mit Tabellen (vorwärts, an Ort und Stelle). */
     class Fft(private val n: Int) {
         private val cosT = FloatArray(n / 2) { cos(2 * PI * it / n).toFloat() }
