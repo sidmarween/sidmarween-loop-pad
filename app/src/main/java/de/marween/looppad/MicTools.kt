@@ -697,6 +697,19 @@ object MicTools {
         return out
     }
 
+    /**
+     * Gleichmäßiger Versatz zum Raster: Kreis-Mittel der Positionen (in 1/16-Schritten) modulo [period] Schritte.
+     * Liefert den Versatz in Schritten (−period/2 … +period/2) oder 0, wenn die Schläge nicht einheitlich liegen.
+     */
+    fun gridOffset(steps: List<Double>, period: Double = 1.0, minConsistency: Double = 0.55): Double {
+        if (steps.size < 3) return 0.0
+        var c = 0.0; var s = 0.0
+        for (x in steps) { val a = 2 * PI * x / period; c += cos(a); s += sin(a) }
+        val r = sqrt(c * c + s * s) / steps.size
+        if (r < minConsistency) return 0.0
+        return kotlin.math.atan2(s, c) / (2 * PI) * period
+    }
+
     @Suppress("unused")
     private fun db(v: Float) = 20 * log10(max(1e-9f, v))
     @Suppress("unused")

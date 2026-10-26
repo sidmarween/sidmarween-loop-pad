@@ -1903,13 +1903,19 @@ object Engine {
      * Mikrofon-Frame → Sequenzer-Schritt (16 je Takt, mit Bruchteil): der Moment, in dem der Ton am Mikro ankam,
      * auf den gerade gehörten Ausgabe-Frame abgebildet. NaN, wenn nichts läuft.
      */
-    fun micStep(frame: Long): Double {
+    fun micStep(frame: Long, raw: Boolean = false): Double {
         if (!seqPlaying) return Double.NaN
         val bar = seqBar()
         if (bar <= 0L) return Double.NaN
-        val heard = outClock.frameAt(inClock.nanosAt(frame, sampleRate), sampleRate)
+        val heard = outClock.frameAt(inClock.nanosAt(frame, sampleRate), sampleRate) - (if (raw) 0L else (micOffsetMs * sampleRate / 1000f).toLong())
         return (heard - seqStart()).toDouble() * STEPS / bar
     }
+
+    /** Mikro-Versatz (ms): so viel kommt das Mikro-Signal gegenüber dem Gehörten zu spät an (eingemessen) – wird abgezogen. */
+    @Volatile var micOffsetMs = 0f
+
+    /** Länge eines 1/16 in ms (für Umrechnungen). */
+    fun stepMs(): Float = if (sampleRate > 0) seqBar().toFloat() / STEPS * 1000f / sampleRate else 125f
 
     /** Live-Auto-Tune fürs Mikrofon (Monitor): an/aus, Geschwindigkeit (0 = Roboter … 1 = natürlich), Stärke. */
     @Volatile var autoTuneOn = false

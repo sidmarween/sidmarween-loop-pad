@@ -29,6 +29,7 @@ import android.graphics.Typeface
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
 
@@ -228,6 +229,7 @@ class MainActivity : Activity() {
         dj.onAiStems = { k -> showAiStems(k) }
         AiStems.auto = prefs.getBoolean("aiAuto", true)
         Engine.autoTuneSpeed = prefs.getFloat("atSpeed", 0.25f)
+        Engine.micOffsetMs = prefs.getFloat("micOffset", 0f)
         Engine.autoTuneMix = prefs.getFloat("atMix", 1f)
         Dj.onDeckLoaded = { d -> if (AiStems.auto) AiStems.request(applicationContext, d) }
         dj.onSkinMenu = { showDesigns() }
@@ -4197,7 +4199,8 @@ class MainActivity : Activity() {
             "🎯 Folge dem Song: Tonart & Akkorde aus einem Pad oder Deck übernehmen",
             (if (Engine.voiceSynthOn) "🎹 Stimmen-Synth: AN" else "🎹 Stimmen-Synth: singen → ein Synth spielt live mit") + " …",
             (if (Engine.harmOn) "👥 Harmonizer: AN" else "👥 Harmonizer: Begleitstimmen zu deiner Stimme") + " …",
-            "✋ Klang-Sammler: Geräusche aufnehmen → eigenes Drumkit auf den Pads"
+            "✋ Klang-Sammler: Geräusche aufnehmen → eigenes Drumkit auf den Pads",
+            "🎯 Mikro-Timing einmessen (für Summen & Beatbox – jetzt: ${Engine.micOffsetMs.toInt()} ms)"
         )
         ui().setTitle("🎤 Mikro-Werkzeuge").setItems(items) { _, w ->
             when (w) {
@@ -4207,14 +4210,83 @@ class MainActivity : Activity() {
                 3 -> showFollowSong()
                 4 -> showVoiceSynth()
                 5 -> showHarmonizer()
-                else -> showCollector()
+                6 -> showCollector()
+                else -> calibrateMic()
             }
         }.setNegativeButton("Schließen", null).show()
+    }
+
+    /**
+     * Mikro-Timing einmessen: zum Klick 2 Takte lang auf jeden Schlag klatschen oder „tak“ sagen.
+     * Der mittlere Versatz (Handy-Mikro, Kopfhörer, Bluetooth …) wird gespeichert und bei Summen/Beatbox abgezogen.
+     */
+    private fun calibrateMic() {
+        if (!hasMic()) { toast("Bitte erst das Mikrofon erlauben"); return }
+        if (!Engine.seqPlaying) Engine.seqPlay()
+        val metroWas = Engine.metronome
+        Engine.metronome = true
+        val pad = (18 * resources.displayMetrics.density).toInt()
+        val tv = TextView(this).apply { textSize = 20f; setTextColor(Color.WHITE); gravity = Gravity.CENTER; setPadding(pad, pad, pad, pad / 2) }
+        val sub = TextView(this).apply { textSize = 12f; setTextColor(Color.rgb(190, 190, 190)); gravity = Gravity.CENTER; setPadding(pad, 0, pad, pad / 2)
+            text = "Klatsche oder sag „tak“ genau auf jeden Klick – 2 Takte lang (8 Schläge). So lernt die App, wie spät das Mikro bei dir ankommt." }
+        val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; addView(tv); addView(sub) }
+        var cancelled = false
+        val dlg = ui().setTitle("🎯 Mikro-Timing einmessen").setView(box).setCancelable(false).setNegativeButton("Abbrechen") { _, _ -> cancelled = true }.create()
+        dlg.show()
+        val h = android.os.Handler(mainLooper)
+        var startStep = Double.NaN
+        var startFrame = -1L
+        h.post(object : Runnable {
+            override fun run() {
+                if (cancelled) { Engine.metronome = metroWas; return }
+                val now = Engine.micNow()
+                val st = Engine.micStep(now, raw = true)
+                if (st.isNaN()) { h.postDelayed(this, 40); return }
+                if (startStep.isNaN()) { var s0 = Math.ceil(st / 16.0) * 16.0; if (s0 - st < 3.0) s0 += 16.0; startStep = s0; startFrame = now }
+                val rel = st - startStep
+                when {
+                    rel < 0 -> tv.text = "Gleich … ${Math.ceil(-rel / 4.0).toInt()}"
+                    rel < 32 -> tv.text = "👏 ${(rel / 4).toInt() + 1} / 8"
+                    rel < 33.5 -> tv.text = "👏 …"
+                    else -> {
+                        Engine.metronome = metroWas
+                        dlg.dismiss()
+                        val audio = Engine.micCopy(startFrame, (now - startFrame).toInt()) ?: run { toast("Mikrofon-Audio nicht verfügbar"); return }
+                        val hits = MicTools.beatbox(audio, Engine.sampleRate)
+                        // Versatz je Schlag zum nächsten Viertel (4 Schritte), in ms
+                        val offs = hits.map { Engine.micStep(startFrame + it.at, raw = true) - startStep }
+                            .filter { !it.isNaN() && it > -2 && it < 34 }
+                            .map { x -> val q = Math.round(x / 4.0) * 4.0; (x - q) * Engine.stepMs() }
+                            .sorted()
+                        if (offs.size < 4) { toast("Zu wenige Schläge erkannt (${offs.size}) – lauter klatschen und nochmal"); return }
+                        val med = offs[offs.size / 2]
+                        val spread = offs[(offs.size * 3) / 4] - offs[offs.size / 4]
+                        ui().setTitle("🎯 Ergebnis").setMessage(String.format(Locale.GERMANY,
+                            "%d Schläge erkannt.\nDein Mikro kommt %.0f ms %s an (Streuung %.0f ms).\n\nÜbernehmen? Summen und Beatbox werden dann um diesen Wert korrigiert.",
+                            offs.size, abs(med), if (med >= 0) "zu spät" else "zu früh", spread))
+                            .setPositiveButton("Übernehmen") { _, _ ->
+                                Engine.micOffsetMs = med.toFloat()
+                                getSharedPreferences("marvpad", MODE_PRIVATE).edit().putFloat("micOffset", med.toFloat()).apply()
+                                hint(String.format(Locale.GERMANY, "🎯 Mikro-Timing: %+.0f ms gespeichert", med))
+                            }.setNegativeButton("Verwerfen", null).show()
+                        return
+                    }
+                }
+                h.postDelayed(this, 40)
+            }
+        })
     }
 
     /** Takte und Ziel wählen, dann aufnehmen. [kind] 0 = Summen, 1 = Beatbox. */
     private fun askMicCapture(kind: Int) {
         if (!hasMic()) { toast("Bitte erst das Mikrofon erlauben"); return }
+        if (!getSharedPreferences("marvpad", MODE_PRIVATE).contains("micOffset")) {
+            ui().setTitle("🎯 Erst einmal einmessen?").setMessage("Damit Summen und Beatbox genau im Takt landen, misst die App einmal kurz, wie spät dein Mikro ankommt (8× zum Klick klatschen, 10 Sekunden). Danach geht es weiter.")
+                .setPositiveButton("Einmessen") { _, _ -> calibrateMic() }
+                .setNegativeButton("Später") { _, _ -> getSharedPreferences("marvpad", MODE_PRIVATE).edit().putFloat("micOffset", Engine.micOffsetMs).apply(); askMicCapture(kind) }
+                .show()
+            return
+        }
         val barsOpt = intArrayOf(1, 2, 4)
         val labels = barsOpt.map { "$it Takt" + (if (it > 1) "e" else "") }.toTypedArray()
         ui().setTitle(if (kind == 0) "🎤 Summen → Melodie: Länge" else "🥁 Beatbox → Drums: Länge").setItems(labels) { _, w ->
@@ -4300,9 +4372,11 @@ class MainActivity : Activity() {
         val len = (bars * InstState.STEPS).coerceIn(16, InstState.MAX)
         t.len = len
         var placed = 0
+        // Notenanfänge liegen meist auf Achteln: einheitlichen Versatz ausgleichen
+        val corr = MicTools.gridOffset(notes.map { Engine.micStep(f0 + it.start.toLong() * 2) - startStep }.filter { !it.isNaN() }, 2.0, 0.6)
         for (nt in notes) {
-            val a = Engine.micStep(f0 + nt.start.toLong() * 2) - startStep
-            val b = Engine.micStep(f0 + nt.end.toLong() * 2) - startStep
+            val a = Engine.micStep(f0 + nt.start.toLong() * 2) - startStep - corr
+            val b = Engine.micStep(f0 + nt.end.toLong() * 2) - startStep - corr
             val s0 = Math.floor(a + 0.5).toInt()
             if (s0 < 0 || s0 >= len) continue
             val l = max(1, Math.floor(b + 0.5).toInt() - s0)
@@ -4329,8 +4403,11 @@ class MainActivity : Activity() {
         for (r in rows) java.util.Arrays.fill(st.drumSteps[r], 0)
         st.drumLen = len
         val cnt = IntArray(3)
+        // Rest-Versatz automatisch ausgleichen: liegen die Schläge einheitlich neben dem 1/16-Raster, wird das abgezogen
+        val pos = hits.map { Engine.micStep(f0 + it.at) - startStep }.filter { !it.isNaN() }
+        val corr = MicTools.gridOffset(pos)
         for (h in hits) {
-            val s = Math.floor(Engine.micStep(f0 + h.at) - startStep + 0.5).toInt()
+            val s = Math.floor(Engine.micStep(f0 + h.at) - startStep - corr + 0.5).toInt()
             if (s < 0 || s >= len) continue
             val r = rows[h.kind]
             st.drumSteps[r][s] = if (h.vel > 0.85f) 2 else 1
@@ -4340,7 +4417,8 @@ class MainActivity : Activity() {
         // kürzeres Pattern über alle 4 Takte wiederholen
         for (r in rows) for (k in len until InstState.MAX) { st.drumSteps[r][k] = st.drumSteps[r][k % len]; st.drumVel[r][k] = st.drumVel[r][k % len] }
         st.drumOn = true
-        return "🥁 Kick ${cnt[0]} · Snare ${cnt[1]} · Hi-Hat ${cnt[2]} in der Drum-Machine · ↶ UNDO macht es rückgängig"
+        val cTxt = if (abs(corr) > 0.05) String.format(Locale.GERMANY, " · Timing %+.0f ms ausgeglichen", -corr * Engine.stepMs()) else ""
+        return "🥁 Kick ${cnt[0]} · Snare ${cnt[1]} · Hi-Hat ${cnt[2]}$cTxt · ↶ UNDO macht es rückgängig"
     }
 
     private fun showAutoTune() {
