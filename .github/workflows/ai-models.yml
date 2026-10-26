@@ -1,0 +1,49 @@
+name: AI Models
+
+# Lädt die Spleeter-4-Stem-Modelle (ONNX), prüft sie und legt sie als Release „ai-models“ ab,
+# damit die App sie von hier (GitHub) herunterladen kann. Prüft außerdem die Kotlin-Rechnung gegen Python.
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'tools/ai/**'
+      - 'app/src/main/java/de/marween/looppad/SpleeterCore.kt'
+      - '.github/workflows/ai-models.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  models:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Modelle laden
+        run: |
+          mkdir -p models
+          for s in vocals drums bass other; do
+            curl -fsSL -o models/$s.fp16.onnx "https://huggingface.co/Best-Practice/spleeter-4stems-onnx/resolve/main/$s.fp16.onnx"
+          done
+          curl -fsSL -o models/README.md "https://huggingface.co/Best-Practice/spleeter-4stems-onnx/resolve/main/README.md" || true
+          ls -la models
+      - name: Python-Prüfung
+        run: |
+          pip install -q onnxruntime==1.20.1 numpy==1.26.4 onnx==1.17.0
+          python tools/ai/check.py models
+      - name: Kotlin-Prüfung (gleiche Rechnung wie in der App)
+        if: hashFiles('tools/ai/KtTest.kt') != ''
+        run: |
+          curl -fsSL -o ort.jar https://repo1.maven.org/maven2/com/microsoft/onnxruntime/onnxruntime/1.20.0/onnxruntime-1.20.0.jar
+          curl -fsSL -o kotlinc.zip https://github.com/JetBrains/kotlin/releases/download/v2.0.21/kotlin-compiler-2.0.21.zip
+          unzip -q kotlinc.zip
+          ./kotlinc/bin/kotlinc -nowarn -cp ort.jar app/src/main/java/de/marween/looppad/SpleeterCore.kt tools/ai/KtTest.kt -include-runtime -d kt.jar
+          java -cp kt.jar:ort.jar KtTestKt models ref.bin
+      - name: Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release view ai-models >/dev/null 2>&1 || gh release create ai-models --title "KI-Modelle (Spleeter 4 Stems, ONNX)" --notes "Modelle für die KI-Stem-Trennung in Marv PAD. Quelle: huggingface.co/Best-Practice/spleeter-4stems-onnx (Gewichte von Deezer Spleeter)." --prerelease
+          gh release upload ai-models models/*.onnx --clobber
