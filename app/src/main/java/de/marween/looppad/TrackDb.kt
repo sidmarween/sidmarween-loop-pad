@@ -286,18 +286,35 @@ object TrackDb {
     /** Analysiert einen Track vollständig (Tempo, Raster, Tonart, Lautheit, Energie). */
     fun analyze(ctx: Context, t: Track) {
         val m = Dj.decodeMono(ctx, Uri.parse(t.uri), Dj.MAX_SECONDS)
-        val w = Dj.waveOf(m.data, 1, m.len, m.rate)
-        val nameBpm = Warp.bpmFromName(t.title)
-        val det = Dj.detectBpm(w.onset, w.fps)
-        val bpm = nameBpm ?: det.first
-        val gridF = Dj.findGrid(w.onset, w.fps, bpm) * (m.rate / w.fps)
-        val (k, kc) = Keys.detect(m.data, 1, m.len, m.rate)
-        t.bpm = bpm
-        t.grid = gridF / m.rate
-        t.key = k
-        t.keyConf = kc
+        analyzeData(ctx, t, m.data, 1, m.len, m.rate, false)
+    }
+
+    /**
+     * Analyse aus schon geladenem Audio (z. B. dem Deck – kein zweites Dekodieren).
+     * [keepGrid] = Tempo, Raster und Takt-Eins bleiben (im Deck evtl. schon von Hand korrigiert);
+     * dann werden nur Tonart, Lautheit, Energie, Länge und Genre ergänzt.
+     */
+    fun analyzeData(ctx: Context, t: Track, data: ShortArray, ch: Int, len: Int, rate: Int, keepGrid: Boolean) {
+        val w = Dj.waveOf(data, ch, len, rate)
+        val bpm: Float
+        val gridF: Double
+        if (keepGrid && t.bpm > 0f) {
+            bpm = t.bpm
+            gridF = t.grid * rate
+        } else {
+            val nameBpm = Warp.bpmFromName(t.title)
+            val det = Dj.detectBpm(w.onset, w.fps)
+            bpm = nameBpm ?: det.first
+            gridF = Dj.findGrid(w.onset, w.fps, bpm) * (rate / w.fps)
+        }
+        val (k, kc) = Keys.detect(data, ch, len, rate)
+        if (!keepGrid) {
+            t.bpm = bpm
+            t.grid = gridF / rate
+        }
+        if (!(keepGrid && t.key >= 0)) { t.key = k; t.keyConf = kc }
         t.lufs = w.lufs
-        t.seconds = m.len.toDouble() / m.rate
+        t.seconds = len.toDouble() / rate
         // Energie: Lautheit, Anschlagsdichte, Bass- und Höhenanteil, Tempo
         var on = 0.0
         for (v in w.onset) on += v
@@ -314,11 +331,13 @@ object TrackDb {
         t.energy = (1 + e * 9).roundToInt().coerceIn(1, 10)
         if (t.cue < 0) t.cue = t.grid
         // Takt-Eins und Phrasen wie im Deck
-        val tmp = Dj.Deck(9)
-        tmp.peaks = w.peaks; tmp.lows = w.lows; tmp.bpm = bpm; tmp.grid = gridF; tmp.len = m.len; tmp.srcRate = m.rate
-        Dj.analyzePhrase(tmp)
-        t.barOffset = tmp.barOffset
-        t.phraseOff = tmp.phraseOff
+        if (!keepGrid) {
+            val tmp = Dj.Deck(9)
+            tmp.peaks = w.peaks; tmp.lows = w.lows; tmp.bpm = bpm; tmp.grid = gridF; tmp.len = len; tmp.srcRate = rate
+            Dj.analyzePhrase(tmp)
+            t.barOffset = tmp.barOffset
+            t.phraseOff = tmp.phraseOff
+        }
         if (!t.genreRead) readGenre(ctx, t)
         t.analyzed = true
         t.missing = false

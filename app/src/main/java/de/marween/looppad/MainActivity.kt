@@ -548,9 +548,12 @@ class MainActivity : Activity() {
         super.onResume()
         pickerOpen = false
         TouchVelocity.update(this)
+        window.decorView.postDelayed(deckAutosave, 5_000L)
     }
 
     override fun onPause() {
+        window.decorView.removeCallbacks(deckAutosave)
+        try { for (k in 0..1) saveDeckIfChanged(k) } catch (ignored: Throwable) {}
         TouchVelocity.stop()
         super.onPause()
     }
@@ -5414,6 +5417,8 @@ class MainActivity : Activity() {
                     dd.phraseOff = t.phraseOff
                 }
                 if (t.key >= 0) { dd.keyGen++; dd.key = t.key; dd.keyConf = t.keyConf }
+                // Song-Struktur zum gespeicherten Raster neu einteilen
+                if (t.analyzed || t.bpm > 0f) try { Dj.analyzeParts(dd) } catch (ignored: Throwable) {}
                 if (t.cue >= 0) { dd.cuePoint = t.cue * r; dd.seekTo = dd.cuePoint } else { dd.cuePoint = dd.grid; dd.seekTo = dd.grid }
                 for (h in dd.hot.indices) dd.hot[h] = if (h < t.hot.size && t.hot[h] >= 0) t.hot[h] * r else -1.0
                 dd.colId = t.id
@@ -5427,7 +5432,21 @@ class MainActivity : Activity() {
                 }
                 TrackDb.played(t)
                 TrackDb.save(this)
+                deckSig[k] = deckSigOf(dd)
                 runOnUiThread { hint(String.format(Locale.GERMANY, "Deck %s: %s · %.1f BPM · %s", "AB"[k], t.title, dd.bpm, Keys.camelot(dd.key))) }
+                if (!t.analyzed) {
+                    // Rest der Analyse (Tonart, Energie, Lautheit) direkt aus dem Deck – ohne erneutes Laden, Raster bleibt
+                    val data = dd.data
+                    val ch = dd.ch; val len = dd.len; val rate = dd.srcRate
+                    if (data != null) Thread {
+                        try {
+                            TrackDb.analyzeData(this, t, data, ch, len, rate, true)
+                            if (dd.colId == t.id && dd.key < 0 && t.key >= 0) { dd.keyGen++; dd.key = t.key; dd.keyConf = t.keyConf }
+                            TrackDb.save(this)
+                            colRefresh?.invoke()
+                        } catch (ignored: Throwable) {}
+                    }.start()
+                }
             } catch (e: SecurityException) {
                 t.missing = true
                 runOnUiThread { toast("Kein Zugriff mehr auf „${t.title}“ – Ordner bitte neu hinzufügen") }
@@ -5442,11 +5461,34 @@ class MainActivity : Activity() {
         }.start()
     }
 
+    /** Fingerabdruck der speicherbaren Deck-Werte (Änderungen erkennen). */
+    private fun deckSigOf(dd: Dj.Deck): String =
+        "${dd.colId}|${dd.bpm}|${dd.grid}|${dd.cuePoint}|${dd.hot.joinToString(",")}|${dd.key}|${dd.keyConf}|${dd.barOffset}|${dd.phraseOff}"
+    private val deckSig = arrayOf("", "")
+
+    /** Automatisch sichern: Änderungen an Tempo, Raster, Tonart, Takt-Eins und Cue-Punkten landen sofort in der Sammlung. */
+    private val deckAutosave = object : Runnable {
+        override fun run() {
+            try { for (k in 0..1) saveDeckIfChanged(k) } catch (ignored: Throwable) {}
+            window.decorView.removeCallbacks(this)
+            window.decorView.postDelayed(this, 5_000L)
+        }
+    }
+
+    private fun saveDeckIfChanged(k: Int) {
+        val dd = Dj.decks[k]
+        if (dd.loading || dd.colId == null || !dd.loaded()) return
+        val s = deckSigOf(dd)
+        if (s == deckSig[k]) return
+        deckSig[k] = s
+        saveDeckCollection(k)
+    }
+
     /** Geänderte Cue-Punkte, Raster und Tonart eines Sammlungs-Tracks speichern. */
     private fun saveDeckCollection(k: Int) {
         val dd = Dj.decks[k]
         val t = TrackDb.byId(dd.colId) ?: return
-        if (!dd.loaded()) return
+        if (!dd.loaded() || dd.loading) return
         val r = dd.srcRate.toDouble()
         t.cue = dd.cuePoint / r
         for (h in t.hot.indices) t.hot[h] = if (h < dd.hot.size && dd.hot[h] >= 0) dd.hot[h] / r else -1.0
@@ -6165,7 +6207,8 @@ class MainActivity : Activity() {
                 // Datei landet automatisch in der Sammlung (dauerhafter Zugriff, Analyse im Hintergrund)
                 var inCol: TrackDb.Track? = null
                 try {
-                    contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    // dauerhafte Leseberechtigung nur bei Dateiauswahl (Cloud-Downloads liegen schon im App-Ordner)
+                    if (uri.scheme == "content") try { contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) } catch (ignored: Exception) {}
                     TrackDb.load(this)
                     val (t, isNew) = TrackDb.add(uri, (displayName(uri) ?: "Track").substringBeforeLast('.'))
                     if (isNew) TrackDb.save(this)
