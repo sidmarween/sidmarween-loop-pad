@@ -428,6 +428,9 @@ object InstState {
         bank[inst][to] = capturePat(inst)
     }
 
+    /** Pattern [p] von [inst] (das aktive aus den Live-Daten), null = leer. */
+    fun patFor(inst: Int, p: Int): Pat? = if (p == curPat[inst]) capturePat(inst) else bank[inst].getOrNull(p)
+
     fun patHasNotes(inst: Int, p: Int): Boolean = if (p == curPat[inst]) instHasNotes(inst) else bank[inst][p]?.hasNotes(inst) == true
 
     fun resetBanks() {

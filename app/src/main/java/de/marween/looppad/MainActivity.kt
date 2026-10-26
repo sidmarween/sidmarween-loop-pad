@@ -2314,6 +2314,7 @@ class MainActivity : Activity() {
             }) else emptyList()) + listOf(
             "💾 Projekt & Dateien" to { showMenuGroup(0) },
             "💿 Musik-Sammlung: Ordner laden → automatisch katalogisiert & analysiert" to { showMusicLibrary() },
+            "📤 Song exportieren: WAV, Stems, MIDI" to { showSongExport() },
             ((if (Engine.scOn) "〽 Sidechain-Pumpen: AN" else "〽 Sidechain-Pumpen (Kick drückt Bass & Flächen)")) to { showSidechain() },
             "🎙 Aufnahme & Wiedergabe" to { showMenuGroup(1) },
             "🎨 Aussehen: Designs, Schriften, Ansicht" to { showMenuGroup(2) },
@@ -3033,6 +3034,177 @@ class MainActivity : Activity() {
         }
         @Suppress("DEPRECATION")
         super.onBackPressed()
+    }
+
+    // ================================================================ Song-Export
+
+    private var exportKind = 0
+
+    /** Gibt es ein Arrangement (Song-Matrix)? Sonst wird der aktuelle Stand 8 Takte lang aufgenommen. */
+    private fun hasArrangement(): Boolean =
+        (0 until Engine.songBars).any { b -> (0 until Engine.ARR_ROWS).any { r -> Engine.arrCell(r, b) > 0 } }
+
+    private fun exportBars(): Int = if (hasArrangement()) Engine.songBars else 8
+
+    private fun showSongExport() {
+        val bpm = Engine.currentBpm().let { if (it > 0f) it else 120f }
+        val bars = exportBars()
+        val secs = (bars * 240f / bpm).toInt()
+        val what = if (hasArrangement()) "Song-Matrix: $bars Takte" else "kein Song angelegt – aktueller Stand, 8 Takte"
+        val items = arrayOf(
+            "🎵 Ganzer Song als WAV (Stereo, mit allen Effekten)",
+            "🎚 Song + Stems: jede Spur als eigene WAV (ACID, DRUM, SYNTH 1–3, PADS)",
+            "🎼 MIDI-Datei: alle Instrument-Spuren über den ganzen Song"
+        )
+        ui().setTitle("📤 Exportieren · $what · ${secs / 60}:${String.format(Locale.GERMANY, "%02d", secs % 60)} min")
+            .setItems(items) { _, w ->
+                exportKind = w
+                if (w < 2) hint("Ordner wählen – danach läuft der Song einmal in Echtzeit durch und wird aufgenommen")
+                val i = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE)
+                try { startActivityForResult(i, REQ_EXPORT_DIR) } catch (e: Exception) { toast("Kein Dateimanager gefunden") }
+            }
+            .setNegativeButton("Abbrechen", null)
+            .show()
+    }
+
+    /** Song einmal in Echtzeit abspielen und dabei Master (und Stems) aufnehmen, danach in den Ordner kopieren. */
+    private fun startBounce(tree: Uri, stems: Boolean) {
+        if (SetRecorder.recording) { toast("Es läuft schon eine Aufnahme"); return }
+        val rate = Engine.sampleRate
+        val bpm = Engine.currentBpm().let { if (it > 0f) it else 120f }
+        val song = hasArrangement()
+        val bars = exportBars()
+        val playSec = bars * 240.0 / bpm
+        val totalSec = playSec + 2.5
+        Engine.seqStop()
+        val oldSong = Engine.songMode
+        if (song) Engine.songMode = true
+        val tmp = java.io.File(cacheDir, "export").apply { deleteRecursively(); mkdirs() }
+        if (!SetRecorder.start(this, rate)) { toast("Aufnahme konnte nicht starten"); return }
+        if (stems && !StemRecorder.start(tmp, rate)) { SetRecorder.stop()?.delete(); toast("Stems konnten nicht starten"); return }
+        Engine.seqPlay()
+        val d = resources.displayMetrics.density
+        val tv = TextView(this).apply { textSize = 15f; setTextColor(0xFFEEEEEE.toInt()); setPadding((20 * d).toInt(), (12 * d).toInt(), (20 * d).toInt(), (12 * d).toInt()) }
+        val pb = android.widget.ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply { max = 1000 }
+        val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; addView(tv); addView(pb, LinearLayout.LayoutParams(-1, -2).apply { leftMargin = (20 * d).toInt(); rightMargin = (20 * d).toInt() }) }
+        var cancelled = false
+        var finished = false
+        val dlg = ui().setTitle(if (stems) "📤 Song + Stems werden aufgenommen" else "📤 Song wird aufgenommen")
+            .setView(box)
+            .setNegativeButton("Abbrechen") { _, _ -> cancelled = true }
+            .setCancelable(false)
+            .show()
+        val h = android.os.Handler(mainLooper)
+        var stopped = false
+        fun finish() {
+            if (finished) return
+            finished = true
+            Engine.seqStop()
+            Engine.songMode = oldSong
+            val master = SetRecorder.stop()
+            val stemFiles = if (stems) StemRecorder.stop() else emptyList()
+            try { dlg.dismiss() } catch (ignored: Exception) {}
+            if (cancelled) { master?.delete(); tmp.deleteRecursively(); toast("Export abgebrochen"); return }
+            toast("Speichere …")
+            Thread {
+                var n = 0
+                try {
+                    val dir = android.provider.DocumentsContract.buildDocumentUriUsingTree(tree, android.provider.DocumentsContract.getTreeDocumentId(tree))
+                    val base = "MarvPAD_" + stamp()
+                    fun copy(f: java.io.File, name: String) {
+                        val doc = android.provider.DocumentsContract.createDocument(contentResolver, dir, "audio/wav", name) ?: return
+                        contentResolver.openOutputStream(doc)?.use { o -> f.inputStream().use { it.copyTo(o, 1 shl 16) } }
+                        n++
+                    }
+                    if (master != null) copy(master, "${base}_Song.wav")
+                    for ((i, f) in stemFiles.withIndex()) if (StemRecorder.peak[i] > 0.0005f) copy(f, "${base}_${StemRecorder.NAMES[i]}.wav")
+                    master?.delete()
+                    tmp.deleteRecursively()
+                    runOnUiThread { hint("📤 $n Datei(en) gespeichert" + if (stems) " – Stems sind trocken (ohne XY-Effekte und Master-Kette)" else "") }
+                } catch (e: Exception) {
+                    runOnUiThread { toast("Speichern fehlgeschlagen: ${e.message ?: e}") }
+                }
+            }.start()
+        }
+        val tick = object : Runnable {
+            override fun run() {
+                if (finished) return
+                val t = SetRecorder.seconds()
+                pb.progress = (t / totalSec * 1000).toInt().coerceIn(0, 1000)
+                val bar = (t * bpm / 240.0).toInt() + 1
+                tv.text = if (t < playSec) "Takt ${bar.coerceAtMost(bars)} / $bars · ${Dj.fmt(t)} / ${Dj.fmt(playSec)}\nApp bitte offen lassen." else "Ausklang …"
+                if (!stopped && t >= playSec) { stopped = true; Engine.seqStop() }
+                if (cancelled || t >= totalSec) finish() else h.postDelayed(this, 200)
+            }
+        }
+        h.post(tick)
+    }
+
+    /** MIDI aller Instrument-Spuren über den ganzen Song (Patterns A–D laut Song-Matrix). */
+    private fun writeSongMidi(tree: Uri) {
+        val st = InstState
+        val song = hasArrangement()
+        val bars = exportBars()
+        val steps = bars * 16
+        val bpm = Engine.currentBpm().let { if (it > 0f) it else 120f }
+        val tracks = ArrayList<MidiFile.Track>()
+        for (inst in 0 until InstState.INSTS) {
+            val notes = ArrayList<MidiFile.Note>()
+            // welches Pattern läuft in Schritt s (null = Spur aus)
+            val cache = HashMap<Int, InstState.Pat?>()
+            fun patAt(s: Int): Pair<InstState.Pat, Int>? {
+                val b = s / 16
+                val v = if (song) Engine.arrCell(Engine.ARR_INST + inst, b) else (if (st.instOn(inst)) st.curPat[inst] + 1 else 0)
+                if (v <= 0) return null
+                val p = cache.getOrPut(v) { st.patFor(inst, v - 1) } ?: return null
+                return p to v
+            }
+            if (inst == 1) {
+                for (s in 0 until steps) {
+                    val (p, _) = patAt(s) ?: continue
+                    val k = s % p.len.coerceIn(1, InstState.MAX)
+                    for (v in 0 until min(InstState.DV, p.ints.size)) {
+                        val x = p.ints[v][k]
+                        if (x > 0) notes.add(MidiFile.Note(s / 4.0, 0.25, GM[v], ((if (x == 2) 127 else 96) * (p.floats.getOrNull(v)?.get(k) ?: 1f)).toInt().coerceIn(1, 127)))
+                    }
+                }
+            } else {
+                val t = if (inst >= 2) st.synTracks[inst - 2] else null
+                var s = 0
+                while (s < steps) {
+                    val (p, v) = patAt(s) ?: run { s++; null } ?: continue
+                    val L = p.len.coerceIn(1, InstState.MAX)
+                    val k = s % L
+                    val gate = p.bools[0]
+                    val tie = p.bools.getOrNull(if (inst == 0) 3 else 1)
+                    val prevSame = s > 0 && patAt(s - 1)?.second == v
+                    if (!gate[k] || (tie != null && tie[k] && prevSame && gate[Math.floorMod(k - 1, L)])) { s++; continue }
+                    var n = 1
+                    while (s + n < steps && patAt(s + n)?.second == v && gate[(k + n) % L] && tie != null && tie[(k + n) % L]) n++
+                    val semi = p.ints[0][k]
+                    val vel = (110 * (p.floats.getOrNull(0)?.get(k) ?: 1f)).toInt().coerceIn(1, 127)
+                    if (t == null) {
+                        notes.add(MidiFile.Note(s / 4.0, n / 4.0 - 0.02, 36 + 12 * st.acidOct + st.acidTune + semi, vel))
+                    } else {
+                        val chd = p.ints.getOrNull(1)?.get(k) ?: 0
+                        val iv = if (chd > 0) st.synChordIv[(chd - 1).coerceIn(0, st.synChordIv.size - 1)] else st.synChordIv[t.chord.coerceIn(0, st.synChordIv.size - 1)]
+                        for (o in iv) notes.add(MidiFile.Note(s / 4.0, n / 4.0 - 0.02, 60 + 12 * t.oct + semi + o, vel))
+                    }
+                    s += n
+                }
+            }
+            if (notes.isNotEmpty()) tracks.add(MidiFile.Track(InstState.instNames[inst], when (inst) { 0 -> 0; 1 -> 9; else -> inst - 1 }, notes))
+        }
+        if (tracks.isEmpty()) { toast("Keine Instrument-Noten im Song"); return }
+        try {
+            val dir = android.provider.DocumentsContract.buildDocumentUriUsingTree(tree, android.provider.DocumentsContract.getTreeDocumentId(tree))
+            val doc = android.provider.DocumentsContract.createDocument(contentResolver, dir, "audio/midi", "MarvPAD_${stamp()}.mid")
+                ?: throw IllegalStateException("Datei nicht anlegbar")
+            contentResolver.openOutputStream(doc)?.use { it.write(MidiFile.exportMulti(tracks, bpm, "Marv PAD Song")) }
+            hint("🎼 MIDI gespeichert: ${tracks.size} Spuren, $bars Takte (Arpeggios als Akkorde, Pads nicht enthalten)")
+        } catch (e: Exception) {
+            toast("MIDI-Export fehlgeschlagen: ${e.message ?: e}")
+        }
     }
 
     // ================================================================ Sidechain
@@ -4343,6 +4515,12 @@ class MainActivity : Activity() {
             if (uris.isNotEmpty()) importLibraryUris(uris)
             return
         }
+        if (requestCode == REQ_EXPORT_DIR) {
+            val tree = data?.data
+            if (resultCode != RESULT_OK || tree == null) return
+            if (exportKind == 2) writeSongMidi(tree) else startBounce(tree, exportKind == 1)
+            return
+        }
         if (requestCode == REQ_COL_FILES || requestCode == REQ_COL_TREE) {
             if (resultCode != RESULT_OK || data == null) return
             if (requestCode == REQ_COL_TREE) {
@@ -4725,5 +4903,6 @@ class MainActivity : Activity() {
         private const val REQ_COL_TREE = 22
         private const val REQ_COL_FILES = 23
         private const val REQ_BT = 24
+        private const val REQ_EXPORT_DIR = 25
     }
 }

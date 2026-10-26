@@ -2260,6 +2260,7 @@ object Engine {
         val capBuf = FloatArray(block)
         val instTmp = FloatArray(block)
         val scTmp = FloatArray(block)
+        val stemBufs = Array(StemRecorder.COUNT) { FloatArray(block) }
         val scEnv = FloatArray(block) { 1f }
         val zeroBuf = FloatArray(block)
         val chainNow = BooleanArray(PADS)
@@ -2290,6 +2291,8 @@ object Engine {
             runSequencer(w, block)
             runRepeat(w, block)
             val scNow = scOn
+            val stemNow = StemRecorder.recording
+            if (stemNow) for (b in stemBufs) java.util.Arrays.fill(b, 0f)
             if (scNow) scEnvelope(scEnv, w, block)
             val mlen = masterLen
             val transport = seqPlaying
@@ -2325,7 +2328,7 @@ object Engine {
             captureInst = cim
             for (p in 0 until PADS) {
                 chainFx[p] = padChainActive(p)
-                chainNow[p] = chainFx[p] || (cm shr p) and 1 != 0 || xfGain(p) != 1f || xfCur[p] != 1f || (scNow && scPads)
+                chainNow[p] = chainFx[p] || (cm shr p) and 1 != 0 || xfGain(p) != 1f || xfCur[p] != 1f || (scNow && scPads) || stemNow
                 if (chainNow[p]) java.util.Arrays.fill(padBufs[p], 0f)
             }
             for (p in 0 until PADS) {
@@ -2505,6 +2508,7 @@ object Engine {
                 }
                 val dst = if (toFx(p)) bus else out
                 for (i in 0 until block) dst[i] += pb[i]
+                if (stemNow && audible(p)) { val sb = stemBufs[5]; for (i in 0 until block) sb[i] += pb[i] }
                 if (capOn && (captureMask shr p) and 1 != 0) for (i in 0 until block) capBuf[i] += pb[i]
             }
 
@@ -2524,13 +2528,20 @@ object Engine {
                 if (cap) java.util.Arrays.fill(instTmp, 0f)
                 // Sidechain: Spur getrennt rendern und im Takt der Kick wegducken
                 val duck = scNow && ((kk == 0 && scAcid) || (kk >= 2 && scSyn[kk - 2]))
-                val rt = if (duck) scTmp.also { java.util.Arrays.fill(it, 0f) } else tgt
+                val rt = if (duck || stemNow) scTmp.also { java.util.Arrays.fill(it, 0f) } else tgt
                 when (kk) {
                     0 -> acid?.render(rt, block, w)
                     1 -> drum?.render(rt, block)
                     else -> synths?.getOrNull(kk - 2)?.render(rt, block, w)
                 }
-                if (duck) for (i in 0 until block) tgt[i] += scTmp[i] * scEnv[i]
+                if (duck || stemNow) {
+                    val sb = if (stemNow && !soloed) stemBufs[kk] else null
+                    for (i in 0 until block) {
+                        val v = if (duck) scTmp[i] * scEnv[i] else scTmp[i]
+                        tgt[i] += v
+                        if (sb != null) sb[i] += v
+                    }
+                }
                 if (cap) for (i in 0 until block) { dst[i] += instTmp[i]; capBuf[i] += instTmp[i] }
             }
             writePadRing(if (capOn || ci != 0) capBuf else zeroBuf, w, block)
@@ -2609,6 +2620,7 @@ object Engine {
 
             // Set-Aufnahme: Master (Stereo) ohne Metronom und ohne Vorhör-Kanal
             if (SetRecorder.recording) SetRecorder.push(recSt, block)
+            if (stemNow) StemRecorder.push(stemBufs, block)
             val splitNow = (djOn && Dj.splitCue) || quadOn
             if (splitNow) java.util.Arrays.fill(mono, 0f)
             val clickTo = if (splitNow) mono else out

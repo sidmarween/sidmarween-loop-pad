@@ -67,6 +67,55 @@ object MidiFile {
         return out.toByteArray()
     }
 
+    class Track(val name: String, val channel: Int, val notes: List<Note>)
+
+    /** Mehrspurige MIDI-Datei (Format 1): Tempo-Spur + eine Spur je Instrument. */
+    fun exportMulti(tracks: List<Track>, bpm: Float, title: String): ByteArray {
+        fun chunk(body: ByteArray): ByteArray {
+            val o = ByteArrayOutputStream()
+            o.write("MTrk".toByteArray(Charsets.US_ASCII))
+            val l = body.size
+            o.write(byteArrayOf((l shr 24).toByte(), (l shr 16).toByte(), (l shr 8).toByte(), l.toByte()))
+            o.write(body)
+            return o.toByteArray()
+        }
+        fun meta(o: ByteArrayOutputStream, type: Int, data: ByteArray) { varLen(o, 0); o.write(0xFF); o.write(type); varLen(o, data.size); o.write(data) }
+        val out = ByteArrayOutputStream()
+        out.write("MThd".toByteArray(Charsets.US_ASCII))
+        val n = tracks.size + 1
+        out.write(byteArrayOf(0, 0, 0, 6, 0, 1, (n shr 8).toByte(), n.toByte(), (PPQ shr 8).toByte(), PPQ.toByte()))
+        // Tempo-Spur
+        val t0 = ByteArrayOutputStream()
+        meta(t0, 0x03, title.toByteArray(Charsets.UTF_8).take(100).toByteArray())
+        val us = (60_000_000.0 / (if (bpm > 0f) bpm else 120f)).roundToInt()
+        meta(t0, 0x51, byteArrayOf((us shr 16).toByte(), (us shr 8).toByte(), us.toByte()))
+        meta(t0, 0x58, byteArrayOf(4, 2, 24, 8))
+        varLen(t0, 0); t0.write(byteArrayOf(0xFF.toByte(), 0x2F, 0x00))
+        out.write(chunk(t0.toByteArray()))
+        for (tr in tracks) {
+            data class Ev(val tick: Int, val on: Boolean, val pitch: Int, val vel: Int)
+            val evs = ArrayList<Ev>()
+            for (nt in tr.notes) {
+                val pitch = nt.pitch.coerceIn(0, 127)
+                val a = (nt.beat * PPQ).roundToInt()
+                val b = max(a + 1, ((nt.beat + nt.len) * PPQ).roundToInt())
+                evs.add(Ev(a, true, pitch, nt.vel.coerceIn(1, 127)))
+                evs.add(Ev(b, false, pitch, 0))
+            }
+            evs.sortWith(compareBy({ it.tick }, { if (it.on) 1 else 0 }))
+            val t = ByteArrayOutputStream()
+            meta(t, 0x03, tr.name.toByteArray(Charsets.UTF_8).take(100).toByteArray())
+            var last = 0
+            for (e in evs) {
+                varLen(t, e.tick - last); last = e.tick
+                t.write((if (e.on) 0x90 else 0x80) or (tr.channel and 15)); t.write(e.pitch); t.write(if (e.on) e.vel else 64)
+            }
+            varLen(t, 0); t.write(byteArrayOf(0xFF.toByte(), 0x2F, 0x00))
+            out.write(chunk(t.toByteArray()))
+        }
+        return out.toByteArray()
+    }
+
     class Parsed(val notes: List<Note>, val bpm: Float)
 
     /** Liest alle Noten aller Spuren (Positionen in Vierteln). */
