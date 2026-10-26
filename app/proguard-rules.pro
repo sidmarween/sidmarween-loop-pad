@@ -4,3 +4,6 @@
 -keep,allowoptimization class de.marween.looppad.** { *; }
 -keepattributes SourceFile,LineNumberTable,*Annotation*,Signature,InnerClasses,EnclosingMethod
 -dontwarn org.jetbrains.annotations.**
+
+# ONNX Runtime (JNI)
+-keep class ai.onnxruntime.** { *; }

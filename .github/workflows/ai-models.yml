@@ -16,6 +16,9 @@ permissions:
 jobs:
   models:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -32,15 +35,23 @@ jobs:
       - name: Python-Prüfung
         run: |
           pip install -q onnxruntime==1.20.1 numpy==1.26.4 onnx==1.17.0
-          python tools/ai/check.py models
+          python tools/ai/check.py models 2>&1 | tee -a ci-log.txt; test ${PIPESTATUS[0]} -eq 0
       - name: Kotlin-Prüfung (gleiche Rechnung wie in der App)
         if: hashFiles('tools/ai/KtTest.kt') != ''
         run: |
           curl -fsSL -o ort.jar https://repo1.maven.org/maven2/com/microsoft/onnxruntime/onnxruntime/1.20.0/onnxruntime-1.20.0.jar
           curl -fsSL -o kotlinc.zip https://github.com/JetBrains/kotlin/releases/download/v2.0.21/kotlin-compiler-2.0.21.zip
           unzip -q kotlinc.zip
-          ./kotlinc/bin/kotlinc -nowarn -cp ort.jar app/src/main/java/de/marween/looppad/SpleeterCore.kt tools/ai/KtTest.kt -include-runtime -d kt.jar
-          java -cp kt.jar:ort.jar KtTestKt models ref.bin
+          ./kotlinc/bin/kotlinc -nowarn -cp ort.jar app/src/main/java/de/marween/looppad/SpleeterCore.kt tools/ai/KtTest.kt -include-runtime -d kt.jar 2>&1 | tee -a ci-log.txt; test ${PIPESTATUS[0]} -eq 0
+          java -cp kt.jar:ort.jar KtTestKt models ref.bin 2>&1 | tee -a ci-log.txt; test ${PIPESTATUS[0]} -eq 0
+      - name: Protokoll ablegen
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          touch ci-log.txt
+          gh release view ai-ci-log >/dev/null 2>&1 || gh release create ai-ci-log --title "KI-Prüfprotokoll" --notes "Automatisches Protokoll der KI-Modell-Prüfung" --prerelease
+          gh release upload ai-ci-log ci-log.txt --clobber
       - name: Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

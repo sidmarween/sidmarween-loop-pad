@@ -187,6 +187,9 @@ object Dj {
         @Volatile var stemMask: DeckStems.Mask? = null
         @Volatile var stemProg = -1f
         @Volatile var stemGen = 0
+        /** KI-Trennung: Fortschritt (-1 = läuft nicht) und Generation (neuer Track bricht ab). */
+        @Volatile var aiProg = -1f
+        @Volatile var aiGen = 0
         val stemGain = floatArrayOf(1f, 1f, 1f, 1f)
         internal val stemLive = DeckStems.Live()
 
@@ -1219,15 +1222,24 @@ object Dj {
         d.stemMask = null
         d.stemGen++
         d.stemProg = -1f
+        d.aiGen++
+        d.aiProg = -1f
         for (s in 0..3) d.stemGain[s] = 1f
         d.data = t.data
         analyzePhrase(d)
         detectKeyAsync(d)
-        if (d === decks[0] || d === decks[1]) stemsAsync(d)
+        if (d === decks[0] || d === decks[1]) {
+            stemsAsync(d)
+            onDeckLoaded?.invoke(d)
+        }
     }
+
+    /** Neuer Track im Deck (z. B. für die KI-Trennung). */
+    @Volatile var onDeckLoaded: ((Deck) -> Unit)? = null
 
     /** Stem-Karte im Hintergrund berechnen (beim Laden automatisch). */
     fun stemsAsync(d: Deck) {
+        if (d.stemMask?.ai == true) return
         val gen = ++d.stemGen
         val data = d.data ?: return
         val ch = d.ch
@@ -1238,7 +1250,7 @@ object Dj {
         Thread {
             try {
                 val m = DeckStems.analyze(data, ch, len, rate, { gen != d.stemGen }) { p -> if (gen == d.stemGen) d.stemProg = p }
-                if (gen == d.stemGen && m != null) {
+                if (gen == d.stemGen && m != null && d.stemMask?.ai != true) {
                     d.stemMask = m
                     d.stemProg = -1f
                 }

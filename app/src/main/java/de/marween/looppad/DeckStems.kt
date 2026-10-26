@@ -41,9 +41,14 @@ object DeckStems {
     private const val CHUNK = 128
 
     /** Stem-Karte: [frames] × [BANDS] × 3 Bytes (Drums, Bass, Vocals; 0..255 = Anteil). Melodie = Rest. */
-    class Mask(val frames: Int, val hop: Double, val data: ByteArray) {
+    /**
+     * [nb] Bänder je Rahmen; [bandHz] > 0 = lineare Bänder dieser Breite (KI-Karte, letztes Band = alles darüber),
+     * sonst die log. Bänder von [bandOf]. Rahmen-Index = Quellposition / [hop] + [off]. [ai] = KI-Trennung.
+     */
+    class Mask(val frames: Int, val hop: Double, val data: ByteArray, val nb: Int = BANDS, val bandHz: Double = 0.0, val off: Double = 0.0, val ai: Boolean = false) {
         /** Nach dem Warpen (Track gedehnt um [r]). */
-        fun scaled(r: Double) = Mask(frames, hop * r, data)
+        fun scaled(r: Double) = Mask(frames, hop * r, data, nb, bandHz, off, ai)
+        fun band(f: Double): Int = if (bandHz > 0.0) min(nb - 1, (f / bandHz).toInt()) else bandOf(f)
     }
 
     /** Frequenz → Band (log. 40 Hz … 18 kHz, darunter Band 0). */
@@ -285,14 +290,14 @@ object DeckStems {
             } else {
                 // Karte an der Quellposition der Rahmen-Mitte
                 val pc = inPos[LN / 2]
-                val fi = (pc / mask.hop + 0.5).toInt().coerceIn(0, mask.frames - 1)
-                val base = fi * BANDS * 3
+                val fi = (pc / mask.hop + mask.off + 0.5).toInt().coerceIn(0, mask.frames - 1)
+                val base = fi * mask.nb * 3
                 val md = mask.data
                 val binHz = sr.toDouble() / LN / max(0.25, pf)
                 var lastBand = -1
                 var gb = 1f
                 for (k in 0..LN / 2) {
-                    val b = bandOf(k * binHz)
+                    val b = mask.band(k * binHz)
                     if (b != lastBand) {
                         lastBand = b
                         val o = base + b * 3

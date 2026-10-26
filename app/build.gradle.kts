@@ -15,6 +15,8 @@ android {
         targetSdk = 35
         versionCode = buildNumber
         versionName = "1.0.$buildNumber"
+        // nur Handy-Prozessoren (KI-Bibliothek sonst unnötig groß)
+        ndk { abiFilters += listOf("arm64-v8a", "armeabi-v7a") }
     }
 
     signingConfigs {
@@ -52,4 +54,9 @@ android {
         checkReleaseBuilds = false
         abortOnError = false
     }
+}
+
+dependencies {
+    // KI-Stem-Trennung (Spleeter als ONNX)
+    implementation("com.microsoft.onnxruntime:onnxruntime-android:1.20.0")
 }
