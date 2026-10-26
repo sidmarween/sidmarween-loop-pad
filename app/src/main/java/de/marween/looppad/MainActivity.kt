@@ -157,6 +157,7 @@ class MainActivity : Activity() {
         pads.onDrumKit = { showDrumKits() }
         pads.onTimingCalib = { showTimingCalib() }
         pads.padGrid = prefs.getInt("padGrid", 0)
+        loadSidechain()
         pads.seqFold = prefs.getBoolean("seqFold", false)
         pads.onLayoutPrefs = { prefs.edit().putInt("padGrid", pads.padGrid).putBoolean("seqFold", pads.seqFold).apply() }
         pads.onDrumClear = { p ->
@@ -173,6 +174,7 @@ class MainActivity : Activity() {
         pads.onInstPresets = { k -> showInstPresets(k) }
         pads.onInstScale = { showScaleMenu() }
         pads.onInstChords = { showChordProgression() }
+        pads.onSidechain = { showSidechain() }
         pads.onLaunchQuantChanged = {
             prefs.edit().putInt("launchIdx", Engine.launchIdx).apply()
             hint(if (Engine.LAUNCH_Q[Engine.launchIdx] <= 0f) "Start-Raster SOFORT: Loops starten/stoppen beim Antippen"
@@ -2312,6 +2314,7 @@ class MainActivity : Activity() {
             }) else emptyList()) + listOf(
             "💾 Projekt & Dateien" to { showMenuGroup(0) },
             "💿 Musik-Sammlung: Ordner laden → automatisch katalogisiert & analysiert" to { showMusicLibrary() },
+            ((if (Engine.scOn) "〽 Sidechain-Pumpen: AN" else "〽 Sidechain-Pumpen (Kick drückt Bass & Flächen)")) to { showSidechain() },
             "🎙 Aufnahme & Wiedergabe" to { showMenuGroup(1) },
             "🎨 Aussehen: Designs, Schriften, Ansicht" to { showMenuGroup(2) },
             "🔌 Audio, Latenz & MIDI" to { showMenuGroup(3) },
@@ -3030,6 +3033,74 @@ class MainActivity : Activity() {
         }
         @Suppress("DEPRECATION")
         super.onBackPressed()
+    }
+
+    // ================================================================ Sidechain
+
+    private fun loadSidechain() {
+        val p = getSharedPreferences("marvpad", MODE_PRIVATE)
+        Engine.scOn = p.getBoolean("scOn", false)
+        Engine.scSource = p.getInt("scSource", 0)
+        Engine.scDepth = p.getFloat("scDepth", 0.7f)
+        Engine.scRelease = p.getFloat("scRelease", 0.4f)
+        Engine.scAcid = p.getBoolean("scAcid", true)
+        Engine.scPads = p.getBoolean("scPads", false)
+        for (t in Engine.scSyn.indices) Engine.scSyn[t] = p.getBoolean("scSyn$t", true)
+    }
+
+    private fun saveSidechain() {
+        val e = getSharedPreferences("marvpad", MODE_PRIVATE).edit()
+        e.putBoolean("scOn", Engine.scOn).putInt("scSource", Engine.scSource).putFloat("scDepth", Engine.scDepth)
+            .putFloat("scRelease", Engine.scRelease).putBoolean("scAcid", Engine.scAcid).putBoolean("scPads", Engine.scPads)
+        for (t in Engine.scSyn.indices) e.putBoolean("scSyn$t", Engine.scSyn[t])
+        e.apply()
+    }
+
+    private fun showSidechain() {
+        val d = resources.displayMetrics.density
+        fun px(v: Float) = (v * d).toInt()
+        val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(px(20f), px(8f), px(20f), px(8f)) }
+        fun label(t: String) = TextView(this).apply { text = t; textSize = 13f; setTextColor(0xFFCCCCCC.toInt()); setPadding(0, px(12f), 0, px(2f)) }
+        fun check(t: String, on: Boolean, set: (Boolean) -> Unit) = android.widget.CheckBox(this).apply {
+            text = t; isChecked = on; setTextColor(0xFFEEEEEE.toInt())
+            setOnCheckedChangeListener { _, c -> set(c); saveSidechain() }
+        }
+        fun bar(v: Float, set: (Float) -> Unit, show: (Float) -> String): View {
+            val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+            val tv = TextView(this).apply { textSize = 13f; setTextColor(0xFFFFFFFF.toInt()); minWidth = px(64f); text = show(v) }
+            val sb = SeekBar(this).apply {
+                max = 100; progress = (v * 100).toInt()
+                setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                    override fun onProgressChanged(b: SeekBar?, p: Int, u: Boolean) { val f = p / 100f; set(f); tv.text = show(f) }
+                    override fun onStartTrackingTouch(b: SeekBar?) {}
+                    override fun onStopTrackingTouch(b: SeekBar?) { saveSidechain() }
+                })
+            }
+            row.addView(sb, LinearLayout.LayoutParams(0, -2, 1f))
+            row.addView(tv)
+            return row
+        }
+        box.addView(check("Sidechain an", Engine.scOn) { Engine.scOn = it })
+        box.addView(label("Auslöser"))
+        val rg = android.widget.RadioGroup(this)
+        val r0 = android.widget.RadioButton(this).apply { id = View.generateViewId(); text = "Bass Drum der DRUM 909"; setTextColor(0xFFEEEEEE.toInt()) }
+        val r1 = android.widget.RadioButton(this).apply { id = View.generateViewId(); text = "Jede Viertel (auch ohne Drums – klassisches House-Pumpen)"; setTextColor(0xFFEEEEEE.toInt()) }
+        rg.addView(r0); rg.addView(r1)
+        rg.check(if (Engine.scSource == 0) r0.id else r1.id)
+        rg.setOnCheckedChangeListener { _, id -> Engine.scSource = if (id == r0.id) 0 else 1; saveSidechain() }
+        box.addView(rg)
+        box.addView(label("Stärke"))
+        box.addView(bar(Engine.scDepth, { Engine.scDepth = it }) { "${(it * 100).toInt()} %" })
+        box.addView(label("Zurück auf voll nach"))
+        box.addView(bar(Engine.scRelease, { Engine.scRelease = it }) { "${(60 + it * 440).toInt()} ms" })
+        box.addView(label("Wird weggedrückt"))
+        box.addView(check("ACID-Bass", Engine.scAcid) { Engine.scAcid = it })
+        for (t in Engine.scSyn.indices) box.addView(check("SYNTH ${t + 1}", Engine.scSyn[t]) { Engine.scSyn[t] = it })
+        box.addView(check("Pads (Loops & Samples)", Engine.scPads) { Engine.scPads = it })
+        ui().setTitle("〽 Sidechain-Pumpen")
+            .setView(android.widget.ScrollView(this).apply { addView(box) })
+            .setPositiveButton("Fertig", null)
+            .show()
     }
 
     // ================================================================ Tonleiter (Piano-Roll)

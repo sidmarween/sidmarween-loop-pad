@@ -182,6 +182,7 @@ object Engine {
 
     private fun instStep(n: Long, base: Long, w: Long, stepLen: Long) {
         val st = InstState
+        if (scOn && scSource == 1 && Math.floorMod(n, 4L) == 0L) scKick(base)
         var f = base + grooveOff(0, n, stepLen)
         val a = acid
         val al = st.acidLen.coerceIn(1, InstState.MAX)
@@ -226,6 +227,7 @@ object Engine {
                 val x = st.drumSteps[v][ds]
                 if (x > 0 && !st.drumMute[v]) {
                     val fd = base + grooveOff(1, n, stepLen, v)
+                    if (v == 0 && scSource == 0) scKick(fd)
                     d.trigger(v, (fd - w).toInt(), x == 2, grooveVel(1, n, st.drumVel[v][ds], v))
                 }
             }
@@ -325,6 +327,43 @@ object Engine {
             if (ahead) return
         }
         drum?.trigger(v, 0, accent)
+        if (v == 0 && scSource == 0) scKick(written)
+    }
+
+    // ---------------------------------------------------------------- Sidechain (Pumpen im Takt der Kick)
+    @Volatile var scOn = false
+    /** 0 = Bass Drum der DRUM 909, 1 = jede Viertel (auch ohne Drums). */
+    @Volatile var scSource = 0
+    @Volatile var scDepth = 0.7f
+    /** 0..1 → 60 … 500 ms bis wieder voll. */
+    @Volatile var scRelease = 0.4f
+    @Volatile var scAcid = true
+    val scSyn = BooleanArray(InstState.SYN_TRACKS) { true }
+    @Volatile var scPads = false
+    private val scKicks = LongArray(8) { Long.MIN_VALUE }
+    private var scKickW = 0
+
+    private fun scKick(frame: Long) {
+        synchronized(scKicks) { scKicks[scKickW] = frame; scKickW = (scKickW + 1) % scKicks.size }
+    }
+
+    /** Verstärkung je Sample: bei der Kick sofort leiser, dann weich zurück auf voll. */
+    private fun scEnvelope(env: FloatArray, w: Long, block: Int) {
+        val rel = (0.06 + scRelease * 0.44) * sampleRate
+        val att = sampleRate * 0.002
+        val depth = scDepth.coerceIn(0f, 1f)
+        val ks = synchronized(scKicks) { scKicks.copyOf() }
+        for (i in 0 until block) {
+            val fr = w + i
+            var last = Long.MIN_VALUE
+            for (k in ks) if (k <= fr && k > last) last = k
+            if (last == Long.MIN_VALUE) { env[i] = 1f; continue }
+            val t = (fr - last).toDouble()
+            if (t >= rel) { env[i] = 1f; continue }
+            val x = t / rel
+            val down = min(1.0, t / att)
+            env[i] = (1.0 - depth * down * (1 - x) * (1 - x)).toFloat()
+        }
     }
 
     /** Shuffle/Swing 0..1: verschiebt jede zweite 1/16 um bis zu eine halbe 1/16 nach hinten (50 % … 75 %). */
@@ -2220,6 +2259,8 @@ object Engine {
         val padBufs = Array(PADS) { FloatArray(block) }
         val capBuf = FloatArray(block)
         val instTmp = FloatArray(block)
+        val scTmp = FloatArray(block)
+        val scEnv = FloatArray(block) { 1f }
         val zeroBuf = FloatArray(block)
         val chainNow = BooleanArray(PADS)
         val chainFx = BooleanArray(PADS)
@@ -2248,6 +2289,8 @@ object Engine {
             autoTick(w)
             runSequencer(w, block)
             runRepeat(w, block)
+            val scNow = scOn
+            if (scNow) scEnvelope(scEnv, w, block)
             val mlen = masterLen
             val transport = seqPlaying
             // Pad-/Instrument-Eingang: der Mitschnitt gehört genau EINEM Ziel-Pad – sonst landen
@@ -2282,7 +2325,7 @@ object Engine {
             captureInst = cim
             for (p in 0 until PADS) {
                 chainFx[p] = padChainActive(p)
-                chainNow[p] = chainFx[p] || (cm shr p) and 1 != 0 || xfGain(p) != 1f || xfCur[p] != 1f
+                chainNow[p] = chainFx[p] || (cm shr p) and 1 != 0 || xfGain(p) != 1f || xfCur[p] != 1f || (scNow && scPads)
                 if (chainNow[p]) java.util.Arrays.fill(padBufs[p], 0f)
             }
             for (p in 0 until PADS) {
@@ -2452,6 +2495,7 @@ object Engine {
                     fx.process(pb, block, w, t, pr[0], pr[1], true, pr[2], pr[3], pr[4], masterLen, masterStart, micP)
                 }
                 // Crossfader: Verstärkung über den Block rampen (kein Knistern beim schnellen Schieben)
+                if (scNow && scPads) for (i in 0 until block) pb[i] *= scEnv[i]
                 val xg = xfGain(p)
                 val x0 = xfCur[p]
                 if (xg != 1f || x0 != 1f) {
@@ -2478,11 +2522,15 @@ object Engine {
                 val cap = (ci shr kind) and 1 != 0
                 val tgt = if (cap) instTmp else dst
                 if (cap) java.util.Arrays.fill(instTmp, 0f)
+                // Sidechain: Spur getrennt rendern und im Takt der Kick wegducken
+                val duck = scNow && ((kk == 0 && scAcid) || (kk >= 2 && scSyn[kk - 2]))
+                val rt = if (duck) scTmp.also { java.util.Arrays.fill(it, 0f) } else tgt
                 when (kk) {
-                    0 -> acid?.render(tgt, block, w)
-                    1 -> drum?.render(tgt, block)
-                    else -> synths?.getOrNull(kk - 2)?.render(tgt, block, w)
+                    0 -> acid?.render(rt, block, w)
+                    1 -> drum?.render(rt, block)
+                    else -> synths?.getOrNull(kk - 2)?.render(rt, block, w)
                 }
+                if (duck) for (i in 0 until block) tgt[i] += scTmp[i] * scEnv[i]
                 if (cap) for (i in 0 until block) { dst[i] += instTmp[i]; capBuf[i] += instTmp[i] }
             }
             writePadRing(if (capOn || ci != 0) capBuf else zeroBuf, w, block)

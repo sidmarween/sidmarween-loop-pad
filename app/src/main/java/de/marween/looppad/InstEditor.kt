@@ -55,6 +55,7 @@ class InstEditor(private val host: View) {
     var onScale: (() -> Unit)? = null
     /** Akkordfolge erzeugen (SYNTH). */
     var onChords: (() -> Unit)? = null
+    var onSidechain: (() -> Unit)? = null
 
     private val d = host.resources.displayMetrics.density
     private fun dp(v: Float) = v * d
@@ -902,6 +903,7 @@ class InstEditor(private val host: View) {
         ) else listOf(
             Toggle({ if (st.drumOn) "● AN" else "○ AUS" }, { st.drumOn }, { st.drumOn = !st.drumOn }),
             Toggle({ "FX-BUS" }, { st.drumFx }, { st.drumFx = !st.drumFx }),
+            Toggle({ "〽 SIDECHAIN" }, { Engine.scOn }, { onSidechain?.invoke() }),
             Toggle({ if (st.drumMute[st.drumSel]) "${st.drumNames[st.drumSel]} STUMM" else "${st.drumNames[st.drumSel]} HÖRBAR" }, { st.drumMute[st.drumSel] }, { st.drumMute[st.drumSel] = !st.drumMute[st.drumSel] }),
             Toggle({ "▦ " + (if (st.drumPreset >= 0) st.presetNames[st.drumPreset] else "PRESET") }, { false }, { Engine.pushPatternUndo("DRUM Preset"); st.drumApplyPreset(st.drumPreset + 1) })
         )
