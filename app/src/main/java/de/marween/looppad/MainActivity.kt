@@ -2904,9 +2904,12 @@ class MainActivity : Activity() {
         items.add(if (Dj.autoGain) String.format(Locale.GERMANY, "🔊 Auto-Gain AN (Ziel %.0f LUFS · A %s · B %s) – antippen = aus", Dj.targetLufs, agTxt(Dj.decks[0]), agTxt(Dj.decks[1])) else "🔈 Auto-Gain AUS – antippen = alle Tracks gleich laut")
         items.add("🎯 Auto-Gain-Ziel ändern (jetzt ${Dj.targetLufs.toInt()} LUFS)")
         items.add(if (Dj.colorWave) "🌈 Wellenform farbig (Bass rot · Mitten grün · Höhen blau) – antippen = Deck-Farbe" else "〰 Wellenform in Deck-Farbe – antippen = farbig nach Frequenzen")
+        val cloudIdx = items.size
+        items.add("☁ Aus Dropbox / Google Drive / OneDrive oder per Link laden")
         ui()
             .setTitle("Deck ${"AB"[k]} laden")
             .setItems(items.toTypedArray()) { _, w0 ->
+                if (w0 == cloudIdx) { showCloudImport(CLOUD_DECK + k); return@setItems }
                 if (w0 == agIdx) {
                     Dj.autoGain = !Dj.autoGain
                     getSharedPreferences("marvpad", MODE_PRIVATE).edit().putBoolean("djAutoGain", Dj.autoGain).apply()
@@ -3999,6 +4002,7 @@ class MainActivity : Activity() {
         colRefresh = { runOnUiThread { refresh() } }
         chip("＋ Ordner") { pickCollectionFolder() }
         chip("＋ Dateien") { pickCollectionFiles() }
+        chip("☁ Cloud / Link") { showCloudImport(CLOUD_COLLECTION) }
         anaBtn = chip("⟳ Analysieren") { if (colBatch) colBatch = false else startBatchAnalysis(); refresh() }
         crateBtn = chip("📁 Alle") {
             val cr = TrackDb.crates()
@@ -4106,6 +4110,129 @@ class MainActivity : Activity() {
                 try { startActivity(Intent.createChooser(i, "Tracklist teilen")) } catch (e: Exception) { toast("Teilen nicht möglich") }
             } else confirm("Verlauf leeren?", "Die Tracks bleiben in der Sammlung.") { TrackDb.clearHistory(); TrackDb.save(this) }
         }.show()
+    }
+
+    // ================================================================ Cloud-Import (Dropbox, Drive, OneDrive, Links)
+
+    private var cloudTarget = CLOUD_COLLECTION
+
+    /** Woher? Cloud-App über die Dateiauswahl oder ein geteilter Link. [target]: Pad, Sammlung oder Deck. */
+    private fun showCloudImport(target: Int) {
+        cloudTarget = target
+        val multi = target == CLOUD_COLLECTION
+        val dest = when {
+            target == CLOUD_COLLECTION -> "in die Sammlung"
+            target >= CLOUD_DECK -> "in Deck ${"AB"[target - CLOUD_DECK]}"
+            else -> "auf Pad ${target + 1}"
+        }
+        ui().setTitle("☁ Online-Speicher → $dest").setItems(arrayOf(
+            "🔗 Geteilten Link einfügen – Dropbox (auch ganze Ordner), Google Drive, OneDrive, MP3-Link",
+            "📲 Aus der Dropbox-/Drive-/OneDrive-App wählen" + if (multi) " (mehrere möglich)" else "",
+            "ℹ So geht's"
+        )) { _, w ->
+            when (w) {
+                0 -> askCloudLink()
+                1 -> {
+                    val i = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+                        addCategory(Intent.CATEGORY_OPENABLE)
+                        type = "audio/*"
+                        putExtra(Intent.EXTRA_ALLOW_MULTIPLE, multi)
+                        putExtra(Intent.EXTRA_LOCAL_ONLY, false)
+                    }
+                    hint("In der Auswahl oben links ☰ antippen und Dropbox / Drive / OneDrive wählen")
+                    try { startActivityForResult(i, REQ_CLOUD_FILES) } catch (e: Exception) { toast("Keine Dateiauswahl gefunden") }
+                }
+                else -> ui().setTitle("☁ Songs aus dem Online-Speicher").setMessage(
+                    "LINK (ohne App):\n" +
+                    "• Dropbox: Datei oder Ordner → Teilen → Link kopieren. Ein ganzer Ordner wird als ZIP geladen und entpackt – alle Songs darin landen in der Sammlung.\n" +
+                    "• Google Drive: Teilen → „Jeder mit dem Link“ → Link kopieren (einzelne Dateien).\n" +
+                    "• OneDrive: Teilen → Link kopieren.\n" +
+                    "• Oder ein direkter Link auf eine MP3/WAV.\n\n" +
+                    "APP:\nIst die Dropbox-, Drive- oder OneDrive-App installiert, erscheint sie in der Dateiauswahl unter ☰. " +
+                    "Dort einfach die Songs antippen.\n\n" +
+                    "Die Songs werden aufs Handy kopiert (Ordner Musik/Cloud der App). So spielen sie auch ohne Internet – wichtig beim Auflegen."
+                ).setPositiveButton("OK", null).show()
+            }
+        }.setNegativeButton("Abbrechen", null).show()
+    }
+
+    private fun askCloudLink() {
+        val cm = getSystemService(CLIPBOARD_SERVICE) as android.content.ClipboardManager
+        val clip = try { cm.primaryClip?.getItemAt(0)?.coerceToText(this)?.toString()?.trim() } catch (e: Exception) { null }
+        val et = EditText(this).apply {
+            hint = "https://www.dropbox.com/…"
+            isSingleLine = true
+            textSize = 14f
+            inputType = android.text.InputType.TYPE_TEXT_VARIATION_URI
+            if (clip != null && (clip.startsWith("http") || clip.contains("dropbox.com") || clip.contains("drive.google") || clip.contains("1drv.ms"))) setText(clip)
+        }
+        val pad = (18 * resources.displayMetrics.density).toInt()
+        val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(pad, pad / 2, pad, 0); addView(et) }
+        ui().setTitle("🔗 Link einfügen").setView(box).setPositiveButton("Laden") { _, _ ->
+            val link = et.text.toString().trim()
+            if (link.length < 8) { toast("Kein Link"); return@setPositiveButton }
+            cloudRun("Lade herunter …") { cancel, prog -> CloudImport.download(this, link, cancel, prog) }
+        }.setNegativeButton("Abbrechen", null).show()
+    }
+
+    /** Läuft im Hintergrund mit Fortschritt und Abbrechen, liefert die Dateien an das Ziel. */
+    private fun cloudRun(title: String, job: (cancel: () -> Boolean, prog: (Float, String) -> Unit) -> List<java.io.File>) {
+        val target = cloudTarget
+        val pad = (18 * resources.displayMetrics.density).toInt()
+        val bar = android.widget.ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply { max = 1000; isIndeterminate = true }
+        val tv = TextView(this).apply { textSize = 12f; setTextColor(Color.rgb(200, 200, 200)); setPadding(0, pad / 3, 0, 0) }
+        val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(pad, pad / 2, pad, 0); addView(bar); addView(tv) }
+        @Volatile var cancelled = false
+        val dlg = ui().setTitle(title).setView(box).setCancelable(false).setNegativeButton("Abbrechen") { _, _ -> cancelled = true }.create()
+        dlg.show()
+        var lastUi = 0L
+        Thread {
+            try {
+                val files = job({ cancelled }) { p, n ->
+                    val now = android.os.SystemClock.uptimeMillis()
+                    if (now - lastUi < 120 && p < 1f) return@job
+                    lastUi = now
+                    runOnUiThread {
+                        if (p < 0f) bar.isIndeterminate = true else { bar.isIndeterminate = false; bar.progress = (p * 1000).toInt() }
+                        tv.text = n + if (p >= 0f) "  ·  ${(p * 100).toInt()} %" else ""
+                    }
+                }
+                runOnUiThread {
+                    dlg.dismiss()
+                    cloudDeliver(target, files)
+                }
+            } catch (e: CloudImport.Cancelled) {
+                runOnUiThread { dlg.dismiss(); hint("Abgebrochen") }
+            } catch (e: Throwable) {
+                runOnUiThread {
+                    dlg.dismiss()
+                    val m = when (e) {
+                        is java.net.UnknownHostException -> "Keine Internetverbindung"
+                        is java.net.SocketTimeoutException -> "Zeitüberschreitung – Verbindung zu langsam?"
+                        else -> e.message ?: e.toString()
+                    }
+                    ui().setTitle("☁ Import fehlgeschlagen").setMessage(m).setPositiveButton("OK", null).show()
+                }
+            }
+        }.start()
+    }
+
+    private fun cloudDeliver(target: Int, files: List<java.io.File>) {
+        if (files.isEmpty()) return
+        val uris = files.map { Uri.fromFile(it) to it.nameWithoutExtension }
+        when {
+            target == CLOUD_COLLECTION -> addToCollection(uris)
+            target >= CLOUD_DECK -> {
+                djDeck = target - CLOUD_DECK
+                if (files.size > 1) addToCollection(uris.drop(1))
+                onActivityResult(REQ_DECK, RESULT_OK, Intent().setData(uris[0].first))
+            }
+            else -> {
+                menuPad = target
+                if (files.size > 1) { addToCollection(uris.drop(1)); hint("Erster Song aufs Pad, die übrigen ${files.size - 1} in die Sammlung") }
+                onActivityResult(REQ_IMPORT, RESULT_OK, Intent().setData(uris[0].first))
+            }
+        }
     }
 
     private fun pickCollectionFolder() {
@@ -4873,6 +5000,16 @@ class MainActivity : Activity() {
             if (exportKind == 2) writeSongMidi(tree) else startBounce(tree, exportKind == 1)
             return
         }
+        if (requestCode == REQ_CLOUD_FILES) {
+            if (resultCode != RESULT_OK || data == null) return
+            val list = ArrayList<Uri>()
+            val clip = data.clipData
+            if (clip != null) for (q in 0 until clip.itemCount) clip.getItemAt(q).uri?.let { list.add(it) } else data.data?.let { list.add(it) }
+            if (list.isNotEmpty()) cloudRun("Kopiere aufs Handy …") { cancel, prog ->
+                list.mapIndexed { i, u -> CloudImport.copyFromUri(this, u, cancel) { p, n -> prog((i + (if (p < 0) 0.5f else p)) / list.size, if (list.size > 1) "${i + 1}/${list.size}: $n" else n) } }
+            }
+            return
+        }
         if (requestCode == REQ_COL_FILES || requestCode == REQ_COL_TREE) {
             if (resultCode != RESULT_OK || data == null) return
             if (requestCode == REQ_COL_TREE) {
@@ -5031,7 +5168,7 @@ class MainActivity : Activity() {
 
     private var lastHint: Toast? = null
 
-    private fun displayName(uri: Uri): String? = try {
+    private fun displayName(uri: Uri): String? = if (uri.scheme == "file") uri.lastPathSegment else try {
         contentResolver.query(uri, arrayOf(android.provider.OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c ->
             if (c.moveToFirst()) c.getString(0) else null
         }
@@ -5089,12 +5226,14 @@ class MainActivity : Activity() {
                 "📂 Datei (WAV / MP3) – Tempo wird erkannt und gewarpt",
                 "📚 Bibliothek & eigene Aufnahmen",
                 "💿 Aus der Musik-Sammlung (schon analysiert – lädt schneller)",
+                "☁ Aus Dropbox / Google Drive / OneDrive oder per Link",
                 if (shot) "Modus: ⚡ ONE SHOT  →  auf ∞ LOOP" else "Modus: ∞ LOOP  →  auf ⚡ ONE SHOT"
             )) { _, w ->
                 when (w) {
                     0 -> pickImport()
                     1 -> showLibrary(p)
                     2 -> pickCollectionForPad(p)
+                    3 -> showCloudImport(p)
                     else -> {
                         Engine.setPadMode(p, !shot)
                         showImportMenu(p)
@@ -5257,5 +5396,9 @@ class MainActivity : Activity() {
         private const val REQ_BT = 24
         private const val REQ_EXPORT_DIR = 25
         private const val REQ_GHOST_LOOP = 26
+        private const val REQ_CLOUD_FILES = 27
+        /** Ziel eines Cloud-Imports: Pad 0..n, die Sammlung oder ein Deck (CLOUD_DECK + 0/1). */
+        private const val CLOUD_COLLECTION = -1
+        private const val CLOUD_DECK = 1000
     }
 }
