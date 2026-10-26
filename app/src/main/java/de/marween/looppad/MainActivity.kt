@@ -1725,8 +1725,9 @@ class MainActivity : Activity() {
                 val f = sets[i]
                 ui()
                     .setTitle(f.nameWithoutExtension)
-                    .setItems(arrayOf("📤 Exportieren (WAV)", "✎ Umbenennen", "🎧 In Deck A laden", "🗑 Löschen")) { _, a ->
+                    .setItems(arrayOf("📤 Exportieren (WAV)", "✎ Umbenennen", "🎧 In Deck A laden", "🗑 Löschen", "📲 Teilen (WhatsApp, Instagram …)")) { _, a ->
                         when (a) {
+                            4 -> shareWav(f, f.nameWithoutExtension, false)
                             0 -> exportSet(f)
                             1 -> renameSet(f)
                             2 -> {
@@ -2324,6 +2325,7 @@ class MainActivity : Activity() {
             "💾 Projekt & Dateien" to { showMenuGroup(0) },
             "💿 Musik-Sammlung: Ordner laden → automatisch katalogisiert & analysiert" to { showMusicLibrary() },
             "📤 Song exportieren: WAV, Stems, MIDI" to { showSongExport() },
+            "📲 Teilen: Song oder Set an WhatsApp, Instagram & Co." to { showShare() },
             "✂ Slicer: Song-Abschnitt auf 16 Pads zerlegen und neu spielen" to { if (Slicer.data == null) pickSlicerSource() else pads.openSlicer() },
             ((if (Engine.scOn) "〽 Sidechain-Pumpen: AN" else "〽 Sidechain-Pumpen (Kick drückt Bass & Flächen)")) to { showSidechain() },
             "🎙 Aufnahme & Wiedergabe" to { showMenuGroup(1) },
@@ -3047,6 +3049,55 @@ class MainActivity : Activity() {
         super.onBackPressed()
     }
 
+    // ================================================================ Teilen
+
+    private fun showShare() {
+        val sets = SetRecorder.list(this)
+        val items = ArrayList<Pair<String, () -> Unit>>()
+        items.add("🎵 Song einmal durchspielen, aufnehmen und teilen" to {
+            hint("Der Song läuft einmal in Echtzeit durch – danach öffnet sich Teilen")
+            startBounce(null, false, true)
+        })
+        if (sets.isNotEmpty()) items.add("🔴 Letzte Set-Aufnahme teilen (${sets[0].nameWithoutExtension})" to { shareWav(sets[0], sets[0].nameWithoutExtension, false) })
+        if (sets.size > 1) items.add("📂 Andere Set-Aufnahme wählen …" to { showSets() })
+        ui().setTitle("📲 Teilen")
+            .setItems(items.map { it.first }.toTypedArray()) { _, w -> items[w].second() }
+            .setNegativeButton("Abbrechen", null)
+            .show()
+    }
+
+    /** WAV als AAC (.m4a) in Musik/Marv PAD ablegen und das Teilen-Menü öffnen. */
+    private fun shareWav(f: java.io.File, title: String, deleteAfter: Boolean) {
+        val d = resources.displayMetrics.density
+        val pb = android.widget.ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply { max = 1000 }
+        val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding((20 * d).toInt(), (12 * d).toInt(), (20 * d).toInt(), (12 * d).toInt()); addView(pb) }
+        val dlg = ui().setTitle("📲 Wird fürs Teilen vorbereitet …").setView(box).setCancelable(false).show()
+        Thread {
+            try {
+                val safe = title.replace(Regex("[^A-Za-z0-9äöüÄÖÜß ._-]+"), "_")
+                val uri = ShareAudio.toMusic(this, f, safe) { p -> runOnUiThread { pb.progress = (p * 1000).toInt() } }
+                if (deleteAfter) f.delete()
+                runOnUiThread {
+                    try { dlg.dismiss() } catch (ignored: Exception) {}
+                    val send = Intent(Intent.ACTION_SEND).apply {
+                        type = "audio/mp4"
+                        putExtra(Intent.EXTRA_STREAM, uri)
+                        putExtra(Intent.EXTRA_TITLE, safe)
+                        putExtra(Intent.EXTRA_TEXT, "Gemacht mit Marv PAD 🎛")
+                        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    }
+                    startActivity(Intent.createChooser(send, "Teilen: $safe"))
+                    hint("Auch gespeichert unter Musik › Marv PAD")
+                }
+            } catch (e: Throwable) {
+                runOnUiThread {
+                    try { dlg.dismiss() } catch (ignored: Exception) {}
+                    toast("Teilen fehlgeschlagen: ${e.message ?: e}")
+                }
+            }
+        }.start()
+    }
+
     // ================================================================ Slicer
 
     private fun openSlicerFor(p: Int) {
@@ -3107,7 +3158,7 @@ class MainActivity : Activity() {
     }
 
     /** Song einmal in Echtzeit abspielen und dabei Master (und Stems) aufnehmen, danach in den Ordner kopieren. */
-    private fun startBounce(tree: Uri, stems: Boolean) {
+    private fun startBounce(tree: Uri?, stems: Boolean, share: Boolean = false) {
         if (SetRecorder.recording) { toast("Es läuft schon eine Aufnahme"); return }
         val rate = Engine.sampleRate
         val bpm = Engine.currentBpm().let { if (it > 0f) it else 120f }
@@ -3144,6 +3195,11 @@ class MainActivity : Activity() {
             val stemFiles = if (stems) StemRecorder.stop() else emptyList()
             try { dlg.dismiss() } catch (ignored: Exception) {}
             if (cancelled) { master?.delete(); tmp.deleteRecursively(); toast("Export abgebrochen"); return }
+            if (share || tree == null) {
+                tmp.deleteRecursively()
+                if (master != null) shareWav(master, "MarvPAD_Song_" + stamp(), true)
+                return
+            }
             toast("Speichere …")
             Thread {
                 var n = 0
