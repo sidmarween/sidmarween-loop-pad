@@ -403,7 +403,7 @@ object MicTools {
                 }
                 // Verzögerungslinie
                 buf[w] = v
-                val win = (period * 2.5).coerceIn(sr * 0.008, sr * 0.04)
+                val win = grainWin(period, sr)
                 phase += (1.0 - ratio) / win
                 if (phase >= 1.0) phase -= 1.0
                 if (phase < 0.0) phase += 1.0
@@ -454,6 +454,247 @@ object MicTools {
             heardMidi = Double.NaN
             targetMidi = Double.NaN
         }
+    }
+
+    // ---------------------------------------------------------------- Bausteine für Echtzeit (Mischer-Thread)
+
+    /** Laufende Tonhöhen-Erkennung: Samples hineinschieben, alle ~10 ms neue Schätzung ([midi], NaN = stimmlos). */
+    class PitchTracker(private val sr: Int) {
+        private val dec = 2
+        private val hist = FloatArray(1024)
+        private var hw = 0
+        private var acc = 0f
+        private var accN = 0
+        private var since = 0
+        private val every = sr / 100
+        private val yin = Yin(sr / dec, 420, 75.0, 900.0, 0.18f)
+        private val ana = FloatArray(1024)
+        private var hold = 0
+        /** Letzte Tonhöhe (MIDI mit Bruchteil) und Pegel (RMS). */
+        var midi = Double.NaN
+            private set
+        var level = 0f
+            private set
+        /** true, wenn gerade eine neue Schätzung kam. */
+        var fresh = false
+            private set
+
+        fun push(v: Float) {
+            fresh = false
+            acc += v; accN++
+            if (accN == dec) { hist[hw] = acc / dec; hw = (hw + 1) and 1023; acc = 0f; accN = 0 }
+            if (++since >= every) { since = 0; detect(); fresh = true }
+        }
+
+        private fun detect() {
+            val len = 420 + yin.maxLag + 2
+            var e = 0f
+            for (k in 0 until len) { val q = hist[(hw - len + k) and 1023]; ana[k] = q; e += q * q }
+            level = sqrt(e / len)
+            if (level < 0.003f) { miss(); return }
+            val hz = yin.pitch(ana, 0, 420)
+            if (hz <= 0 || yin.clarity < 0.75f) { miss(); return }
+            hold = 6
+            midi = midiOf(hz)
+        }
+
+        private fun miss() { if (hold > 0) hold-- else midi = Double.NaN }
+    }
+
+    /** Tonhöhen-Verschieber (zwei überblendete Lese-Köpfe auf einer Verzögerungslinie). */
+    class Shifter(private val sr: Int) {
+        private val buf = FloatArray(8192)
+        private var w = 0
+        private var phase = 0.0
+        var ratio = 1.0
+        var period = sr / 200.0
+
+        fun next(v: Float): Float {
+            buf[w] = v
+            val win = grainWin(period, sr)
+            phase += (1.0 - ratio) / win
+            if (phase >= 1.0) phase -= 1.0
+            if (phase < 0.0) phase += 1.0
+            val p2 = (phase + 0.5) % 1.0
+            val g1 = sin(PI * phase).let { it * it }
+            val g2 = sin(PI * p2).let { it * it }
+            val y = read(phase * win + 2) * g1 + read(p2 * win + 2) * g2
+            w = (w + 1) and 8191
+            return y.toFloat()
+        }
+
+        private fun read(d: Double): Double {
+            val p = w - d
+            val i0 = Math.floor(p).toInt()
+            val f = p - i0
+            val a = buf[i0 and 8191]
+            val b = buf[(i0 + 1) and 8191]
+            return a + (b - a) * f
+        }
+    }
+
+    /**
+     * Fensterlänge der Lese-Köpfe: ein gerades Vielfaches der Periode, damit die beiden um ein halbes Fenster
+     * versetzten Köpfe phasengleich lesen (sonst löschen sie sich teilweise aus). Etwa 8–40 ms.
+     */
+    fun grainWin(period: Double, sr: Int): Double {
+        val p = period.coerceIn(sr / 1200.0, sr / 60.0)
+        val m = max(1.0, Math.ceil(sr * 0.008 / (2 * p)))
+        return min(2 * p * m, sr * 0.04).coerceAtLeast(sr * 0.008)
+    }
+
+    /** Nächster Ton der Tonleiter ([allowed]) zu [m]. */
+    fun nearestAllowed(m: Double, allowed: (Int) -> Boolean): Int {
+        val base = m.roundToInt()
+        var best = base
+        var bd = 99.0
+        for (c in base - 6..base + 6) if (allowed(Math.floorMod(c, 12)) && abs(c - m) < bd) { bd = abs(c - m); best = c }
+        return best
+    }
+
+    /** [steps] Tonleiter-Stufen von [note] aus (+ hoch, − runter); chromatisch = feste Intervalle. */
+    fun scaleStep(note: Int, steps: Int, allowed: (Int) -> Boolean): Int {
+        val chromatic = (0..11).all(allowed)
+        if (chromatic) return note + when (steps) { 2 -> 4; -2 -> -3; 4 -> 7; -4 -> -5; 7 -> 12; -7 -> -12; else -> steps }
+        var n = note
+        var left = abs(steps)
+        val dir = if (steps > 0) 1 else -1
+        var guard = 0
+        while (left > 0 && guard++ < 40) { n += dir; if (allowed(Math.floorMod(n, 12))) left-- }
+        return n
+    }
+
+    /**
+     * Harmonizer: bis zu 3 Begleitstimmen zur eigenen Stimme, leitereigen (Terz, Quinte, Sexte …).
+     * [voices]: Tonleiter-Stufen je Stimme, z. B. [2] = Terz drüber, [2, 4] = Terz + Quinte, [-2, 2] = Terz drunter + drüber.
+     */
+    class Harmonizer(private val sr: Int) {
+        private val tr = PitchTracker(sr)
+        private val sh = Array(3) { Shifter(sr) }
+        private val target = DoubleArray(3) { 1.0 }
+        var voices: IntArray = intArrayOf(2, 4)
+
+        fun process(x: FloatArray, n: Int, allowed: (Int) -> Boolean, level: Float) {
+            val vs = voices
+            for (i in 0 until n) {
+                val v = x[i]
+                tr.push(v)
+                if (tr.fresh) {
+                    val m = tr.midi
+                    if (m.isNaN()) for (k in 0 until 3) target[k] = 1.0 else {
+                        val base = nearestAllowed(m, allowed)
+                        for (k in vs.indices.take(3)) {
+                            val t = scaleStep(base, vs[k], allowed)
+                            target[k] = Math.pow(2.0, (t - m) / 12.0).coerceIn(0.4, 2.2)
+                            sh[k].period = sr / hzOf(m)
+                        }
+                    }
+                }
+                var add = 0f
+                for (k in vs.indices.take(3)) {
+                    val s = sh[k]
+                    s.ratio += (target[k] - s.ratio) * 0.02
+                    add += s.next(v)
+                }
+                x[i] = v + add * level * (if (tr.midi.isNaN()) 0f else 1f)
+            }
+        }
+    }
+
+    /**
+     * Stimme → Synth: verfolgt die Tonhöhe und meldet Noten-Wechsel ([onNote] mit MIDI-Ton und Stärke, -1 = aus).
+     * Ein neuer Ton gilt erst, wenn er ~30 ms stabil ist (kein Flattern), Stille beendet die Note.
+     */
+    class VoiceToNotes(sr: Int) {
+        private val tr = PitchTracker(sr)
+        private var cur = -1
+        private var cand = -1
+        private var candN = 0
+        private var silent = 0
+        var heard = Double.NaN
+            private set
+        var playing = -1
+            private set
+
+        fun process(x: FloatArray, n: Int, allowed: (Int) -> Boolean, onNote: (Int, Float) -> Unit) {
+            for (i in 0 until n) {
+                tr.push(x[i])
+                if (!tr.fresh) continue
+                val m = tr.midi
+                heard = m
+                if (m.isNaN()) {
+                    if (cur >= 0 && ++silent >= 4) { cur = -1; playing = -1; onNote(-1, 0f) }
+                    candN = 0
+                    continue
+                }
+                silent = 0
+                val note = nearestAllowed(m, allowed)
+                // Hysterese: am aktuellen Ton festhalten, solange man nicht deutlich danebenliegt
+                if (cur >= 0 && abs(m - cur) < 0.7) { candN = 0; continue }
+                if (note == cand) candN++ else { cand = note; candN = 1 }
+                if (candN >= 3) {
+                    cur = note
+                    playing = note
+                    candN = 0
+                    onNote(note, (0.5f + tr.level * 6f).coerceIn(0.4f, 1f))
+                }
+            }
+        }
+    }
+
+    // ---------------------------------------------------------------- Klang-Sammler
+
+    /** Ein gesammelter Klang: Audio, Art (0 Kick, 1 Snare, 2 Hi-Hat, 3 Percussion), Lautheit. */
+    class Found(val data: FloatArray, val kind: Int, val loud: Float)
+
+    /**
+     * Geräusche aus einer freien Aufnahme ausschneiden und sortieren: Anschläge finden (wie Beatbox),
+     * jeden bis zum nächsten bzw. max. 1 s schneiden, Stille am Ende kürzen, weich ausblenden.
+     * Je Art der lauteste/klarste, dazu bis zu [extra] weitere verschiedene als Percussion.
+     */
+    fun collect(x: FloatArray, sr: Int, extra: Int = 5): List<Found> {
+        val hits = beatbox(x, sr)
+        if (hits.isEmpty()) return emptyList()
+        val cuts = ArrayList<Found>()
+        for ((i, h) in hits.withIndex()) {
+            val a = max(0, h.at - sr / 200)
+            val next = if (i + 1 < hits.size) hits[i + 1].at - sr / 200 else x.size
+            var b = min(min(next, x.size), a + sr)
+            if (b - a < sr / 40) continue
+            var pk = 0f
+            for (j in a until b) pk = max(pk, abs(x[j]))
+            if (pk < 0.01f) continue
+            // Ende: wo es unter −40 dB fällt (über 10 ms gemittelt)
+            val wl = sr / 100
+            var j = a + sr / 50
+            while (j + wl < b) {
+                var e = 0f
+                for (q in j until j + wl) e = max(e, abs(x[q]))
+                if (e < pk * 0.01f) { b = j + wl; break }
+                j += wl
+            }
+            val d = x.copyOfRange(a, b)
+            // normalisieren und ausblenden
+            val g = 0.89f / pk
+            val fo = min(d.size / 3, sr / 50)
+            for (q in d.indices) {
+                var v = d[q] * g
+                if (q < 32) v *= q / 32f
+                if (q >= d.size - fo) v *= (d.size - q).toFloat() / fo
+                d[q] = v
+            }
+            cuts.add(Found(d, h.kind, h.vel))
+        }
+        val out = ArrayList<Found>()
+        for (k in 0..2) cuts.filter { it.kind == k }.maxByOrNull { it.loud }?.let { out.add(it) }
+        // weitere: möglichst verschieden (Länge/Art), lauteste zuerst
+        val rest = cuts.filter { c -> out.none { it === c } }.sortedByDescending { it.loud }
+        for (c in rest) {
+            if (out.size >= 3 + extra) break
+            if (out.any { abs(it.data.size - c.data.size) < sr / 100 && it.kind == c.kind }) continue
+            out.add(Found(c.data, 3, c.loud))
+        }
+        return out
     }
 
     @Suppress("unused")

@@ -1926,6 +1926,49 @@ object Engine {
             }
         }
     }
+    /** Harmonizer fürs Live-Mikro: an/aus, Stimmen (Tonleiter-Stufen), Lautstärke der Begleitstimmen. */
+    @Volatile var harmOn = false
+    @Volatile var harmVoices = intArrayOf(2, 4)
+    @Volatile var harmLevel = 0.7f
+    private var harm: MicTools.Harmonizer? = null
+
+    /** Stimmen-Synth: die gesungene Tonhöhe spielt live eine Synth-Spur. */
+    @Volatile var voiceSynthOn = false
+    @Volatile var voiceSynthTrack = 0
+    @Volatile var voiceSynthOct = 0
+    /** Nur den Synth hören (Stimme selbst stumm). */
+    @Volatile var voiceSynthMute = true
+    private var v2n: MicTools.VoiceToNotes? = null
+    private var vsSynth: PolySynth? = null
+    private var vsTrack: InstState.SynTrack? = null
+    private const val VOICE_TAG = 77_777
+    private val vsNote: (Int, Float) -> Unit = { note, vel ->
+        val sy = vsSynth
+        val t = vsTrack
+        if (sy != null && t != null) {
+            sy.queue(-1, false, 0, 0f, VOICE_TAG)
+            if (note >= 0) sy.queue(-1, true, note + 12 * voiceSynthOct - 60 - 12 * t.oct - t.transpose, vel, VOICE_TAG)
+        }
+    }
+    /** Für die Anzeige: gesungener Ton des Stimmen-Synths (MIDI, -1 = keiner). */
+    fun voiceSynthNote(): Int = v2n?.playing ?: -1
+
+    private fun voiceSynthRun(buf: FloatArray, n: Int) {
+        val ti = voiceSynthTrack.coerceIn(0, InstState.SYN_TRACKS - 1)
+        val sy = synths?.getOrNull(ti) ?: return
+        if (vsSynth !== sy) { vsSynth?.queue(-1, false, 0, 0f, VOICE_TAG); vsSynth = sy }
+        vsTrack = InstState.synTracks[ti]
+        val v = v2n ?: MicTools.VoiceToNotes(sampleRate).also { v2n = it }
+        v.process(buf, n, tuneAllowed, vsNote)
+    }
+
+    /** Stimmen-Synth aus: hängende Note beenden. */
+    fun voiceSynthStop() {
+        voiceSynthOn = false
+        vsSynth?.queue(-1, false, 0, 0f, VOICE_TAG)
+        v2n = null
+    }
+
     /** Für die Anzeige: gehörte / korrigierte Tonhöhe (MIDI, NaN = nichts). */
     fun autoTuneHeard(): Double = autoTune?.heardMidi ?: Double.NaN
     fun autoTuneTarget(): Double = autoTune?.targetMidi ?: Double.NaN
@@ -2615,9 +2658,18 @@ object Engine {
                 if (fillMonitor(monBuf, block)) {
                     val g = monitorGain
                     for (i in 0 until block) monBuf[i] *= g
+                    if (voiceSynthOn) {
+                        voiceSynthRun(monBuf, block)
+                        if (voiceSynthMute) java.util.Arrays.fill(monBuf, 0, block, 0f)
+                    }
                     if (autoTuneOn) {
                         val at = autoTune ?: MicTools.AutoTune(sampleRate).also { autoTune = it }
                         at.process(monBuf, block, tuneAllowed, autoTuneSpeed, autoTuneMix)
+                    }
+                    if (harmOn) {
+                        val hz = harm ?: MicTools.Harmonizer(sampleRate).also { harm = it }
+                        hz.voices = harmVoices
+                        hz.process(monBuf, block, tuneAllowed, harmLevel)
                     }
                     if (padChainActive(MIC_CHAIN)) {
                         for (sl in 0 until 3) {
@@ -2639,7 +2691,8 @@ object Engine {
                     monitorLevel = max(mp, monitorLevel * 0.9f)
                 }
             } else {
-                monCursor = -1L
+                // Stimmen-Synth braucht das Mikro auch ohne Mithören
+                if (voiceSynthOn) { if (fillMonitor(monBuf, block)) voiceSynthRun(monBuf, block) } else monCursor = -1L
                 monitorLevel *= 0.9f
             }
             val capOn = captureMask != 0

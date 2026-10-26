@@ -937,7 +937,29 @@ class DjView(context: Context) : View(context) {
                 mono.textAlign = Paint.Align.LEFT
                 mono.color = if (soon) (if (blink) Color.rgb(255, 210, 60) else alpha(Color.rgb(255, 210, 60), 0.6f)) else alpha(ink, 0.7f)
                 val beatInBar = Math.floorMod(floor(Dj.beatIndex(dd, pos)).toLong() - dd.barOffset, 4L) + 1
-                c.drawText("PHRASE ${inP + 1}.$beatInBar/16 · noch $barsLeft T", wave.left + dp(6f), wave.bottom - dp(3f), mono)
+                // Song-Struktur: aktueller Abschnitt + Sprung-Knöpfe
+                val part = Dj.partAt(dd, pos)
+                val pre = if (part != null) SongParts.NAMES[part.kind] + " · " else ""
+                val ptxt = "${pre}PHRASE ${inP + 1}.$beatInBar/16 · noch $barsLeft T"
+                c.drawText(ptxt, wave.left + dp(6f), wave.bottom - dp(3f), mono)
+                partHit[k].setEmpty(); dropHit[k].setEmpty()
+                if (dd.parts.isNotEmpty()) {
+                    var xx = wave.left + dp(12f) + mono.measureText(ptxt)
+                    val by = wave.bottom - dp(3f)
+                    fun chip(r: RectF, label: String, col: Int) {
+                        val w = mono.measureText(label) + dp(10f)
+                        r.set(xx, by - dp(11f), xx + w, by + dp(2f))
+                        fill.shader = null
+                        fill.color = alpha(col, 0.28f)
+                        c.drawRoundRect(r, dp(4f), dp(4f), fill)
+                        mono.color = col
+                        c.drawText(label, xx + dp(5f), by - dp(1f), mono)
+                        xx += w + dp(6f)
+                    }
+                    chip(partHit[k], "⏭ TEIL", ink)
+                    val cb = floor(Dj.barAt(dd, pos))
+                    if (dd.parts.any { it.kind == SongParts.DROP && it.bar0 > cb }) chip(dropHit[k], "⏭ DROP", PART_COLS[SongParts.DROP])
+                }
             }
             // Cue und Hot Cues
             marker(c, cx + ((dd.cuePoint - pos) / fpp).toFloat(), wave, Color.rgb(255, 170, 0))
@@ -956,6 +978,18 @@ class DjView(context: Context) : View(context) {
                 stroke.color = if (f < pos) alpha(oc, 0.45f) else alpha(oc, 0.9f)
                 val a = v * ov.height() / 2f
                 c.drawLine(ov.left + i, ov.centerY() - a, ov.left + i, ov.centerY() + a, stroke)
+            }
+            // Song-Struktur als Farbband über der Übersicht
+            if (dd.parts.isNotEmpty() && dd.bpm > 0f) {
+                val first = dd.grid + dd.barOffset * dd.beatFrames()
+                val barF = dd.beatFrames() * 4
+                for (pt in dd.parts) {
+                    val x0 = ov.left + ((first + pt.bar0 * barF) / dd.len).toFloat() * ov.width()
+                    val x1 = ov.left + ((first + pt.bar1 * barF) / dd.len).toFloat() * ov.width()
+                    fill.shader = null
+                    fill.color = PART_COLS[pt.kind]
+                    c.drawRect(max(ov.left, x0), ov.top - dp(3f), min(ov.right, x1) - dp(1f), ov.top - dp(1f), fill)
+                }
             }
             val px = ov.left + (pos / dd.len).toFloat() * ov.width()
             stroke.strokeWidth = dp(1.5f)
@@ -994,6 +1028,10 @@ class DjView(context: Context) : View(context) {
     }
 
     private val keyHit = arrayOf(RectF(), RectF())
+    /** Song-Struktur: Sprung zum nächsten Abschnitt / Drop (je Deck). */
+    private val partHit = arrayOf(RectF(), RectF())
+    private val dropHit = arrayOf(RectF(), RectF())
+    private val PART_COLS = intArrayOf(Color.rgb(120, 150, 200), Color.rgb(160, 160, 160), Color.rgb(250, 200, 60), Color.rgb(255, 70, 80), Color.rgb(70, 200, 220), Color.rgb(170, 120, 220))
     /** Tonart-Feld im Deck angetippt (Keylock, Key-Shift, Tonart). */
     var onKeyMenu: ((Int) -> Unit)? = null
 
@@ -2200,6 +2238,16 @@ class DjView(context: Context) : View(context) {
             if (hit(overview[k], x, y, dp(3f)) && Dj.decks[k].loaded()) {
                 ptrs[id] = Ptr(K.OVERVIEW, k, 0, x, y, now)
                 seekOverview(k, x)
+                return
+            }
+            if (!dropHit[k].isEmpty && hit(dropHit[k], x, y, dp(4f))) {
+                haptic()
+                onHint?.invoke(Dj.jumpNextPart(Dj.decks[k], SongParts.DROP))
+                return
+            }
+            if (!partHit[k].isEmpty && hit(partHit[k], x, y, dp(4f))) {
+                haptic()
+                onHint?.invoke(Dj.jumpNextPart(Dj.decks[k]))
                 return
             }
             if (!keyHit[k].isEmpty && hit(keyHit[k], x, y, 0f)) {

@@ -1145,6 +1145,8 @@ class MainActivity : Activity() {
             if (!shot) {
                 labels.add(if (AiStems.ready(this)) "🧠 KI-Stems: Vocals · Drums · Bass · Melodie auf 4 Pads" else "🎚 Stems trennen (Drums · Bass · Melodie – oder 🧠 KI auf 4 Pads)")
                 actions.add { splitStems(p) }
+                labels.add("🪄 Ein-Tipp-Remix: aus dem Song ein neues Arrangement bauen")
+                actions.add { oneTapRemix(p) }
                 labels.add("✂ Slicer: an den Schlägen in 16 Stücke auf 16 Pads zerlegen")
                 actions.add { openSlicerFor(p) }
             }
@@ -2340,7 +2342,8 @@ class MainActivity : Activity() {
                 applyDjOrientation()
             },
             (if (Dj.mashArmed) "🎭 Mashup wartet auf die Eins … (antippen = abbrechen)" else "🎭 Mashup-Assistent: Gesang von einem Deck über den Beat des anderen") to { showMashup() }) else emptyList()) + listOf(
-            "🎤 Mikro-Werkzeuge: Summen → Melodie, Beatbox → Drums, Auto-Tune, Folge dem Song" to { showMicTools() },
+            "🎤 Mikro-Werkzeuge: Summen, Beatbox, Auto-Tune, Harmonizer, Stimmen-Synth, Klang-Sammler, Folge dem Song" to { showMicTools() },
+            "🪄 Ein-Tipp-Remix: aus einem Song auf einem Pad ein neues Arrangement" to { if (djMode) switchMode(false); pickRemixPad() },
             "💾 Projekt & Dateien" to { showMenuGroup(0) },
             "💿 Musik-Sammlung: Ordner laden → automatisch katalogisiert & analysiert" to { showMusicLibrary() },
             "📤 Song exportieren: WAV, Stems, MIDI" to { showSongExport() },
@@ -4189,14 +4192,20 @@ class MainActivity : Activity() {
             "🎤 Summen → Melodie: Melodie summen oder singen, landet als Noten in einer Synth-Spur",
             "🥁 Beatbox → Drums: „Bum-Tss-Ka“ ins Mikro, wird zum Drum-Pattern",
             (if (Engine.autoTuneOn) "🎚 Live-Auto-Tune: AN" else "🎚 Live-Auto-Tune fürs Mikro") + " …",
-            "🎯 Folge dem Song: Tonart & Akkorde aus einem Pad oder Deck übernehmen"
+            "🎯 Folge dem Song: Tonart & Akkorde aus einem Pad oder Deck übernehmen",
+            (if (Engine.voiceSynthOn) "🎹 Stimmen-Synth: AN" else "🎹 Stimmen-Synth: singen → ein Synth spielt live mit") + " …",
+            (if (Engine.harmOn) "👥 Harmonizer: AN" else "👥 Harmonizer: Begleitstimmen zu deiner Stimme") + " …",
+            "✋ Klang-Sammler: Geräusche aufnehmen → eigenes Drumkit auf den Pads"
         )
         ui().setTitle("🎤 Mikro-Werkzeuge").setItems(items) { _, w ->
             when (w) {
                 0 -> askMicCapture(0)
                 1 -> askMicCapture(1)
                 2 -> showAutoTune()
-                else -> showFollowSong()
+                3 -> showFollowSong()
+                4 -> showVoiceSynth()
+                5 -> showHarmonizer()
+                else -> showCollector()
             }
         }.setNegativeButton("Schließen", null).show()
     }
@@ -4374,6 +4383,257 @@ class MainActivity : Activity() {
         note(box, "Mit Effekten aufnehmen: Pad-Eingang auf WAVE – dann landet die gestimmte Stimme im Pad.")
         ui().setTitle("🎚 Live-Auto-Tune").setView(scroll).setPositiveButton("Fertig", null).show()
         hh.postDelayed(tick, 200)
+    }
+
+    private fun showVoiceSynth() {
+        if (!hasMic()) { toast("Bitte erst das Mikrofon erlauben"); return }
+        val (box, scroll) = dialogBox()
+        if (!headphonesOut()) note(box, "Tipp: mit Kopfhörern – sonst hört das Mikro den Synth und spielt sich selbst.", Color.rgb(255, 150, 60))
+        check(box, "🎹 Stimmen-Synth an (singen oder summen → Synth spielt mit)", Engine.voiceSynthOn) { on -> if (on) Engine.voiceSynthOn = true else Engine.voiceSynthStop() }
+        note(box, "Spur (Klang):", Color.WHITE)
+        val rg = android.widget.RadioGroup(this)
+        for (i in 0 until InstState.SYN_TRACKS) rg.addView(android.widget.RadioButton(this).apply { id = 7300 + i; text = "SYNTH ${i + 1} · ${InstState.synSoundNames.getOrElse(i) { "" }}"; setTextColor(Color.WHITE) })
+        rg.check(7300 + Engine.voiceSynthTrack)
+        rg.setOnCheckedChangeListener { _, id -> Engine.voiceSynthStop(); Engine.voiceSynthTrack = id - 7300; Engine.voiceSynthOn = true }
+        box.addView(rg)
+        note(box, "Oktave:", Color.WHITE)
+        val og = android.widget.RadioGroup(this).apply { orientation = android.widget.RadioGroup.HORIZONTAL }
+        for ((i, o) in intArrayOf(-2, -1, 0, 1, 2).withIndex()) og.addView(android.widget.RadioButton(this).apply { id = 7400 + i; text = if (o > 0) "+$o" else "$o"; setTextColor(Color.WHITE) })
+        og.check(7400 + Engine.voiceSynthOct + 2)
+        og.setOnCheckedChangeListener { _, id -> Engine.voiceSynthOct = id - 7402 }
+        box.addView(og)
+        check(box, "Nur den Synth hören (eigene Stimme stumm)", Engine.voiceSynthMute) { Engine.voiceSynthMute = it }
+        note(box, "Töne rasten auf die Tonleiter bzw. die Tonart aus „Folge dem Song“ ein. Mit dem Pad-Eingang WAVE kannst du den Synth direkt auf ein Pad aufnehmen.")
+        val live = note(box, "", Color.rgb(180, 220, 255))
+        val hh = android.os.Handler(mainLooper)
+        val names = arrayOf("C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "H")
+        val tick = object : Runnable {
+            override fun run() {
+                val nn = Engine.voiceSynthNote()
+                live.text = if (!Engine.voiceSynthOn) "" else if (nn < 0) "🎙 (singen …)" else "🎹 spielt " + names[Math.floorMod(nn + 12 * Engine.voiceSynthOct, 12)] + ((nn + 12 * Engine.voiceSynthOct) / 12 - 1)
+                if (live.isAttachedToWindow) hh.postDelayed(this, 80)
+            }
+        }
+        ui().setTitle("🎹 Stimmen-Synth").setView(scroll).setPositiveButton("Fertig", null).show()
+        hh.postDelayed(tick, 200)
+    }
+
+    private fun showHarmonizer() {
+        if (!hasMic()) { toast("Bitte erst das Mikrofon erlauben"); return }
+        val (box, scroll) = dialogBox()
+        if (!headphonesOut()) note(box, "⚠ Ohne Kopfhörer pfeift es über den Lautsprecher (Rückkopplung).", Color.rgb(255, 150, 60))
+        check(box, "👥 Harmonizer auf dem Live-Mikro", Engine.harmOn) {
+            Engine.harmOn = it
+            if (it && !Engine.monitorOn) { Engine.monitorOn = true; hint("Mikrofon live hören ist jetzt an") }
+        }
+        val opts = listOf("Terz drüber" to intArrayOf(2), "Terz + Quinte drüber (Chor)" to intArrayOf(2, 4), "Terz drunter + Terz drüber" to intArrayOf(-2, 2),
+            "Sexte drunter + Terz drüber" to intArrayOf(-3, 2), "Oktave drunter + Quinte" to intArrayOf(-7, 4), "Dreistimmig: Terz, Quinte, Oktave" to intArrayOf(2, 4, 7))
+        val rg = android.widget.RadioGroup(this)
+        opts.forEachIndexed { i, o -> rg.addView(android.widget.RadioButton(this).apply { id = 7500 + i; text = o.first; setTextColor(Color.WHITE) }) }
+        rg.check(7500 + (opts.indexOfFirst { it.second.contentEquals(Engine.harmVoices) }.takeIf { it >= 0 } ?: 1))
+        rg.setOnCheckedChangeListener { _, id -> Engine.harmVoices = opts[id - 7500].second }
+        box.addView(rg)
+        val lab = note(box, "", Color.WHITE)
+        fun show() { lab.text = "Lautstärke der Begleitstimmen: ${(Engine.harmLevel * 100).toInt()} %" }
+        show()
+        box.addView(SeekBar(this).apply {
+            max = 100; progress = (Engine.harmLevel * 100).toInt()
+            setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                override fun onProgressChanged(sb: SeekBar?, pr: Int, fromUser: Boolean) { if (fromUser) { Engine.harmLevel = pr / 100f; show() } }
+                override fun onStartTrackingTouch(sb: SeekBar?) {}
+                override fun onStopTrackingTouch(sb: SeekBar?) {}
+            })
+        })
+        val keyTxt = if (InstState.scaleType != 0) "Leitereigen in ${InstState.scaleLabel()}" else if (Engine.autoTuneKey >= 0) "Leitereigen in ${Keys.name(Engine.autoTuneKey)}" else "Ohne Tonart: feste Intervalle (große Terz, Quinte) – besser vorher „Folge dem Song“ oder 🎼 Tonleiter"
+        note(box, keyTxt)
+        note(box, "Zusammen mit Auto-Tune klingt es am saubersten.")
+        ui().setTitle("👥 Harmonizer").setView(scroll).setPositiveButton("Fertig", null).show()
+    }
+
+    /** Klang-Sammler: frei aufnehmen, Klänge schneiden und als One-Shot-Kit auf freie Pads legen. */
+    private fun showCollector() {
+        if (!hasMic()) { toast("Bitte erst das Mikrofon erlauben"); return }
+        val pad = (18 * resources.displayMetrics.density).toInt()
+        val tv = TextView(this).apply { textSize = 20f; setTextColor(Color.WHITE); gravity = Gravity.CENTER; setPadding(pad, pad, pad, pad / 2); text = "Bereit" }
+        val sub = TextView(this).apply {
+            textSize = 12f; setTextColor(Color.rgb(190, 190, 190)); gravity = Gravity.CENTER; setPadding(pad, 0, pad, pad / 2)
+            text = "Klopfe, klatsche, schnipse, raschle – auf den Tisch, ein Glas, Schlüssel … mit kleinen Pausen dazwischen (max. 30 s). Tiefe Klänge werden Kick, kurze helle Hi-Hat, der Rest Snare und Percussion."
+        }
+        val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; addView(tv); addView(sub) }
+        var start = -1L
+        var running = true
+        val h = android.os.Handler(mainLooper)
+        val dlg = ui().setTitle("✋ Klang-Sammler").setView(box).setCancelable(false)
+            .setPositiveButton("● Aufnahme", null).setNegativeButton("Abbrechen") { _, _ -> running = false }.create()
+        dlg.setOnShowListener {
+            val b = dlg.getButton(android.content.DialogInterface.BUTTON_POSITIVE)
+            b.setOnClickListener {
+                if (start < 0) {
+                    start = Engine.micNow()
+                    b.text = "■ Fertig"
+                    h.post(object : Runnable {
+                        override fun run() {
+                            if (!running || start < 0) return
+                            val secs = (Engine.micNow() - start) / Engine.sampleRate.toFloat()
+                            val lv = (Engine.inputLevel * 100).toInt().coerceAtMost(100)
+                            tv.text = String.format(Locale.GERMANY, "● %.1f s   %s", secs, "▮".repeat(lv / 10))
+                            if (secs >= 30f) b.performClick() else h.postDelayed(this, 60)
+                        }
+                    })
+                } else {
+                    running = false
+                    val n = (Engine.micNow() - start).toInt()
+                    val audio = Engine.micCopy(start, n)
+                    dlg.dismiss()
+                    if (audio == null || n < Engine.sampleRate / 2) { toast("Zu kurz"); return@setOnClickListener }
+                    hint("✋ Schneide und sortiere …")
+                    Thread {
+                        val found = try { MicTools.collect(audio, Engine.sampleRate, 5) } catch (e: Throwable) { emptyList() }
+                        runOnUiThread { placeCollected(found) }
+                    }.start()
+                }
+            }
+        }
+        dlg.show()
+    }
+
+    private fun placeCollected(found: List<MicTools.Found>) {
+        if (found.isEmpty()) { toast("Keine Klänge erkannt – lauter und mit Pausen dazwischen"); return }
+        val free = (0 until PadView.VISIBLE_PADS).filter { !Engine.hasLoop(it) }
+        if (free.isEmpty()) { toast("Keine freien Pads – erst Pads leeren"); return }
+        val names = arrayOf("Kick", "Snare", "Hi-Hat", "Perc")
+        val list = found.take(free.size)
+        val desc = list.joinToString(", ") { names[it.kind] }
+        ui().setTitle("✋ ${list.size} Klänge gefunden").setMessage("$desc\n\nAls ⚡ One-Shots auf die freien Pads ${list.indices.joinToString(", ") { (free[it] + 1).toString() }} legen?")
+            .setPositiveButton("Auf Pads + Grundbeat") { _, _ -> putCollected(list, free, true) }
+            .setNeutralButton("Nur auf Pads") { _, _ -> putCollected(list, free, false) }
+            .setNegativeButton("Verwerfen", null).show()
+    }
+
+    private fun putCollected(list: List<MicTools.Found>, free: List<Int>, beat: Boolean) {
+        val names = arrayOf("Kick", "Snare", "Hi-Hat", "Perc")
+        var perc = 0
+        if (beat) Engine.pushPatternUndo("Klang-Sammler Beat")
+        for ((i, f) in list.withIndex()) {
+            val q = free[i]
+            Engine.padOneShot[q] = true
+            Engine.importLoop(q, f.data)
+            Engine.setPadName(q, "✋ " + names[f.kind] + if (f.kind == 3) " ${++perc}" else "")
+            if (beat) {
+                val steps = when (f.kind) {
+                    0 -> intArrayOf(0, 4, 8, 12)
+                    1 -> intArrayOf(4, 12)
+                    2 -> intArrayOf(2, 6, 10, 14)
+                    else -> if (perc == 1) intArrayOf(7, 15) else if (perc == 2) intArrayOf(3, 11) else intArrayOf()
+                }
+                for (st in 0 until Engine.STEPS) Engine.setSeqVel(q, st, 0f)
+                for (st in steps) Engine.setSeqVel(q, st, if (f.kind == 2) 0.7f else 1f)
+            }
+        }
+        if (beat && !Engine.seqPlaying) Engine.seqPlay()
+        pads.invalidate()
+        hint("✋ ${list.size} Klänge auf den Pads" + if (beat) " · Grundbeat läuft im Sequenzer" else "")
+    }
+
+    // ================================================================ Ein-Tipp-Remix
+
+    private fun pickRemixPad() {
+        val list = (0 until PadView.VISIBLE_PADS).filter { Engine.hasLoop(it) && !Engine.isOneShot(it) && Engine.masterFrames() > 0 && Engine.padDataLen(it) >= Engine.masterFrames() * 8 }
+        if (list.isEmpty()) { toast("Erst einen Song (mind. 8 Takte, im Tempo) auf ein Pad laden"); return }
+        if (list.size == 1) { oneTapRemix(list[0]); return }
+        ui().setTitle("🪄 Ein-Tipp-Remix – welcher Song?").setItems(list.map { "Pad ${it + 1}" + (Engine.padName(it)?.let { n -> " · $n" } ?: "") }.toTypedArray()) { _, w -> oneTapRemix(list[w]) }.show()
+    }
+
+    /**
+     * Ein-Tipp-Remix: Song in Stems trennen, aus dem stärksten Teil 4-Takt-Loops bauen (Drums, Bass, Melodie, Vocals)
+     * und daraus ein neues 64-Takt-Arrangement in der Song-Matrix: Intro → Build-up → Drop → Break → Drop → Outro.
+     */
+    private fun oneTapRemix(p: Int) {
+        val ai = AiStems.ready(this)
+        val need = if (ai) 4 else 3
+        val free = (0 until PadView.VISIBLE_PADS).filter { it != p && !Engine.hasLoop(it) }
+        if (free.size < need) { toast("Für den Remix werden $need freie Pads gebraucht (frei: ${free.size})"); return }
+        val bar = Engine.masterFrames()
+        if (bar <= 0L || Engine.padDataLen(p) < bar * 8) { toast("Song braucht ein Tempo und mind. 8 Takte"); return }
+        val len = Engine.padDataLen(p)
+        System.gc()
+        val rt = Runtime.getRuntime()
+        if (len.toLong() * 4 * 10 > rt.maxMemory() - (rt.totalMemory() - rt.freeMemory())) { toast("Zu lang für den Speicher – erst kürzen"); return }
+        confirm("🪄 Ein-Tipp-Remix von Pad ${p + 1}?", "Der Song wird in Stems getrennt" + (if (ai) " (🧠 KI)" else " (schnell, ohne Gesang – mit KI-Modellen gibt es auch Vocals)") +
+            ". Daraus entstehen 4-Takt-Loops auf freien Pads und ein neues Arrangement (64 Takte). Die Song-Matrix wird dabei ersetzt.") {
+            Thread {
+                try {
+                    Engine.padLoadText[p] = "🪄 Remix"
+                    Engine.padLoadProg[p] = 0f
+                    val data = Engine.loopData(p) ?: return@Thread
+                    val sr = Engine.sampleRate
+                    // [vocals, drums, bass, melodie]
+                    val st: Array<FloatArray?> = if (ai) {
+                        val s = AiStems.separatePad(this, data, sr, { false }) { f -> Engine.padLoadProg[p] = f * 0.95f } ?: return@Thread
+                        arrayOf(s[0], s[1], s[2], s[3])
+                    } else {
+                        val s = Stems.split(data, sr) { f -> Engine.padLoadProg[p] = f * 0.95f }
+                        arrayOf(null, s[0], s[1], s[2])
+                    }
+                    val b4 = (bar * 4).toInt()
+                    val blocks = data.size / b4
+                    fun en(x: FloatArray?, blk: Int): Double {
+                        if (x == null) return 0.0
+                        var e = 0.0
+                        var i = blk * b4
+                        val end = min(x.size, (blk + 1) * b4)
+                        while (i < end) { e += x[i] * x[i]; i += 4 }
+                        return e
+                    }
+                    val eV = DoubleArray(blocks) { en(st[0], it) }
+                    val eD = DoubleArray(blocks) { en(st[1], it) }
+                    val eB = DoubleArray(blocks) { en(st[2], it) }
+                    val eM = DoubleArray(blocks) { en(st[3], it) }
+                    val drop = (0 until blocks).maxByOrNull { eD[it] + eB[it] + 0.5 * eM[it] + 0.3 * eV[it] } ?: 0
+                    val vMax = eV.maxOrNull() ?: 0.0
+                    val vBlk = if (vMax <= 0.0 || eV[drop] >= 0.4 * vMax) drop else (0 until blocks).maxByOrNull { eV[it] } ?: drop
+                    fun cut(x: FloatArray?, blk: Int): FloatArray? = x?.copyOfRange(blk * b4, min(x.size, (blk + 1) * b4))?.takeIf { it.size == b4 }
+                    val loops = listOf("Drums" to cut(st[1], drop), "Bass" to cut(st[2], drop), "Melodie" to cut(st[3], drop), "Vocals" to cut(st[0], vBlk))
+                    val base = Engine.padName(p)?.take(8) ?: "P${p + 1}"
+                    runOnUiThread {
+                        val rows = IntArray(4) { -1 }
+                        var fi = 0
+                        for ((k, pr) in loops.withIndex()) {
+                            val d = pr.second ?: continue
+                            if (fi >= free.size) break
+                            val q = free[fi++]
+                            Engine.padOneShot[q] = false
+                            Engine.importLoop(q, d)
+                            Engine.setPadName(q, "🪄 ${pr.first} · $base")
+                            rows[k] = q
+                        }
+                        // Arrangement: 0 Drums, 1 Bass, 2 Melodie, 3 Vocals
+                        Engine.arrClear()
+                        fun on(k: Int, from: Int, to: Int) { val r = rows[k]; if (r >= 0) for (b in from until to) Engine.setArrCell(r, b, 1) }
+                        on(0, 0, 8)                                          // Intro: Drums
+                        on(0, 8, 16); on(1, 12, 16); on(2, 8, 16); on(3, 12, 16)   // Build-up
+                        for (k in 0..3) on(k, 16, 32)                        // Drop
+                        on(2, 32, 40); on(3, 32, 40)                         // Break: Melodie + Vocals
+                        on(0, 36, 40)                                        // Drums kommen zurück
+                        for (k in 0..3) on(k, 40, 56)                        // Drop 2
+                        on(0, 56, 64); on(1, 56, 60)                         // Outro
+                        Engine.songBars = 64
+                        Engine.seqStop()
+                        Engine.songMode = true
+                        Engine.seqPlay()
+                        pads.invalidate()
+                        hint("🪄 Remix läuft: Intro → Build-up → Drop → Break → Drop → Outro (Takt ${drop * 4 + 1}–${drop * 4 + 4} des Songs) · Song-Matrix zeigt und ändert den Ablauf")
+                    }
+                } catch (e: OutOfMemoryError) {
+                    runOnUiThread { toast("Zu lang für den Speicher – erst kürzen") }
+                } catch (e: Throwable) {
+                    val c = (e as? java.util.concurrent.ExecutionException)?.cause ?: e
+                    runOnUiThread { toast("Remix fehlgeschlagen: ${c.message ?: c}") }
+                } finally {
+                    Engine.padLoadProg[p] = -1f
+                }
+            }.start()
+        }
     }
 
     /** Folge dem Song: Tonart (und Akkorde) aus einem Pad oder Deck in die Instrumente übernehmen. */

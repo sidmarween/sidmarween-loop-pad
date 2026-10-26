@@ -188,6 +188,8 @@ object Dj {
         @Volatile var stemProg = -1f
         @Volatile var stemGen = 0
         /** KI-Trennung: Fortschritt (-1 = läuft nicht) und Generation (neuer Track bricht ab). */
+        /** Song-Struktur (Intro, Drop, Break …) in Takten ab dem ersten ganzen Takt. */
+        @Volatile var parts: List<SongParts.Part> = emptyList()
         @Volatile var aiProg = -1f
         @Volatile var aiGen = 0
         val stemGain = floatArrayOf(1f, 1f, 1f, 1f)
@@ -641,6 +643,50 @@ object Dj {
      * am stärksten springt, liegt die Eins bzw. der Phrasenanfang.
      */
     fun analyzePhrase(d: Deck) {
+        analyzePhraseCore(d)
+        try { analyzeParts(d) } catch (ignored: Throwable) { d.parts = emptyList() }
+    }
+
+    /** Song-Struktur aus Lautheit und Bass je Takt. */
+    fun analyzeParts(d: Deck) {
+        val pk = d.peaks
+        val lw = d.lows
+        if (d.bpm <= 0f || pk.size < 64 || lw.size != pk.size) { d.parts = emptyList(); return }
+        val barF = d.beatFrames() * 4
+        val first = d.grid + d.barOffset * d.beatFrames()
+        val bars = ((d.len - first) / barF).toInt()
+        if (bars < 8) { d.parts = emptyList(); return }
+        val e = DoubleArray(bars)
+        val l = DoubleArray(bars)
+        for (b in 0 until bars) {
+            val f0 = ((first + b * barF) / BIN).toInt().coerceAtLeast(0)
+            val f1 = ((first + (b + 1) * barF) / BIN).toInt().coerceAtMost(pk.size)
+            var se = 0.0; var sl = 0.0; var c = 0
+            for (i in f0 until f1) { val v = (pk[i].toInt() and 0xFF).toDouble(); se += v; sl += v * (lw[i].toInt() and 0xFF) / 255.0; c++ }
+            if (c > 0) { e[b] = se / c; l[b] = sl / c }
+        }
+        d.parts = SongParts.segment(e, l, d.phraseOff)
+    }
+
+    /** Abschnitt an einer Position (oder null). */
+    fun partAt(d: Deck, pos: Double): SongParts.Part? {
+        val b = floor(barAt(d, pos)).toInt()
+        return d.parts.firstOrNull { b >= it.bar0 && b < it.bar1 }
+    }
+
+    /**
+     * Zum Anfang des nächsten Abschnitts springen (bzw. des nächsten der Art [kind]) – taktgenau,
+     * die Position im Takt bleibt (läuft also im Beat weiter). Liefert eine Meldung.
+     */
+    fun jumpNextPart(d: Deck, kind: Int = -1): String {
+        if (d.parts.isEmpty()) return "Keine Song-Struktur erkannt"
+        val cur = barAt(d, d.pos)
+        val target = d.parts.firstOrNull { it.bar0 > floor(cur) + 0.01 && (kind < 0 || it.kind == kind) } ?: return if (kind >= 0) "Kein weiterer ${SongParts.NAMES[kind]}" else "Letzter Abschnitt"
+        beatJump(d, (target.bar0 - floor(cur)).toFloat())
+        return "⏭ ${SongParts.NAMES[target.kind]} (Takt ${target.bar0 + 1})"
+    }
+
+    private fun analyzePhraseCore(d: Deck) {
         val pk = d.peaks
         val lw = d.lows
         if (d.bpm <= 0f || pk.size < 64) { d.barOffset = 0; d.phraseOff = 0; return }
