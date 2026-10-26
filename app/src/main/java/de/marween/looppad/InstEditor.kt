@@ -837,6 +837,9 @@ class InstEditor(private val host: View) {
             Slider("VERSTIMMUNG", { st.synDetune }, { st.synDetune = it }, ::pct),
             Slider("OKTAVE", { (st.synOct + 3) / 5f }, { st.synOct = Math.round(it * 5) - 3 }, { v -> val o = Math.round(v * 5) - 3; (if (o > 0) "+" else "") + "$o" }),
             Slider("SWING (alle)", { Engine.swing }, { Engine.swing = it }, { v -> "${50 + (v * 25).toInt()} %" }),
+            Slider("SWING DIESER SPUR", { InstState.grooveSwing[InstState.synInst].let { if (it < 0f) 0f else 0.04f + it * 0.96f } }, { InstState.grooveSwing[InstState.synInst] = if (it < 0.03f) -1f else ((it - 0.04f) / 0.96f).coerceIn(0f, 1f) }, { v -> if (v < 0.03f) "wie global" else "${50 + (((v - 0.04f) / 0.96f).coerceIn(0f, 1f) * 25).toInt()} %" }),
+            Slider("HUMANIZE TIMING", { InstState.humTime[InstState.synInst] }, { InstState.humTime[InstState.synInst] = it }, { v -> if (v < 0.01f) "aus" else "bis ${(v * 20).toInt()} ms" }),
+            Slider("HUMANIZE LAUTSTÄRKE", { InstState.humVel[InstState.synInst] }, { InstState.humVel[InstState.synInst] = it }, { v -> if (v < 0.01f) "aus" else "±${(v * 30).toInt()} %" }),
             Slider("LAUTSTÄRKE", { st.synVol }, { st.synVol = it }, ::pct)
         )
         return if (mel) listOf(
@@ -850,6 +853,9 @@ class InstEditor(private val host: View) {
             Slider("TUNE", { (st.acidTune + 12) / 24f }, { st.acidTune = Math.round(it * 24) - 12 }, { v -> val t = Math.round(v * 24) - 12; (if (t > 0) "+" else "") + "$t HT" }),
             Slider("OKTAVE", { (st.acidOct + 1) / 3f }, { st.acidOct = Math.round(it * 3) - 1 }, { v -> val o = Math.round(v * 3) - 1; (if (o > 0) "+" else "") + "$o" }),
             Slider("SWING (alle)", { Engine.swing }, { Engine.swing = it }, { v -> "${50 + (v * 25).toInt()} %" }),
+            Slider("SWING DIESER SPUR", { InstState.grooveSwing[0].let { if (it < 0f) 0f else 0.04f + it * 0.96f } }, { InstState.grooveSwing[0] = if (it < 0.03f) -1f else ((it - 0.04f) / 0.96f).coerceIn(0f, 1f) }, { v -> if (v < 0.03f) "wie global" else "${50 + (((v - 0.04f) / 0.96f).coerceIn(0f, 1f) * 25).toInt()} %" }),
+            Slider("HUMANIZE TIMING", { InstState.humTime[0] }, { InstState.humTime[0] = it }, { v -> if (v < 0.01f) "aus" else "bis ${(v * 20).toInt()} ms" }),
+            Slider("HUMANIZE LAUTSTÄRKE", { InstState.humVel[0] }, { InstState.humVel[0] = it }, { v -> if (v < 0.01f) "aus" else "±${(v * 30).toInt()} %" }),
             Slider("LAUTSTÄRKE", { st.acidVol }, { st.acidVol = it }, ::pct)
         ) else {
             val v = st.drumSel
@@ -859,6 +865,9 @@ class InstEditor(private val host: View) {
                 Slider("${st.drumNames[v]} LEVEL", { st.drumLevel[v] }, { st.drumLevel[v] = it }, ::pct),
                 Slider("DRIVE (Kit)", { st.drumDrive }, { st.drumDrive = it }, ::pct),
                 Slider("SWING (alle)", { Engine.swing }, { Engine.swing = it }, { x -> "${50 + (x * 25).toInt()} %" }),
+                Slider("SWING DIESER SPUR", { InstState.grooveSwing[1].let { if (it < 0f) 0f else 0.04f + it * 0.96f } }, { InstState.grooveSwing[1] = if (it < 0.03f) -1f else ((it - 0.04f) / 0.96f).coerceIn(0f, 1f) }, { v -> if (v < 0.03f) "wie global" else "${50 + (((v - 0.04f) / 0.96f).coerceIn(0f, 1f) * 25).toInt()} %" }),
+                Slider("HUMANIZE TIMING", { InstState.humTime[1] }, { InstState.humTime[1] = it }, { v -> if (v < 0.01f) "aus" else "bis ${(v * 20).toInt()} ms" }),
+                Slider("HUMANIZE LAUTSTÄRKE", { InstState.humVel[1] }, { InstState.humVel[1] = it }, { v -> if (v < 0.01f) "aus" else "±${(v * 30).toInt()} %" }),
                 Slider("LAUTSTÄRKE (Kit)", { st.drumVol }, { st.drumVol = it }, ::pct)
             )
         }

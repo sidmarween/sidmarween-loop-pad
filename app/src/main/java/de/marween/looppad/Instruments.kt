@@ -393,6 +393,13 @@ object InstState {
     val synInst: Int get() = 2 + synCur
 
     val bank = Array(INSTS) { arrayOfNulls<Pat>(PATS) }
+
+    // ---------------------------------------------------------------- Groove je Spur (0 ACID, 1 DRUM, 2.. SYNTH)
+    /** Swing der Spur 0..1, < 0 = globaler Swing. */
+    val grooveSwing = FloatArray(INSTS) { -1f }
+    /** Humanize: zufällige Verzögerung (bis ~20 ms) und Lautstärke-Schwankung (bis ±30 %). */
+    val humTime = FloatArray(INSTS)
+    val humVel = FloatArray(INSTS)
     /** Gerade aktives Pattern je Instrument (0..3 = A..D). */
     val curPat = IntArray(INSTS)
 
@@ -464,6 +471,7 @@ object InstState {
     fun toJson(): JSONObject {
         val j = JSONObject()
         j.put("banks", banksToJson())
+        j.put("groove", JSONArray().apply { for (i in 0 until INSTS) put(JSONArray().put(grooveSwing[i].toDouble()).put(humTime[i].toDouble()).put(humVel[i].toDouble())) })
         fun ia(a: IntArray) = JSONArray().apply { a.forEach { put(it) } }
         fun ba(a: BooleanArray) = JSONArray().apply { a.forEach { put(it) } }
         fun fa(a: FloatArray) = JSONArray().apply { a.forEach { put(it.toDouble()) } }
@@ -494,6 +502,9 @@ object InstState {
             return
         }
         banksFromJson(j.optJSONArray("banks"))
+        java.util.Arrays.fill(grooveSwing, -1f); java.util.Arrays.fill(humTime, 0f); java.util.Arrays.fill(humVel, 0f)
+        j.optJSONArray("groove")?.let { a -> for (i in 0 until min(INSTS, a.length())) a.optJSONArray(i)?.let { g ->
+            grooveSwing[i] = g.optDouble(0, -1.0).toFloat(); humTime[i] = g.optDouble(1, 0.0).toFloat(); humVel[i] = g.optDouble(2, 0.0).toFloat() } }
         fun ri(n: String, a: IntArray) { j.optJSONArray(n)?.let { for (k in 0 until min(a.size, it.length())) a[k] = it.optInt(k) } }
         fun rb(n: String, a: BooleanArray) { j.optJSONArray(n)?.let { for (k in 0 until min(a.size, it.length())) a[k] = it.optBoolean(k) } }
         fun rf(n: String, a: FloatArray) { j.optJSONArray(n)?.let { for (k in 0 until min(a.size, it.length())) a[k] = it.optDouble(k).toFloat() } }

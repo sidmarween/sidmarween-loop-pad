@@ -157,8 +157,32 @@ object Engine {
     private var instRate = 0
 
     /** Ein Sequenzer-Schritt für die Instrumente (sample-genau). */
-    private fun instStep(n: Long, f: Long, w: Long, stepLen: Long) {
+    /** Zufall, der für Schritt [n] und Spur [salt] immer gleich ausfällt (−1 … 1). */
+    private fun grooveRand(n: Long, salt: Int): Float {
+        var x = n * 6364136223846793005L + salt * 1442695040888963407L
+        x = x xor (x ushr 29); x *= -0x4b47d5b1a1d3a2e5L; x = x xor (x ushr 32)
+        return ((x and 0xFFFFFF).toFloat() / 0xFFFFFF) * 2f - 1f
+    }
+
+    /** Verzögerung eines Schritts für Spur [inst]: eigener Swing (ungerade 1/16) + Humanize. */
+    private fun grooveOff(inst: Int, n: Long, stepLen: Long, salt: Int = 0): Long {
         val st = InstState
+        val sws = st.grooveSwing[inst].let { if (it < 0f) swing else it }
+        var off = if (Math.floorMod(n, 2L) == 1L) (sws * 0.5f * stepLen).toLong() else 0L
+        val ht = st.humTime[inst]
+        if (ht > 0.001f) off += ((grooveRand(n, inst * 31 + salt) * 0.5f + 0.5f) * ht * 0.02f * sampleRate).toLong()
+        return off
+    }
+
+    private fun grooveVel(inst: Int, n: Long, v: Float, salt: Int = 0): Float {
+        val hv = InstState.humVel[inst]
+        if (hv <= 0.001f) return v
+        return (v * (1f + grooveRand(n, inst * 57 + 13 + salt) * 0.3f * hv)).coerceIn(0.05f, 1f)
+    }
+
+    private fun instStep(n: Long, base: Long, w: Long, stepLen: Long) {
+        val st = InstState
+        var f = base + grooveOff(0, n, stepLen)
         val a = acid
         val al = st.acidLen.coerceIn(1, InstState.MAX)
         val step = Math.floorMod(n, al.toLong()).toInt()
@@ -168,7 +192,7 @@ object Engine {
             val tied = st.acidTie[step] && st.acidGate[prev]
             if (!tied) {
                 val slideIn = st.acidSlide[prev] && st.acidGate[prev]
-                a.queue(f, true, st.acidSemi[step], st.acidAcc[step], slideIn, st.acidVel[step])
+                a.queue(f, true, st.acidSemi[step], st.acidAcc[step], slideIn, grooveVel(0, n, st.acidVel[step]))
             }
             // Ton endet nach halbem Schritt – außer Slide oder der nächste Schritt hält ihn (Tie)
             val holds = st.acidGate[next] && (st.acidSlide[step] || st.acidTie[next])
@@ -181,6 +205,7 @@ object Engine {
             if (!t.on) continue
             val sl = t.len.coerceIn(1, InstState.MAX)
             val k = Math.floorMod(n, sl.toLong()).toInt()
+            f = base + grooveOff(2 + ti, n, stepLen)
             if (t.arp != 0) {
                 arpStep(t, sy, k, sl, f, stepLen)
                 continue
@@ -190,7 +215,7 @@ object Engine {
                 var len = 1
                 while (len < sl && t.gate[(k + len) % sl] && t.tie[(k + len) % sl]) len++
                 val tag = 1000 + k
-                sy.queue(f, true, t.semi[k], t.vel[k], tag, InstState.chordOf(t, k))
+                sy.queue(f, true, t.semi[k], grooveVel(2 + ti, n, t.vel[k]), tag, InstState.chordOf(t, k))
                 sy.queue(f + stepLen * len - stepLen / 8, false, 0, 0f, tag)
             }
         }
@@ -199,7 +224,10 @@ object Engine {
             val ds = Math.floorMod(n, st.drumLen.coerceIn(1, InstState.MAX).toLong()).toInt()
             for (v in 0 until InstState.DV) {
                 val x = st.drumSteps[v][ds]
-                if (x > 0 && !st.drumMute[v]) d.trigger(v, (f - w).toInt(), x == 2, st.drumVel[v][ds])
+                if (x > 0 && !st.drumMute[v]) {
+                    val fd = base + grooveOff(1, n, stepLen, v)
+                    d.trigger(v, (fd - w).toInt(), x == 2, grooveVel(1, n, st.drumVel[v][ds], v))
+                }
             }
         }
     }
@@ -410,9 +438,10 @@ object Engine {
             val base = stepFrame(origin, bar, n)
             if (base >= w + block) break
             val f = if (Math.floorMod(n, 2L) == 1L) base + sw else base
+            // Instrumente: ab dem ungeswingten Rasterpunkt, Swing und Humanize je Spur als Verzögerung
+            if (base >= w && base < w + block && base >= origin) instStep(n, base, w, bar / STEPS)
             if (f >= w && f < w + block && base >= origin) {
                 val step = Math.floorMod(n, STEPS.toLong()).toInt()
-                instStep(n, f, w, bar / STEPS)
                 for (p in 0 until PADS) {
                     val vel = seq[p][step]
                     if (vel <= 0f) continue
