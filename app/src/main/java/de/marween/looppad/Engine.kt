@@ -1987,6 +1987,11 @@ object Engine {
 
     /** Mikro-Versatz (ms): so viel kommt das Mikro-Signal gegenüber dem Gehörten zu spät an (eingemessen) – wird abgezogen. */
     @Volatile var micOffsetMs = 0f
+    /** true, sobald das Mikro-Timing eingemessen (oder bewusst übersprungen) wurde. */
+    @Volatile var micCalibrated = false
+
+    /** Mikro-Versatz in Frames: um so viel später liegt im Mikro-Puffer, was zu einem Moment gesungen/gespielt wurde. */
+    private fun micShift(): Long = (micOffsetMs * sampleRate / 1000f).toLong()
 
     /** Länge eines 1/16 in ms (für Umrechnungen). */
     fun stepMs(): Float = if (sampleRate > 0) seqBar().toFloat() / STEPS * 1000f / sampleRate else 125f
@@ -2378,7 +2383,7 @@ object Engine {
                     val d = loop.data
                     val len = d.size.toLong()
                     val t0 = inClock.nanosAt(take.cursor, sampleRate)
-                    var pos = Math.floorMod(outClock.frameAt(t0, sampleRate) - loop.start, len).toInt()
+                    var pos = Math.floorMod(outClock.frameAt(t0, sampleRate) - micShift() - loop.start, len).toInt()
                     var ri = Math.floorMod(take.cursor, ringSize.toLong()).toInt()
                     var c = take.cursor
                     while (c < end) {
@@ -2509,15 +2514,21 @@ object Engine {
             }
             val rawTo = max(take.fromIn, inClock.frameAt(upNanos, sampleRate))
             val m = masterLen
-            if (take.overdub || m <= 0L || take.oneShot) {
-                take.toIn = rawTo
+            val sh = micShift()
+            if (take.overdub) {
+                take.toIn = rawTo + max(0L, sh)
+            } else if (m <= 0L || take.oneShot) {
+                // freie Aufnahme: Anfang und Ende um den Mikro-Versatz verschieben (Inhalt passt zu den Tipp-Momenten)
+                take.fromQ = max(0L, take.fromIn + sh)
+                take.toIn = rawTo + sh
             } else {
                 val len = quantizeBars(rawTo - take.fromIn)
                 val unit = min(len, m)
                 val ms = masterStart
                 val pressOut = outClock.frameAt(take.downNanos, sampleRate)
                 val qOut = ms + Math.floorDiv(pressOut - ms + unit / 2, unit) * unit
-                val qIn = inClock.frameAt(outClock.nanosAt(qOut, sampleRate), sampleRate)
+                // Mikro-Versatz: was auf der Eins gesungen wurde, liegt so viel später im Mikro-Puffer
+                val qIn = inClock.frameAt(outClock.nanosAt(qOut, sampleRate), sampleRate) + sh
                 take.qOut = qOut
                 take.fromQ = qIn
                 take.toIn = qIn + len
@@ -3252,7 +3263,7 @@ object Engine {
                 t.fromOut = start
                 t.toOut = start + len
             } else {
-                val qIn = inClock.frameAt(outClock.nanosAt(start, sampleRate), sampleRate)
+                val qIn = inClock.frameAt(outClock.nanosAt(start, sampleRate), sampleRate) + micShift()
                 t.fromQ = qIn
                 t.cursor = qIn
                 t.toIn = qIn + len

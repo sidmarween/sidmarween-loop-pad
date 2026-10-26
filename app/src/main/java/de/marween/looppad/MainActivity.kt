@@ -192,6 +192,14 @@ class MainActivity : Activity() {
             when (id) {
                 "kit" -> SampleLibrary.KITS.firstOrNull()?.let { kit -> val empty = (0 until min(12, kit.files.size)).filter { !Engine.hasLoop(it) }; if (empty.isNotEmpty()) loadKit(kit, empty) }
                 "calib" -> calibrateMic()
+                "calibAsk" -> ui().setTitle("🎯 Mikro-Timing einmessen?")
+                    .setMessage("Damit deine Loops genau auf der Eins beginnen, misst die App einmal, wie spät das Mikrofon bei deinem Handy ankommt (8× zum Klick klatschen, ca. 10 Sekunden). Ohne das liegen Aufnahmen oft ein Stück versetzt.")
+                    .setPositiveButton("Einmessen") { _, _ -> calibrateMic() }
+                    .setNegativeButton("Ohne aufnehmen") { _, _ ->
+                        Engine.micCalibrated = true
+                        getSharedPreferences("marvpad", MODE_PRIVATE).edit().putFloat("micOffset", Engine.micOffsetMs).apply()
+                        hint("Okay – jetzt die Spur nochmal antippen. Einmessen geht jederzeit im Menü (Mikrofon).")
+                    }.show()
                 "beatbox" -> askMicCapture(1)
                 "hum" -> askMicCapture(0)
                 "autotune" -> showAutoTune()
@@ -263,6 +271,7 @@ class MainActivity : Activity() {
         AiStems.auto = prefs.getBoolean("aiAuto", true)
         Engine.autoTuneSpeed = prefs.getFloat("atSpeed", 0.25f)
         Engine.micOffsetMs = prefs.getFloat("micOffset", 0f)
+        Engine.micCalibrated = prefs.contains("micOffset")
         InstState.liveAmt = prefs.getFloat("liveAmt", 0f)
         InstState.liveFills = prefs.getBoolean("liveFills", true)
         InstState.livePhrase = prefs.getInt("livePhrase", 8)
@@ -4390,7 +4399,7 @@ class MainActivity : Activity() {
             (if (Engine.voiceSynthOn) "🎹 Stimmen-Synth: AN" else "🎹 Stimmen-Synth: singen → ein Synth spielt live mit") + " …",
             (if (Engine.harmOn) "👥 Harmonizer: AN" else "👥 Harmonizer: Begleitstimmen zu deiner Stimme") + " …",
             "✋ Klang-Sammler: Geräusche aufnehmen → eigenes Drumkit auf den Pads",
-            "🎯 Mikro-Timing einmessen (für Summen & Beatbox – jetzt: ${Engine.micOffsetMs.toInt()} ms)"
+            "🎯 Mikro-Timing einmessen (für Loops, Summen & Beatbox – jetzt: ${Engine.micOffsetMs.toInt()} ms)"
         )
         ui().setTitle("🎤 Mikro-Werkzeuge").setItems(items) { _, w ->
             when (w) {
@@ -4452,10 +4461,11 @@ class MainActivity : Activity() {
                         val med = offs[offs.size / 2]
                         val spread = offs[(offs.size * 3) / 4] - offs[offs.size / 4]
                         ui().setTitle("🎯 Ergebnis").setMessage(String.format(Locale.GERMANY,
-                            "%d Schläge erkannt.\nDein Mikro kommt %.0f ms %s an (Streuung %.0f ms).\n\nÜbernehmen? Summen und Beatbox werden dann um diesen Wert korrigiert.",
+                            "%d Schläge erkannt.\nDein Mikro kommt %.0f ms %s an (Streuung %.0f ms).\n\nÜbernehmen? Mikro-Aufnahmen (Loops, Loop Station, Overdubs), Summen und Beatbox werden dann um diesen Wert korrigiert.",
                             offs.size, abs(med), if (med >= 0) "zu spät" else "zu früh", spread))
                             .setPositiveButton("Übernehmen") { _, _ ->
                                 Engine.micOffsetMs = med.toFloat()
+                                Engine.micCalibrated = true
                                 getSharedPreferences("marvpad", MODE_PRIVATE).edit().putFloat("micOffset", med.toFloat()).apply()
                                 hint(String.format(Locale.GERMANY, "🎯 Mikro-Timing: %+.0f ms gespeichert", med))
                             }.setNegativeButton("Verwerfen", null).show()
@@ -4473,7 +4483,7 @@ class MainActivity : Activity() {
         if (!getSharedPreferences("marvpad", MODE_PRIVATE).contains("micOffset")) {
             ui().setTitle("🎯 Erst einmal einmessen?").setMessage("Damit Summen und Beatbox genau im Takt landen, misst die App einmal kurz, wie spät dein Mikro ankommt (8× zum Klick klatschen, 10 Sekunden). Danach geht es weiter.")
                 .setPositiveButton("Einmessen") { _, _ -> calibrateMic() }
-                .setNegativeButton("Später") { _, _ -> getSharedPreferences("marvpad", MODE_PRIVATE).edit().putFloat("micOffset", Engine.micOffsetMs).apply(); askMicCapture(kind) }
+                .setNegativeButton("Später") { _, _ -> Engine.micCalibrated = true; getSharedPreferences("marvpad", MODE_PRIVATE).edit().putFloat("micOffset", Engine.micOffsetMs).apply(); askMicCapture(kind) }
                 .show()
             return
         }

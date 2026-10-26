@@ -23,6 +23,8 @@ class LoopStationPanel(private val host: View) {
     var isOpen = false
         private set
     var onHint: ((String) -> Unit)? = null
+    /** Erste Mikro-Aufnahme ohne eingemessenes Mikro-Timing: erst einmessen lassen. */
+    var onNeedMicCalib: (() -> Unit)? = null
 
     private val d = host.resources.displayMetrics.density
     private fun dp(v: Float) = v * d
@@ -176,6 +178,10 @@ class LoopStationPanel(private val host: View) {
         val st = Engine.state(p)
         if (st == Engine.PadState.MUTED && Engine.takesIdle(p)) {
             Engine.launchToggle(p)
+            return
+        }
+        if (st == Engine.PadState.EMPTY && Engine.padSource[p] == 0 && !Engine.micCalibrated && onNeedMicCalib != null) {
+            onNeedMicCalib?.invoke()
             return
         }
         val oldBars = Engine.liveBars

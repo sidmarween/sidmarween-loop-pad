@@ -9114,7 +9114,7 @@ class PadView(context: Context) : View(context) {
     fun closeSlicer() { slicer.close(); invalidate() }
 
     /** Loop Station: 4 Spuren mit großem Rec/Dub-Knopf (Pads 13–16). */
-    private val station = LoopStationPanel(this).also { it.onHint = { m -> hint(m) } }
+    private val station = LoopStationPanel(this).also { it.onHint = { m -> hint(m) }; it.onNeedMicCalib = { onLessonAction?.invoke("calibAsk") } }
     fun openStation() { closeFocus(); station.open(); invalidate() }
     val stationOpen: Boolean get() = station.isOpen
     fun closeStation() { station.close(); invalidate() }
