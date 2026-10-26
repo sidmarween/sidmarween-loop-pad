@@ -47,7 +47,24 @@ object InstPresets {
         Kit("Percussion", "Latin Percussion", 0.08f, mapOf("LT" to kv("Conga", 0.45f), "MT" to kv("Conga", 0.55f), "HT" to kv("Bongo"), "RS" to kv("Cowbell", l = 0.65f), "CH" to kv("Shaker", l = 0.6f),
             "OH" to kv("Tambourin", l = 0.55f), "RD" to kv("Agogo", l = 0.6f), "CP" to kv("Snap", l = 0.6f), "BD" to kv("Deep", 0.5f, 0.4f, 0.75f))),
         Kit("Percussion", "Holz & Glocken", 0.05f, mapOf("RS" to kv("Woodblock"), "RD" to kv("Agogo"), "CH" to kv("Shaker"), "OH" to kv("Tambourin"), "LT" to kv("Bongo", 0.4f), "MT" to kv("Bongo", 0.5f), "HT" to kv("Bongo", 0.6f), "CP" to kv("Snap"))),
-        Kit("Percussion", "80er Syn-Drums", 0.2f, mapOf("LT" to kv("Syn-Tom", 0.45f), "MT" to kv("Syn-Tom", 0.5f), "HT" to kv("Syn-Tom", 0.55f), "SD" to kv("909", 0.55f, 0.6f), "CP" to kv("Big Clap"), "CR" to kv("Splash")))
+        Kit("Percussion", "80er Syn-Drums", 0.2f, mapOf("LT" to kv("Syn-Tom", 0.45f), "MT" to kv("Syn-Tom", 0.5f), "HT" to kv("Syn-Tom", 0.55f), "SD" to kv("909", 0.55f, 0.6f), "CP" to kv("Big Clap"), "CR" to kv("Splash"))),
+        Kit("Akustisch", "Studio-Drumset", 0.05f, mapOf("BD" to kv("Akustik", 0.5f, 0.5f, 0.9f), "SD" to kv("Akustik", 0.5f, 0.5f, 0.85f), "LT" to kv("Akustik-Tom", 0.45f), "MT" to kv("Akustik-Tom", 0.5f), "HT" to kv("Akustik-Tom", 0.55f),
+            "CH" to kv("Akustik", l = 0.65f), "OH" to kv("Akustik", d = 0.45f, l = 0.6f), "RD" to kv("Ride-Glocke", l = 0.55f), "CR" to kv("Crash", l = 0.65f), "CP" to kv("Hände (Gruppe)", l = 0.7f), "RS" to kv("909 Rim", 0.45f, 0.4f, 0.6f))),
+        Kit("Akustisch", "Jazz mit Besen", 0.0f, mapOf("BD" to kv("Akustik", 0.45f, 0.4f, 0.6f), "SD" to kv("Besen", 0.5f, 0.5f, 0.8f), "CH" to kv("Akustik", 0.45f, 0.4f, 0.55f), "RD" to kv("Ride", 0.45f, 0.7f, 0.65f),
+            "LT" to kv("Akustik-Tom", 0.4f), "MT" to kv("Akustik-Tom", 0.48f), "HT" to kv("Akustik-Tom", 0.55f), "RS" to kv("Woodblock", 0.45f, 0.3f, 0.5f))),
+        Kit("Akustisch", "Disco Live", 0.1f, mapOf("BD" to kv("Punchy House", 0.5f, 0.4f, 0.9f), "SD" to kv("Akustik", 0.55f, 0.45f, 0.85f), "CP" to kv("Hände (Gruppe)", l = 0.6f), "CH" to kv("Akustik", l = 0.6f), "OH" to kv("Akustik", d = 0.35f, l = 0.6f),
+            "LT" to kv("Akustik-Tom", 0.45f), "MT" to kv("Akustik-Tom", 0.52f), "HT" to kv("Akustik-Tom", 0.6f), "RS" to kv("Cowbell", l = 0.5f))),
+        Kit("Techno", "Psytrance", 0.25f, mapOf("BD" to kv("Psytrance", 0.5f, 0.45f, 0.95f), "CP" to kv("909 Clap", 0.55f, 0.35f, 0.7f), "CH" to kv("909", 0.6f, 0.2f, 0.6f), "OH" to kv("909", 0.55f, 0.35f, 0.65f), "RD" to kv("Ride", 0.5f, 0.5f, 0.55f))),
+        Kit("House", "UK Garage", 0.12f, mapOf("BD" to kv("Punchy House", 0.55f, 0.4f, 0.9f), "SD" to kv("Electro Rim", 0.5f, 0.5f, 0.8f), "RS" to kv("Clave", 0.5f, 0.3f, 0.55f), "CH" to kv("Shaker", l = 0.6f), "OH" to kv("808", d = 0.4f, l = 0.6f), "CP" to kv("Snap", l = 0.6f))),
+        Kit("House", "Amapiano", 0.1f, mapOf("BD" to kv("Deep", 0.5f, 0.5f, 0.85f), "LT" to kv("Log Drum", 0.45f, 0.55f, 0.9f), "MT" to kv("Log Drum", 0.5f, 0.5f, 0.85f), "HT" to kv("Log Drum", 0.55f, 0.45f, 0.8f),
+            "RS" to kv("Woodblock", l = 0.55f), "CP" to kv("Snap", l = 0.65f), "CH" to kv("Shaker", l = 0.55f), "OH" to kv("Cabasa", l = 0.55f))),
+        Kit("Hip-Hop & Trap", "Trap verzerrt", 0.35f, mapOf("BD" to kv("808 verzerrt", 0.4f, 0.85f, 0.9f), "SD" to kv("Trap", 0.55f), "CP" to kv("Hände (Gruppe)", l = 0.75f), "CH" to kv("808", 0.62f, 0.2f, 0.6f), "OH" to kv("808", 0.6f, 0.35f, 0.55f))),
+        Kit("Hip-Hop & Trap", "Reggaeton", 0.15f, mapOf("BD" to kv("808 Boom", 0.55f, 0.35f, 0.9f), "SD" to kv("Electro Rim", 0.5f, 0.45f, 0.8f), "CP" to kv("808 Clap", l = 0.7f), "CH" to kv("808", l = 0.6f), "RS" to kv("Clave", l = 0.5f))),
+        Kit("Percussion", "80er Gated", 0.2f, mapOf("BD" to kv("Punchy House", 0.5f, 0.45f, 0.9f), "SD" to kv("909", 0.5f, 0.5f, 0.75f), "CP" to kv("Gated Clap", 0.5f, 0.5f, 0.85f), "LT" to kv("Syn-Tom", 0.45f), "MT" to kv("Syn-Tom", 0.52f), "HT" to kv("Syn-Tom", 0.6f), "CR" to kv("China", l = 0.6f))),
+        Kit("Percussion", "Timbales & Guiro", 0.05f, mapOf("LT" to kv("Timbale", 0.45f), "MT" to kv("Timbale", 0.5f), "HT" to kv("Timbale", 0.58f), "RS" to kv("Guiro", l = 0.6f), "RD" to kv("Ride-Glocke", l = 0.55f), "CH" to kv("Cabasa", l = 0.55f),
+            "OH" to kv("Tambourin", l = 0.5f), "BD" to kv("Deep", 0.5f, 0.4f, 0.75f), "CP" to kv("Snap", l = 0.6f))),
+        Kit("Percussion", "Glocken & Ambient", 0.0f, mapOf("RS" to kv("Triangel", l = 0.45f), "RD" to kv("FM-Glocke", l = 0.55f), "CH" to kv("Cabasa", l = 0.5f), "OH" to kv("Shaker", d = 0.6f, l = 0.5f), "LT" to kv("Timbale", 0.4f, 0.6f, 0.6f),
+            "MT" to kv("Bongo", l = 0.6f), "HT" to kv("Bongo", 0.6f, l = 0.6f), "CP" to kv("Snap", l = 0.55f), "BD" to kv("Deep", 0.48f, 0.6f, 0.75f), "CR" to kv("Reverse", l = 0.6f)))
     )
 
     fun applyKit(k: Kit) {
@@ -78,7 +95,15 @@ object InstPresets {
         AcidSound("Weicher Pluck", 0.3f, 0.4f, 0.55f, 0.15f, 0.4f, 0.2f, 0.05f),
         AcidSound("Rechteck-Acid", 0.3f, 0.8f, 0.65f, 0.3f, 0.65f, 0.25f, 0.3f, square = true),
         AcidSound("Langer Glide", 0.3f, 0.78f, 0.55f, 0.55f, 0.55f, 0.75f, 0.2f),
-        AcidSound("Hoch & spitz", 0.45f, 0.85f, 0.65f, 0.25f, 0.7f, 0.2f, 0.3f, oct = 1)
+        AcidSound("Hoch & spitz", 0.45f, 0.85f, 0.65f, 0.25f, 0.7f, 0.2f, 0.3f, oct = 1),
+        AcidSound("Hardfloor-Quietschen", 0.3f, 0.93f, 0.85f, 0.4f, 0.85f, 0.25f, 0.4f),
+        AcidSound("Psy-Acid (kurz & rollend)", 0.32f, 0.82f, 0.7f, 0.1f, 0.6f, 0.1f, 0.35f),
+        AcidSound("Nasal", 0.4f, 0.65f, 0.3f, 0.3f, 0.5f, 0.2f, 0.25f, square = true),
+        AcidSound("Fetter tiefer Saw", 0.2f, 0.5f, 0.45f, 0.45f, 0.5f, 0.25f, 0.45f, oct = -1),
+        AcidSound("Trance-Pluck", 0.38f, 0.6f, 0.75f, 0.12f, 0.55f, 0.15f, 0.15f, oct = 1),
+        AcidSound("Detroit warm", 0.26f, 0.55f, 0.4f, 0.4f, 0.45f, 0.3f, 0.1f),
+        AcidSound("Acid Rave (Drive)", 0.4f, 0.88f, 0.8f, 0.28f, 0.8f, 0.2f, 1.0f),
+        AcidSound("Unterwasser", 0.15f, 0.92f, 0.65f, 0.65f, 0.6f, 0.5f, 0.1f)
     )
 
     fun applyAcidSound(a: AcidSound) {
@@ -134,6 +159,14 @@ object InstPresets {
         Drum("Percussion", "Cowbell Groove", 118, 0.08f, mapOf("BD" to "X...X...X...X...", "RS" to "..x...x...x.xx..", "CP" to "....X.......X...", "CH" to "x.x.x.x.x.x.x.x.", "OH" to "..............x."), kit = "808 Klassik"),
         Drum("Percussion", "Baile Funk", 130, 0f, mapOf("BD" to "X..X..X...X..X..", "SD" to "...x..x....x..x.", "CP" to "....X.......X...", "CH" to "x.x.x.x.x.x.x.x.", "LT" to "......x.......x."), kit = "808 Klassik"),
         Drum("Percussion", "Amapiano", 112, 0.15f, mapOf("BD" to "X.......X.......", "RS" to "..x..x...x..x...", "CP" to "....x.......x...", "CH" to "xxxxxxxxxxxxxxxx", "LT" to "...X......X..X..", "OH" to "..x...x...x...x."), kit = "Deep House"),
+        Drum("Percussion", "Psytrance", 145, 0f, mapOf("BD" to "X...X...X...X...", "OH" to "..x...x...x...x.", "CH" to "xxxxxxxxxxxxxxxx", "CP" to "....x.......x...", "RD" to "x...x...x...x..."), kit = "Psytrance"),
+        Drum("Percussion", "Jazz Swing (Besen)", 120, 0.6f, mapOf("RD" to "x..xx..xx..xx..x", "SD" to "..x.......x...x.", "CH" to "....x.......x...", "BD" to "X.......X......."), kit = "Jazz mit Besen"),
+        Drum("Percussion", "Amapiano Log Drum", 113, 0.15f, mapOf("BD" to "X.......X.......", "LT" to "...X......X..X..", "MT" to "......x.........", "RS" to "..x..x...x..x...", "CP" to "....x.......x...", "CH" to "xxxxxxxxxxxxxxxx", "OH" to "..x...x...x...x."), kit = "Amapiano"),
+        Drum("Percussion", "Reggaeton Perreo", 96, 0f, mapOf("BD" to "X...X...X...X...", "SD" to "...x..x....x..x.", "CP" to "...x..x....x..x.", "CH" to "x.x.x.x.x.x.x.x."), kit = "Reggaeton"),
+        Drum("Percussion", "UK Garage Shuffle", 132, 0.35f, mapOf("BD" to "X......x..X.....", "SD" to "....X.......X...", "RS" to ".......x.......x", "CH" to "..x...x...x...x.", "OH" to "..............x."), kit = "UK Garage"),
+        Drum("Percussion", "80er Power", 110, 0f, mapOf("BD" to "X.......X.X.....", "CP" to "....X.......X...", "CH" to "x.x.x.x.x.x.x.x.", "CR" to "X..............."), kit = "80er Gated"),
+        Drum("Percussion", "Disco Live", 120, 0.05f, mapOf("BD" to "X...X...X...X...", "SD" to "....X.......X...", "OH" to "..x...x...x...x.", "CH" to "x...x...x...x...", "CP" to "............x..."), kit = "Disco Live"),
+        Drum("Percussion", "Timbales Salsa", 98, 0.08f, mapOf("RD" to "x.xx.x.xx.x.xx.x", "LT" to "......x.......x.", "HT" to "..x.......x.x...", "RS" to "x...x...x...x...", "CH" to "xxxxxxxxxxxxxxxx", "BD" to "X.......X......."), kit = "Timbales & Guiro"),
         Drum("Fills", "Fill · Toms", 0, 0f, mapOf("BD" to "X...............", "HT" to "........xx......", "MT" to "..........xx....", "LT" to "............xxXX", "CR" to "X...............")),
         Drum("Fills", "Fill · Snare-Roll", 0, 0f, mapOf("BD" to "X.......X.......", "SD" to "........xxxxXXXX", "CR" to "X..............."))
     )
@@ -161,6 +194,14 @@ object InstPresets {
         Acid("Hart", "Screamer", 140, "C+* C C+ C C+* C D#+ C C+* C G C F+* C D#+ C", 0.45f, 0.92f, 0.85f, 0.2f, 0.85f, 0.15f),
         Acid("Hart", "Gabber Line", 170, "C* C C C D#* C C C C* C C C G-* C C C", 0.4f, 0.9f, 0.8f, 0.18f, 0.8f, 0.1f),
         Acid("Hart", "Warehouse", 136, "C* C - C C+ - C D#* C - C F - C G~ C+", 0.38f, 0.88f, 0.75f, 0.25f, 0.75f, 0.2f),
+        Acid("Trance & Psy", "Psy Roller", 145, "- C C C - C C C - C C C - C C+ C", 0.3f, 0.8f, 0.7f, 0.12f, 0.6f, 0.1f),
+        Acid("Trance & Psy", "Galloping", 140, "C - C C C - C C C* - C C D# - C C", 0.32f, 0.82f, 0.72f, 0.15f, 0.65f, 0.12f),
+        Acid("Trance & Psy", "Trance Arp", 138, "C G C+ G D# G C+ G C* G C+ G A#- F C+ F", 0.36f, 0.7f, 0.6f, 0.2f, 0.55f, 0.15f),
+        Acid("Minimal", "Ein-Ton", 126, "C - - C* - - C - C - - C* - C - -", 0.28f, 0.84f, 0.7f, 0.3f, 0.7f, 0.2f),
+        Acid("Minimal", "Tropfen", 124, "- - C+* - - C - - - D# - - C~ G- - -", 0.24f, 0.9f, 0.75f, 0.35f, 0.7f, 0.3f),
+        Acid("Funky", "Disco Acid", 120, "C C+ - C - C+ C A#- C C+ - C D#~ F G -", 0.33f, 0.72f, 0.55f, 0.3f, 0.55f, 0.25f),
+        Acid("Dunkel", "Breakdown", 122, "C~ _ _ _ D#~ _ _ _ C~ _ _ _ G-~ _ A#- _", 0.22f, 0.86f, 0.5f, 0.7f, 0.5f, 0.6f),
+        Acid("Hart", "Rave Stab", 150, "C* - - C* - - C* - C* - C* - C+* - C* -", 0.42f, 0.9f, 0.85f, 0.18f, 0.9f, 0.1f),
         Acid("2 Takte", "Journey (32)", 126, "C* C C+ C - C~ D# C C - G-~ A#- C* C+ C F C* C C+ C - C~ D# C D#* D# C+ D# F~ G - C", 0.3f, 0.82f, 0.68f, 0.35f, 0.7f, 0.25f),
         Acid("2 Takte", "Question & Answer (32)", 124, "C* - C C+ - C D#~ F - C - C A#- - C+ - C* - C C+ - C G~ G# - G - F D#~ C -", 0.3f, 0.78f, 0.6f, 0.32f, 0.65f, 0.3f)
     )

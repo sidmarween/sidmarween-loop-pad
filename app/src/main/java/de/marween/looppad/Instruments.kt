@@ -90,17 +90,17 @@ object InstState {
     /** Klang-Modell je Stimme (0 = 909; siehe [drumModelNames]). */
     val drumModel = IntArray(DV)
     val drumModelNames: Array<Array<String>> = arrayOf(
-        arrayOf("909", "808 Boom", "Techno Rumble", "Hardstyle", "Deep", "Minimal Click", "Lo-Fi"),
-        arrayOf("909", "808", "Trap", "Lo-Fi"),
-        arrayOf("909 Tom", "Conga", "Bongo", "Syn-Tom"),
-        arrayOf("909 Tom", "Conga", "Bongo", "Syn-Tom"),
-        arrayOf("909 Tom", "Conga", "Bongo", "Syn-Tom"),
-        arrayOf("909 Rim", "Clave", "Cowbell", "Woodblock"),
-        arrayOf("909 Clap", "808 Clap", "Snap", "Big Clap"),
-        arrayOf("909", "808", "Shaker", "Tambourin"),
-        arrayOf("909", "808", "Shaker", "Tambourin"),
-        arrayOf("Crash", "Splash"),
-        arrayOf("Ride", "Agogo")
+        arrayOf("909", "808 Boom", "Techno Rumble", "Hardstyle", "Deep", "Minimal Click", "Lo-Fi", "Punchy House", "808 verzerrt", "Akustik", "Psytrance"),
+        arrayOf("909", "808", "Trap", "Lo-Fi", "Akustik", "Electro Rim", "Besen"),
+        arrayOf("909 Tom", "Conga", "Bongo", "Syn-Tom", "Akustik-Tom", "Timbale", "Log Drum"),
+        arrayOf("909 Tom", "Conga", "Bongo", "Syn-Tom", "Akustik-Tom", "Timbale", "Log Drum"),
+        arrayOf("909 Tom", "Conga", "Bongo", "Syn-Tom", "Akustik-Tom", "Timbale", "Log Drum"),
+        arrayOf("909 Rim", "Clave", "Cowbell", "Woodblock", "Triangel", "Guiro"),
+        arrayOf("909 Clap", "808 Clap", "Snap", "Big Clap", "Gated Clap", "Hände (Gruppe)"),
+        arrayOf("909", "808", "Shaker", "Tambourin", "Akustik", "Cabasa"),
+        arrayOf("909", "808", "Shaker", "Tambourin", "Akustik", "Cabasa"),
+        arrayOf("Crash", "Splash", "China", "Reverse"),
+        arrayOf("Ride", "Agogo", "Ride-Glocke", "FM-Glocke")
     )
     fun drumModelName(v: Int): String = drumModelNames[v][drumModel[v].coerceIn(0, drumModelNames[v].size - 1)]
     val drumDecay = FloatArray(DV) { 0.5f }
@@ -850,12 +850,21 @@ class DrumMachine(private val sr: Int) {
     // ---------------------------------------------------------------- weitere Klang-Modelle (808, Percussion …)
     private var altS = 0.0
     private var altEnv = 0.0
-    private val gF = DoubleArray(16)
-    private val gHz = doubleArrayOf(250.0, 800.0, 1000.0, 1200.0, 1400.0, 2000.0, 2500.0, 3000.0, 5000.0, 6000.0, 7000.0, 8000.0, 9000.0, 4000.0, 600.0, 11000.0)
+    private val gF = DoubleArray(22)
+    private val gHz = doubleArrayOf(250.0, 800.0, 1000.0, 1200.0, 1400.0, 2000.0, 2500.0, 3000.0, 5000.0, 6000.0, 7000.0, 8000.0, 9000.0, 4000.0, 600.0, 11000.0,
+        150.0, 350.0, 1500.0, 2200.0, 3500.0, 4500.0)
     private fun gx(i: Int): Double { if (gF[i] == 0.0) gF[i] = g(gHz[i]); return gF[i] }
     private val G250 = 0; private val G800 = 1; private val G1000 = 2; private val G1200 = 3; private val G1400 = 4; private val G2000 = 5
     private val G2500 = 6; private val G3000 = 7; private val G5000 = 8; private val G6000 = 9; private val G7000 = 10; private val G8000 = 11
     private val G9000 = 12; private val G4000 = 13; private val G600 = 14; private val G11000 = 15
+    private val G150 = 16; private val G350 = 17; private val G1500 = 18; private val G2200 = 19; private val G3500 = 20; private val G4500 = 21
+
+    /** Hüllkurve eines Hand-Claps: drei schnelle Anschläge ab [t0], Abstand [gap]. */
+    private fun clapEnv(t: Double, t0: Double, gap: Double): Double {
+        var e = 0.0
+        for (d in 0..2) { val td = t - t0 - d * gap; if (td >= 0) e += exp(-td / 0.0045) }
+        return e
+    }
 
     /** Klang-Modelle 1… je Stimme (0 = 909, im Hauptteil). Ergebnis in [altS] und [altEnv]. */
     private fun altVoice(vc: Voice, v: Int, m: Int, t: Double, tune: Double, dec: Double) {
@@ -901,13 +910,43 @@ class DrumMachine(private val sr: Int) {
                         vc.f1.run(noise(), gx(G5000), 0.8)
                         s = sin(2 * PI * vc.p1) + vc.f1.hp * exp(-t / 0.0015) * 0.9
                     }
-                    else -> { // Lo-Fi: Wumms mit Rauschen, leicht zerbröselt
+                    6 -> { // Lo-Fi: Wumms mit Rauschen, leicht zerbröselt
                         val f = 52.0 * 2.0.pow((tune - 0.5) * 1.2) * (1.0 + 2.0 * exp(-t / 0.02))
                         vc.p1 += f / sr
                         env = exp(-t / (0.15 + dec * 0.5))
                         vc.f1.run(noise(), gx(G250), 0.9)
                         val x = sin(2 * PI * vc.p1) + vc.f1.lp * exp(-t / 0.03) * 1.2
                         s = Math.round(x * 20.0) / 20.0
+                    }
+                    7 -> { // Punchy House: kurzer Halt, dann Abklingen, knackiger Anschlag
+                        val f = 50.0 * 2.0.pow((tune - 0.5) * 1.2) * (1.0 + 3.2 * exp(-t / 0.01) + 0.4 * exp(-t / 0.05))
+                        vc.p1 += f / sr
+                        env = if (t < 0.04) 1.0 else exp(-(t - 0.04) / (0.12 + dec * 0.6))
+                        vc.f1.run(noise(), gx(G3000), 1.1)
+                        s = tanh(sin(2 * PI * vc.p1) * 1.7) + vc.f1.bp * exp(-t / 0.0018) * 0.7
+                    }
+                    8 -> { // 808 verzerrt: lang, gesättigt, oben weich abgerundet
+                        val f = 46.0 * 2.0.pow((tune - 0.5) * 1.2) * (1.0 + 1.6 * exp(-t / 0.025))
+                        vc.p1 += f / sr
+                        env = exp(-t / (0.4 + dec * 1.6))
+                        vc.f1.run(tanh(sin(2 * PI * vc.p1) * 4.0), gx(G2000), 0.75)
+                        s = vc.f1.lp * 0.85
+                    }
+                    9 -> { // Akustik: Fell-Grundton, zweite Mode, Schlägel + Luftstoß
+                        val f = 58.0 * 2.0.pow((tune - 0.5) * 1.2) * (1.0 + 0.3 * exp(-t / 0.02))
+                        vc.p1 += f / sr
+                        env = exp(-t / (0.12 + dec * 0.35))
+                        vc.f1.run(noise(), gx(G3000), 1.3)
+                        vc.f2.run(noise(), gx(G250), 0.8)
+                        s = sin(2 * PI * vc.p1) + 0.35 * sin(2 * PI * vc.p1 * 1.59) * exp(-t / 0.05) +
+                            vc.f1.bp * exp(-t / 0.0015) * 0.9 + vc.f2.lp * exp(-t / 0.02) * 0.8
+                    }
+                    else -> { // Psytrance: sehr kurz, steiler Pitch-Sweep
+                        val f = 55.0 * 2.0.pow((tune - 0.5) * 1.2) * (1.0 + 5.0 * exp(-t / 0.008))
+                        vc.p1 += f / sr
+                        env = exp(-t / (0.07 + dec * 0.18))
+                        vc.f1.run(noise(), gx(G5000), 0.8)
+                        s = tanh(sin(2 * PI * vc.p1) * 1.4) + vc.f1.hp * exp(-t / 0.001) * 0.6
                     }
                 }
             }
@@ -931,13 +970,35 @@ class DrumMachine(private val sr: Int) {
                         env = 1.0; s = tone + vc.f2.bp * e * 1.6
                         if (t > 0.1 + dec * 0.8) env = 0.0
                     }
-                    else -> { // Lo-Fi: dumpf, körnig
+                    3 -> { // Lo-Fi: dumpf, körnig
                         vc.p1 += 180.0 * ft / sr
                         val tone = sin(2 * PI * vc.p1) * exp(-t / 0.05) * 0.7
                         vc.f1.run(noise(), gx(G5000), 0.8)
                         val x = tone + vc.f1.lp * exp(-t / (0.08 + dec * 0.2))
                         env = 1.0; s = Math.round(x * 12.0) / 12.0
                         if (t > 0.08 + dec * 0.6) env = 0.0
+                    }
+                    4 -> { // Akustik: zwei Fell-Moden, Snare-Teppich, Stock-Anschlag
+                        vc.p1 += 190.0 * ft / sr; vc.p2 += 330.0 * ft / sr
+                        val tone = (sin(2 * PI * vc.p1) * 0.6 + sin(2 * PI * vc.p2) * 0.35) * exp(-t / 0.06)
+                        vc.f1.run(noise(), gx(G4500), 0.8)
+                        vc.f2.run(vc.f1.bp, gx(G3000), 1.0)
+                        val wires = vc.f2.hp * exp(-t / (0.12 + dec * 0.3)) * 1.6
+                        env = 1.0; s = tone + wires + noise() * exp(-t / 0.0015) * 0.4
+                        if (t > 0.12 + dec * 0.9) env = 0.0
+                    }
+                    5 -> { // Electro Rim: harter Ton, kurzer Teppich, Rand-Klick
+                        vc.p1 += 230.0 * ft / sr; vc.p2 += 1700.0 * ft / sr
+                        vc.f1.run(noise(), gx(G4000), 0.9)
+                        env = 1.0
+                        s = tanh(sin(2 * PI * vc.p1) * 3.0) * exp(-t / 0.04) * 0.6 + vc.f1.hp * exp(-t / (0.05 + dec * 0.1)) * 0.9 +
+                            sin(2 * PI * vc.p2) * exp(-t / 0.006) * 0.4
+                        if (t > 0.06 + dec * 0.4) env = 0.0
+                    }
+                    else -> { // Besen: weiches Wischen
+                        vc.f1.run(noise(), gx(G4000), 2.0)
+                        env = (1 - exp(-t / 0.012)) * exp(-t / (0.12 + dec * 0.3))
+                        s = vc.f1.bp * 2.4
                     }
                 }
             }
@@ -958,7 +1019,7 @@ class DrumMachine(private val sr: Int) {
                         vc.f1.run(noise(), gx(G3000), 1.0)
                         s = sin(2 * PI * vc.p1) + vc.f1.bp * exp(-t / 0.002) * 0.6
                     }
-                    else -> { // Syn-Tom (Simmons): „Piuu“
+                    3 -> { // Syn-Tom (Simmons): „Piuu“
                         val f = doubleArrayOf(110.0, 160.0, 230.0)[k] * ft
                         vc.p1 += f * (1 + 1.5 * exp(-t / 0.12)) / sr
                         env = exp(-t / (0.2 + dec * 0.6))
@@ -966,6 +1027,28 @@ class DrumMachine(private val sr: Int) {
                         val tri = 4 * abs(ph - 0.5) - 1
                         vc.f1.run(noise(), gx(G1200), 1.5)
                         s = tri * 0.9 + vc.f1.bp * exp(-t / 0.01) * 0.4
+                    }
+                    4 -> { // Akustik-Tom: Grundton + Fell-Mode, Stock
+                        val f = doubleArrayOf(100.0, 140.0, 190.0)[k] * ft
+                        vc.p1 += f * (1 + 0.08 * exp(-t / 0.05)) / sr
+                        env = exp(-t / (0.25 + dec * 0.6))
+                        vc.f1.run(noise(), gx(G2000), 1.2)
+                        s = sin(2 * PI * vc.p1) + 0.3 * sin(2 * PI * vc.p1 * 1.59) * exp(-t / 0.08) + vc.f1.bp * exp(-t / 0.002) * 0.4
+                    }
+                    5 -> { // Timbale: hell, metallisch klingend
+                        val f = doubleArrayOf(300.0, 400.0, 520.0)[k] * ft
+                        vc.p1 += f / sr
+                        env = exp(-t / (0.12 + dec * 0.4))
+                        vc.f1.run(noise(), gx(G3000), 1.0)
+                        s = sin(2 * PI * vc.p1) + 0.45 * sin(2 * PI * vc.p1 * 2.31) * exp(-t / 0.1) + 0.25 * sin(2 * PI * vc.p1 * 3.7) * exp(-t / 0.05) +
+                            vc.f1.bp * exp(-t / 0.0025) * 0.5
+                    }
+                    else -> { // Log Drum (Amapiano): tonaler Holz-Bass
+                        val f = doubleArrayOf(65.0, 82.0, 110.0)[k] * ft
+                        vc.p1 += f * (1 + 0.25 * exp(-t / 0.015)) / sr
+                        env = exp(-t / (0.3 + dec * 0.8))
+                        s = sin(2 * PI * vc.p1) + 0.4 * sin(4 * PI * vc.p1) * exp(-t / 0.04) + 0.25 * sin(6 * PI * vc.p1) * exp(-t / 0.02)
+                        s = tanh(s * 1.2)
                     }
                 }
             }
@@ -984,11 +1067,23 @@ class DrumMachine(private val sr: Int) {
                         env = 0.6 * exp(-t / 0.01) + 0.4 * exp(-t / (0.06 + dec * 0.3))
                         s = vc.f1.bp * 1.8
                     }
-                    else -> { // Woodblock
+                    3 -> { // Woodblock
                         vc.p1 += 1100.0 * ft * (1 + 0.05 * exp(-t / 0.004)) / sr
                         vc.p2 += 1100.0 * 2.7 * ft / sr
                         env = exp(-t / (0.03 + dec * 0.05))
                         s = sin(2 * PI * vc.p1) * 0.8 + sin(2 * PI * vc.p2) * 0.25 * exp(-t / 0.008)
+                    }
+                    4 -> { // Triangel: unharmonische Teiltöne, langer Ausklang
+                        env = exp(-t / (0.6 + dec * 1.2))
+                        val a = 2 * PI * t * ft
+                        s = sin(a * 4200.0) * 0.5 + sin(a * 5900.0) * 0.3 * exp(-t / 0.4) + sin(a * 7800.0) * 0.2 * exp(-t / 0.2)
+                    }
+                    else -> { // Guiro: geriffeltes Kratzen
+                        vc.f1.run(noise(), gx(G3000), 1.0)
+                        val len = 0.15 + dec * 0.2
+                        val rasp = if ((t * 38.0 * ft) % 1.0 < 0.5) 1.0 else 0.25
+                        env = if (t < len) (1 - exp(-t / 0.01)) * rasp else 0.0
+                        s = vc.f1.bp * 1.8
                     }
                 }
             }
@@ -1009,7 +1104,7 @@ class DrumMachine(private val sr: Int) {
                         env = exp(-t / (0.012 + dec * 0.02))
                         s = vc.f1.bp * 2.2 + sin(2 * PI * vc.p1) * 0.25
                     }
-                    else -> { // Big Clap: breiter, mit Raum
+                    3 -> { // Big Clap: breiter, mit Raum
                         vc.f1.run(noise(), gx(G1400), 0.5)
                         vc.f2.run(noise(), gx(G3000), 0.8)
                         val band = vc.f1.bp + vc.f2.bp * 0.6
@@ -1018,6 +1113,24 @@ class DrumMachine(private val sr: Int) {
                         if (t > 0.035) e += exp(-(t - 0.035) / (0.3 + dec * 0.8)) * 0.7
                         env = 1.0; s = band * e * 2.0
                         if (t > 0.4 + dec * 2.5) env = 0.0
+                    }
+                    4 -> { // Gated Clap: dichter Raum, der abrupt (aber weich) endet – 80er
+                        vc.f1.run(noise(), gx(G1500), 0.6)
+                        val gate = 0.12 + dec * 0.25
+                        var e = clapEnv(t, 0.0, 0.009)
+                        if (t > 0.02) e += 0.55 * (if (t < gate) 1.0 else exp(-(t - gate) / 0.008))
+                        env = 1.0; s = vc.f1.bp * e * 2.2
+                        if (t > gate + 0.08) env = 0.0
+                    }
+                    else -> { // Hände (Gruppe): drei Klatscher, leicht versetzt und verschieden hell
+                        vc.f1.run(noise(), gx(G1000), 0.7)
+                        vc.f2.run(noise(), gx(G1500), 0.7)
+                        vc.f3.run(noise(), gx(G2200), 0.7)
+                        var e1 = clapEnv(t, 0.0, 0.008); var e2 = clapEnv(t, 0.006, 0.009); var e3 = clapEnv(t, 0.014, 0.007)
+                        val tail = if (t > 0.03) exp(-(t - 0.03) / (0.1 + dec * 0.3)) * 0.5 else 0.0
+                        e1 += tail; e2 += tail; e3 += tail
+                        env = 1.0; s = (vc.f1.bp * e1 + vc.f2.bp * e2 + vc.f3.bp * e3) * 1.4
+                        if (t > 0.15 + dec * 1.2) env = 0.0
                     }
                 }
             }
@@ -1037,26 +1150,71 @@ class DrumMachine(private val sr: Int) {
                         env = att * (if (!open) exp(-t / (0.05 + dec * 0.08)) else exp(-t / (0.12 + dec * 0.25)))
                         s = vc.f1.bp * 1.6
                     }
-                    else -> { // Tambourin: Schellen (Metall + flatternde Rausch-Stöße)
+                    3 -> { // Tambourin: Schellen (Metall + flatternde Rausch-Stöße)
                         val mm = metallic(vc, 2.3 * ft) * 0.6 + noise() * 0.5
                         vc.f1.run(mm, gx(G9000), 0.9)
                         val jingle = 0.6 + 0.4 * sin(2 * PI * 38.0 * t)
                         env = if (!open) exp(-t / (0.08 + dec * 0.1)) else exp(-t / (0.3 + dec * 0.5))
                         s = vc.f1.bp * 2.4 * jingle
                     }
+                    4 -> { // Akustik-Becken: dunkler, mit „Tschick“-Anschlag
+                        val mm = metallic(vc, 1.2 * ft) * 0.6 + noise() * 0.5
+                        vc.f1.run(mm, gx(G9000), 0.7)
+                        vc.f2.run(vc.f1.bp, gx(G5000), 1.0)
+                        env = if (!open) exp(-t / (0.04 + dec * 0.06)) else exp(-t / (0.4 + dec * 0.8))
+                        s = vc.f2.hp * (if (open) 1.8 else 2.4) + noise() * exp(-t / 0.001) * 0.3
+                    }
+                    else -> { // Cabasa: raues, hohes Rasseln
+                        vc.f1.run(noise(), gx(G8000), 0.9)
+                        val rasp = 0.7 + 0.3 * sin(2 * PI * 60.0 * t)
+                        env = (1 - exp(-t / 0.004)) * (if (!open) exp(-t / (0.04 + dec * 0.06)) else exp(-t / (0.1 + dec * 0.2))) * rasp
+                        s = vc.f1.hp * 1.6
+                    }
                 }
             }
-            9 -> { // Splash: höher, kürzer
-                val mm = metallic(vc, 1.9 * ft) * 0.6 + noise() * 0.5
-                vc.f1.run(mm, gx(G8000), 0.7)
-                vc.f2.run(vc.f1.bp, gx(G5000), 1.0)
-                env = exp(-t / (0.25 + dec * 0.6)) * (1 - exp(-t / 0.0015))
-                s = vc.f2.hp * 1.8
+            9 -> when (m) {
+                1 -> { // Splash: höher, kürzer
+                    val mm = metallic(vc, 1.9 * ft) * 0.6 + noise() * 0.5
+                    vc.f1.run(mm, gx(G8000), 0.7)
+                    vc.f2.run(vc.f1.bp, gx(G5000), 1.0)
+                    env = exp(-t / (0.25 + dec * 0.6)) * (1 - exp(-t / 0.0015))
+                    s = vc.f2.hp * 1.8
+                }
+                2 -> { // China: rau, „trashig“
+                    val mm = metallic(vc, 1.3 * ft) * 0.7 + noise() * 0.4
+                    vc.f1.run(sin(mm * 2.2), gx(G5000), 0.6)
+                    vc.f2.run(vc.f1.bp, gx(G3500), 1.0)
+                    env = exp(-t / (0.5 + dec * 1.5)) * (1 - exp(-t / 0.001))
+                    s = vc.f2.hp * 1.6
+                }
+                else -> { // Reverse: anschwellendes Becken, endet hart (weich geblendet)
+                    val mm = metallic(vc, 1.45 * ft) * 0.6 + noise() * 0.5
+                    vc.f1.run(mm, gx(G7000), 0.7)
+                    vc.f2.run(vc.f1.bp, gx(G4500), 1.0)
+                    val len = 0.6 + dec * 1.4
+                    env = if (t < len) (t / len) * (t / len) else exp(-(t - len) / 0.006)
+                    s = vc.f2.hp * 1.8
+                }
             }
-            else -> { // Agogo: zweiteilige Glocke
-                vc.p1 += 1300.0 * ft / sr; vc.p2 += 1300.0 * 2.76 * ft / sr
-                env = exp(-t / (0.15 + dec * 0.35))
-                s = sin(2 * PI * vc.p1) * 0.7 + sin(2 * PI * vc.p2) * 0.3 * exp(-t / 0.05)
+            else -> when (m) {
+                1 -> { // Agogo: zweiteilige Glocke
+                    vc.p1 += 1300.0 * ft / sr; vc.p2 += 1300.0 * 2.76 * ft / sr
+                    env = exp(-t / (0.15 + dec * 0.35))
+                    s = sin(2 * PI * vc.p1) * 0.7 + sin(2 * PI * vc.p2) * 0.3 * exp(-t / 0.05)
+                }
+                2 -> { // Ride-Glocke: heller Glockenton auf dem Becken
+                    val mm = metallic(vc, 2.2 * ft) * 0.5
+                    vc.f1.run(mm, gx(G8000), 0.9)
+                    val a = 2 * PI * t * ft
+                    env = exp(-t / (0.6 + dec * 1.5))
+                    s = vc.f1.bp * 0.9 + (sin(a * 2600.0) * 0.4 + sin(a * 3520.0) * 0.25) * exp(-t / 0.5)
+                }
+                else -> { // FM-Glocke: klar, glasig
+                    val fc = 880.0 * ft
+                    vc.p1 += fc / sr; vc.p2 += fc * 3.5 / sr
+                    env = exp(-t / (0.8 + dec * 2.0))
+                    s = sin(2 * PI * vc.p1 + 3.0 * exp(-t / 0.3) * sin(2 * PI * vc.p2)) * 0.5
+                }
             }
         }
         altS = s; altEnv = env
