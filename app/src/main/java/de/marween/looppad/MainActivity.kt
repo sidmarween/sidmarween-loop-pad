@@ -2330,6 +2330,7 @@ class MainActivity : Activity() {
             "💿 Musik-Sammlung: Ordner laden → automatisch katalogisiert & analysiert" to { showMusicLibrary() },
             "📤 Song exportieren: WAV, Stems, MIDI" to { showSongExport() },
             "📲 Teilen: Song oder Set an WhatsApp, Instagram & Co." to { showShare() },
+            "👻 Ghost-Producer: Genre-Patterns als Live-Remix über den Track" to { openGhost() },
             "🎬 Szenen-Launcher: Spuren-Kombinationen im Takt starten (wie Ableton)" to {
                 if (djMode) switchMode(false)
                 pads.openLauncher()
@@ -3054,6 +3055,8 @@ class MainActivity : Activity() {
         if (pads.slicerOpen) { pads.closeSlicer(); return }
         if (pads.stationOpen) { pads.closeStation(); return }
         if (pads.launcherOpen) { pads.closeLauncher(); return }
+        if (pads.ghost.isOpen) { pads.ghost.close(); pads.invalidate(); return }
+        if (dj.ghost.isOpen) { dj.ghost.close(); dj.invalidate(); return }
         if (remoteView != null) { leaveRemote(); return }
         if (Dj.gigMode) {
             confirm("Gig läuft", "Wirklich zurück? Die Musik spielt weiter, solange ein Deck läuft.") {
@@ -3113,6 +3116,24 @@ class MainActivity : Activity() {
                 }
             }
         }.start()
+    }
+
+    // ================================================================ Ghost-Producer
+
+    private fun openGhost() {
+        val g = if (djMode) dj.ghost else pads.ghost
+        g.onKeyPick = { pickGhostKey() }
+        if (djMode) dj.openGhost() else pads.openGhost()
+        hint("Karte antippen oder auf eine Spur ziehen – Tempo, Takt-Eins und Tonart kommen vom laufenden Deck")
+    }
+
+    private fun pickGhostKey() {
+        val names = arrayOf("AUTO (Tonart des Decks)") + (0 until 24).map { Keys.name(it) + "  (" + Keys.camelot(it) + ")" }
+        ui().setTitle("Tonart für Bass & Synth")
+            .setItems(names) { _, w ->
+                if (w == 0) Ghost.keyAuto = true else { Ghost.keyAuto = false; Ghost.keyManual = w - 1 }
+            }
+            .show()
     }
 
     // ================================================================ Stems trennen

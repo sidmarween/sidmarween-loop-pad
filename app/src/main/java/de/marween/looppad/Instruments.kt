@@ -151,6 +151,8 @@ object InstState {
         @Volatile var detune = 0.35f
         @Volatile var env = 0.4f
         @Volatile var cutMod = 0f
+        /** Transponierung in Halbtönen (Ghost-Producer: an die Tonart des Tracks angepasst). */
+        @Volatile var transpose = 0
         @Volatile var cutAuto = Float.NaN
         @Volatile var volAuto = Float.NaN
         fun cutNow() = cutAuto.let { if (it.isNaN()) cut else it }
@@ -823,7 +825,7 @@ class PolySynth(private val sr: Int, private val t: InstState.SynTrack) {
     private var ageCtr = 0L
     private val det = doubleArrayOf(0.0, -0.11, 0.11, -0.05, 0.05)
 
-    private fun hz(semi: Int): Double = 440.0 * 2.0.pow((60 + 12 * t.oct + semi - 69) / 12.0)
+    private fun hz(semi: Int): Double = 440.0 * 2.0.pow((60 + 12 * t.oct + t.transpose + semi - 69) / 12.0)
 
     /** frame < 0 = sofort. [tag] verbindet An und Aus (z. B. Schritt oder Finger). */
     fun queue(frame: Long, on: Boolean, semi: Int, vel: Float, tag: Int, iv: IntArray? = null) {

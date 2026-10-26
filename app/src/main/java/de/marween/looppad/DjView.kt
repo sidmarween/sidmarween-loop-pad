@@ -135,6 +135,10 @@ class DjView(context: Context) : View(context) {
     // ================================================================ Rückrufe
     var onLoad: ((Int) -> Unit)? = null
     var onMenu: (() -> Unit)? = null
+
+    /** Ghost-Producer (Genre-Patterns als Live-Remix über den Track). */
+    val ghost = GhostPanel(this).also { g -> g.onHint = { m -> onHint?.invoke(m) } }
+    fun openGhost() { ghost.open(); invalidate() }
     var onTempo: (() -> Unit)? = null
     var onPadsMode: (() -> Unit)? = null
     var onHint: ((String) -> Unit)? = null
@@ -567,6 +571,11 @@ class DjView(context: Context) : View(context) {
 
     override fun onDraw(c: Canvas) {
         if (panel.width() <= 0f) layoutAll()
+        if (ghost.isOpen) {
+            c.drawColor(skin.bg)
+            ghost.draw(c, RectF(dp(6f), insetTop + dp(6f), width - dp(6f), height - insetBottom - dp(6f)), skin.accent)
+            return
+        }
         if (masterPanel.isOpen) {
             masterPanel.draw(c, RectF(dp(6f), insetTop + dp(6f), width - dp(6f), height - insetBottom - dp(6f)), skin.accent)
             return
@@ -2037,6 +2046,11 @@ class DjView(context: Context) : View(context) {
     @SuppressLint("ClickableViewAccessibility")
     override fun onTouchEvent(e: MotionEvent): Boolean {
         if (e.actionMasked == MotionEvent.ACTION_DOWN) try { requestUnbufferedDispatch(e) } catch (ignored: Throwable) {}
+        if (ghost.isOpen) {
+            ghost.touch(e)
+            invalidate()
+            return true
+        }
         if (masterPanel.isOpen) {
             masterPanel.touch(e)
             return true

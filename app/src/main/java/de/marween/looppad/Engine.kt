@@ -548,6 +548,18 @@ object Engine {
         return r - kotlin.math.floor(r)
     }
 
+    /** Ghost-Producer: Tempo und Takt-Eins hart auf das Deck legen (nur wenn es abweicht). */
+    fun ghostLock(bpm: Float, barStart: Long) {
+        val nl = (sampleRate * 240.0 / bpm).toLong()
+        val ml = masterLen
+        val err = if (ml > 0L) { val e = Math.floorMod(barStart - masterStart, ml); min(e, ml - e) } else Long.MAX_VALUE
+        if (ml <= 0L || abs(nl - ml) > 2L || err > sampleRate / 400) {
+            fixedBpm = bpm
+            masterLen = nl
+            masterStart = barStart
+        }
+    }
+
     /** Tempo setzen und das Raster so legen, dass an [beatFrame] ein Schlag liegt (DJ-Sync ohne Pads). */
     fun setBpmAnchored(bpm: Float, beatFrame: Long) {
         if (masterLen > 0L) {
@@ -2346,6 +2358,7 @@ object Engine {
             java.util.Arrays.fill(bus, 0f)
             val w = written
             updateLead(w, block)
+            Ghost.tick(w)
             sceneTick(w, block)
             autoTick(w)
             runSequencer(w, block)
