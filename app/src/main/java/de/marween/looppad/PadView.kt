@@ -623,13 +623,16 @@ class PadView(context: Context) : View(context) {
             val minXy = dp(110f) + tabH + dp(5f) + gap
             if (xyTot < minXy) { cellH -= (minXy - xyTot) / rows; xyTot = minXy }
         } else if (padsOn) {
-            cellH = min(cellW * 1.15f, (avail - gap - (rows - 1) * rowGap) / rows)
+            cellH = min(cellW * 1.3f, (avail - gap - (rows - 1) * rowGap) / rows)
             xyTot = 0f
         } else {
             cellH = 0f
             xyTot = max(dp(140f), avail)
         }
         val gridH = if (padsOn) rows * cellH + (rows - 1) * rowGap + gap else 0f
+        // übrig gebliebenen Platz gleichmäßig zwischen die Bereiche verteilen (statt eines Lochs unten)
+        val spare = avail - xyTot - gridH
+        val spread = if (spare > dp(4f) && vis.isNotEmpty()) spare / vis.size else 0f
         val cell = min(cellW, max(cellH, 1f))
         // erst alles aus, dann die sichtbaren Bereiche der Reihe nach platzieren
         for (r in knobRects) off(r)
@@ -698,6 +701,7 @@ class PadView(context: Context) : View(context) {
             secTop[id] = y
             y += if (id == SEC_XY) xyTot else if (id == SEC_PADS) gridH else fixedH(id)
             secBottom[id] = y
+            y += spread
         }
         for (id in secHidden) { secTop[id] = -1f; secBottom[id] = -1f }
         radius = when (theme) {
@@ -9266,7 +9270,7 @@ class PadView(context: Context) : View(context) {
         val title = fitLabel(textPaint, "🧩 ANSICHT ANPASSEN", editReset.left - dp(28f), dp(15f), dp(9f))
         canvas.drawText(title, dp(18f), editDone.centerY() - dp(3f), textPaint)
         textPaint.color = Color.argb(180, 255, 255, 255)
-        val sub = fitLabel(textPaint, "ziehen = verschieben · 👁 = ausblenden", editReset.left - dp(28f), dp(10f), dp(7f))
+        val sub = fitLabel(textPaint, "ziehen = verschieben · 👁 = aus", editReset.left - dp(28f), dp(10f), dp(7f))
         canvas.drawText(sub, dp(18f), editDone.centerY() + dp(12f), textPaint)
         textPaint.textAlign = Paint.Align.CENTER
         editBtn(canvas, editReset, "↺ STANDARD", false, acc)
