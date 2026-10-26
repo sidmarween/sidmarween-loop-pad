@@ -1490,6 +1490,28 @@ object Engine {
         return if (k in b.indices) k else -1
     }
 
+    /** Getrennte Stems als Loops auf freie Pads – synchron zum Quell-Pad, das stumm geschaltet wird. Liefert die Ziel-Pads. */
+    fun stemsToPads(p: Int, stems: Array<FloatArray>, names: Array<String>, maxPad: Int): List<Int> {
+        val l = loops.get(p) ?: return emptyList()
+        val free = (0 until maxPad).filter { it != p && loops.get(it) == null && takes.get(it) == null }
+        if (free.size < stems.size) return emptyList()
+        val targets = free.take(stems.size)
+        pushPadUndo("Stems Pad ${p + 1}", *(targets + p).toIntArray())
+        val wasOn = !l.muted
+        for ((i, q) in targets.withIndex()) {
+            val c = cloneLoop(l, stems[i])
+            c.src = null
+            c.srcPre = null
+            c.name = names[i]
+            c.muted = !wasOn
+            padOneShot[q] = false
+            padSemi[q] = padSemi[p]
+            loops.set(q, c)
+        }
+        l.muted = true
+        return targets
+    }
+
     /** Die 16 Slicer-Stücke als ⚡ One-Shots auf freie Pads legen. */
     fun slicerToPads(maxPad: Int): Int {
         val d = Slicer.data ?: return 0

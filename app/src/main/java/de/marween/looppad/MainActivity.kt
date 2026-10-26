@@ -1130,6 +1130,8 @@ class MainActivity : Activity() {
         actions.add { pickImport() }
         if (has) {
             if (!shot) {
+                labels.add("🎚 Stems trennen: Drums · Bass · Melodie & Gesang auf 3 Pads")
+                actions.add { splitStems(p) }
                 labels.add("✂ Slicer: an den Schlägen in 16 Stücke auf 16 Pads zerlegen")
                 actions.add { openSlicerFor(p) }
             }
@@ -3109,6 +3111,41 @@ class MainActivity : Activity() {
                     try { dlg.dismiss() } catch (ignored: Exception) {}
                     toast("Teilen fehlgeschlagen: ${e.message ?: e}")
                 }
+            }
+        }.start()
+    }
+
+    // ================================================================ Stems trennen
+
+    private fun splitStems(p: Int) {
+        val free = (0 until PadView.VISIBLE_PADS).count { it != p && !Engine.hasLoop(it) }
+        if (free < 3) { toast("Für die 3 Stems werden 3 freie Pads gebraucht (frei: $free)"); return }
+        val len = Engine.padDataLen(p)
+        System.gc()
+        val rt = Runtime.getRuntime()
+        val freeMem = rt.maxMemory() - (rt.totalMemory() - rt.freeMemory())
+        if (len.toLong() * 4 * 5 > freeMem) { toast("Zu lang für den Speicher – erst kürzen (Wave-Editor) oder andere Pads leeren"); return }
+        val secs = len / Engine.sampleRate.toFloat()
+        hint(String.format(Locale.GERMANY, "🎚 Trenne Pad %d (%.0f s) – dauert etwa %.0f s …", p + 1, secs, max(3f, secs * 0.25f)))
+        Thread {
+            try {
+                Engine.padLoadText[p] = "Stems trennen"
+                Engine.padLoadProg[p] = 0f
+                val data = Engine.loopData(p) ?: return@Thread
+                val stems = Stems.split(data, Engine.sampleRate) { f -> Engine.padLoadProg[p] = f }
+                val base = Engine.padName(p)?.take(10) ?: "P${p + 1}"
+                val names = arrayOf("Drums · $base", "Bass · $base", "Melodie · $base")
+                val t = Engine.stemsToPads(p, stems, names, PadView.VISIBLE_PADS)
+                runOnUiThread {
+                    if (t.isEmpty()) toast("Keine freien Pads mehr")
+                    else hint("🎚 Drums → Pad ${t[0] + 1}, Bass → Pad ${t[1] + 1}, Melodie & Gesang → Pad ${t[2] + 1} · Original stumm (antippen = wieder an)")
+                }
+            } catch (e: OutOfMemoryError) {
+                runOnUiThread { toast("Zu lang für den Speicher – erst kürzen") }
+            } catch (e: Throwable) {
+                runOnUiThread { toast("Stems fehlgeschlagen: ${e.message ?: e}") }
+            } finally {
+                Engine.padLoadProg[p] = -1f
             }
         }.start()
     }
