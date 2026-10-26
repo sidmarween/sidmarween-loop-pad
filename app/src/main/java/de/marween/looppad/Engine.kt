@@ -3268,6 +3268,9 @@ object Engine {
 
     fun hasLoop(p: Int) = loops.get(p) != null
 
+    /** Keine Aufnahme auf dem Pad offen. */
+    fun takesIdle(p: Int): Boolean = takes.get(p) == null
+
     /** Kopie der Loop-Samples für den Export. */
     fun loopData(p: Int): FloatArray? = loops.get(p)?.data?.copyOf()
     fun padDataLen(p: Int): Int = loops.get(p)?.data?.size ?: 0

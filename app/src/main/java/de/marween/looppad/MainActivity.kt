@@ -2326,6 +2326,11 @@ class MainActivity : Activity() {
             "💿 Musik-Sammlung: Ordner laden → automatisch katalogisiert & analysiert" to { showMusicLibrary() },
             "📤 Song exportieren: WAV, Stems, MIDI" to { showSongExport() },
             "📲 Teilen: Song oder Set an WhatsApp, Instagram & Co." to { showShare() },
+            "🔁 Loop Station: 4 Spuren, ein großer Knopf (Aufnahme → Overdub)" to {
+                if (djMode) switchMode(false)
+                pads.openStation()
+                hint("Großen Knopf tippen: Aufnahme · nochmal: Loop läuft · nochmal: Overdub · ■/▶ stoppt/startet die Spur")
+            },
             "✂ Slicer: Song-Abschnitt auf 16 Pads zerlegen und neu spielen" to { if (Slicer.data == null) pickSlicerSource() else pads.openSlicer() },
             ((if (Engine.scOn) "〽 Sidechain-Pumpen: AN" else "〽 Sidechain-Pumpen (Kick drückt Bass & Flächen)")) to { showSidechain() },
             "🎙 Aufnahme & Wiedergabe" to { showMenuGroup(1) },
@@ -3037,6 +3042,7 @@ class MainActivity : Activity() {
     @Deprecated("Zurück-Taste")
     override fun onBackPressed() {
         if (pads.slicerOpen) { pads.closeSlicer(); return }
+        if (pads.stationOpen) { pads.closeStation(); return }
         if (remoteView != null) { leaveRemote(); return }
         if (Dj.gigMode) {
             confirm("Gig läuft", "Wirklich zurück? Die Musik spielt weiter, solange ein Deck läuft.") {
