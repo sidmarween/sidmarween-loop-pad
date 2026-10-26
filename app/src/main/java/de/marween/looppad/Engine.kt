@@ -4193,6 +4193,9 @@ object Engine {
         if (f >= w + block) return
         arrBar = (arrBar + 1) % max(1, songBars)
         arrBarStart = f
+        // Szenen-Launcher: vorgemerkte Zeile auf der Eins starten
+        val lq = launchQueued
+        if (lq != LAUNCH_NONE && !songMode) applyLaunch(lq)
         if (songMode) {
             applyArr(arrBar)
             return
@@ -4257,6 +4260,94 @@ object Engine {
     @Volatile var songBars = 16
     @Volatile private var arrBar = 0
     @Volatile private var arrBarStart = 0L
+
+    // ================================================================ Szenen-Launcher (Zeilen × Spuren, wie Ableton Session)
+
+    const val LROWS = 8
+    private const val LAUNCH_NONE = -99
+    private const val LAUNCH_STOP = -2
+    /** Zelle: Pads 0 = aus, 1 = an · Instrumente 0 = aus, 1..4 = Pattern A..D. */
+    val launch = Array(LROWS) { IntArray(12 + InstState.INSTS) }
+    val launchUsed = BooleanArray(LROWS)
+    @Volatile var launchCur = -1
+        private set
+    @Volatile var launchQueued = LAUNCH_NONE
+        private set
+
+    fun launchIsQueued(r: Int) = launchQueued == r
+    fun launchStopQueued() = launchQueued == LAUNCH_STOP
+
+    /** Aktuelle Lage (was gerade läuft) in Zeile [r] übernehmen. */
+    fun launchCapture(r: Int) {
+        if (r !in 0 until LROWS) return
+        val row = launch[r]
+        for (p in 0 until 12) { val l = loops.get(p); row[p] = if (l != null && !l.muted) 1 else 0 }
+        for (i in 0 until InstState.INSTS) row[12 + i] = if (InstState.instOn(i) && InstState.instHasNotes(i)) InstState.curPat[i] + 1 else 0
+        launchUsed[r] = true
+    }
+
+    fun launchClear(r: Int) {
+        if (r !in 0 until LROWS) return
+        java.util.Arrays.fill(launch[r], 0)
+        launchUsed[r] = false
+        if (launchCur == r) launchCur = -1
+    }
+
+    /** Zeile starten: läuft der Transport, auf der nächsten Eins – sonst sofort. */
+    fun launchRow(r: Int) {
+        if (r !in 0 until LROWS || !launchUsed[r]) return
+        if (!seqPlaying) { applyLaunch(r); transportPlay(false); return }
+        launchQueued = if (launchQueued == r) LAUNCH_NONE else r
+    }
+
+    fun launchStopAll() {
+        if (!seqPlaying) { applyLaunch(LAUNCH_STOP); return }
+        launchQueued = LAUNCH_STOP
+    }
+
+    private fun applyLaunch(r: Int) {
+        launchQueued = LAUNCH_NONE
+        if (r == LAUNCH_STOP) {
+            for (p in 0 until 12) loops.get(p)?.let { if (!it.oneShot) it.muted = true }
+            for (i in 0 until InstState.INSTS) InstState.setInstOn(i, false)
+            launchCur = -1
+            return
+        }
+        if (r !in 0 until LROWS) return
+        val row = launch[r]
+        for (p in 0 until 12) {
+            val l = loops.get(p) ?: continue
+            if (l.oneShot) { l.muted = row[p] == 0; continue }
+            val on = row[p] > 0
+            if (on && l.muted) l.fade = 0f
+            l.muted = !on
+        }
+        var switched = false
+        for (i in 0 until InstState.INSTS) {
+            val v = row[12 + i]
+            if (v <= 0) InstState.setInstOn(i, false) else {
+                if (InstState.curPat[i] != v - 1) { InstState.selectPat(i, v - 1); switched = true }
+                InstState.setInstOn(i, true)
+            }
+        }
+        if (switched) dropPatternUndo()
+        launchCur = r
+    }
+
+    private fun launchToJson(): org.json.JSONArray = org.json.JSONArray().apply {
+        for (r in 0 until LROWS) put(if (!launchUsed[r]) org.json.JSONObject.NULL else org.json.JSONArray().apply { launch[r].forEach { put(it) } })
+    }
+
+    private fun launchFromJson(a: org.json.JSONArray?) {
+        for (r in 0 until LROWS) { java.util.Arrays.fill(launch[r], 0); launchUsed[r] = false }
+        launchCur = -1; launchQueued = LAUNCH_NONE
+        if (a == null) return
+        for (r in 0 until min(LROWS, a.length())) {
+            val row = a.optJSONArray(r) ?: continue
+            for (c in 0 until min(launch[r].size, row.length())) launch[r][c] = row.optInt(c)
+            launchUsed[r] = true
+        }
+    }
 
     // ================================================================ Automation (Song-Modus: Werte über die Zeit)
 
@@ -4417,11 +4508,13 @@ object Engine {
         j.put("scenes", org.json.JSONArray().apply { arrScene.forEach { put(it) } })
         j.put("pats", org.json.JSONArray().apply { for (row in arrPat) put(String(CharArray(ARR_MAX) { '0' + row[it] })) })
         j.put("auto", autoToJson())
+        j.put("launch", launchToJson())
         return j
     }
 
     fun arrFromJson(j: org.json.JSONObject?) {
         arrClear()
+        launchFromJson(null)
         songMode = false
         songBars = 16
         if (j == null) return
@@ -4435,6 +4528,7 @@ object Engine {
         }
         j.optJSONArray("scenes")?.let { a -> for (b in 0 until min(ARR_MAX, a.length())) arrScene[b] = a.optInt(b, -1) }
         autoFromJson(j.optJSONArray("auto"))
+        launchFromJson(j.optJSONArray("launch"))
         val pa = j.optJSONArray("pats")
         if (pa != null) {
             for (i in 0 until min(InstState.INSTS, pa.length())) {

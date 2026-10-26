@@ -2328,6 +2328,11 @@ class MainActivity : Activity() {
             "💿 Musik-Sammlung: Ordner laden → automatisch katalogisiert & analysiert" to { showMusicLibrary() },
             "📤 Song exportieren: WAV, Stems, MIDI" to { showSongExport() },
             "📲 Teilen: Song oder Set an WhatsApp, Instagram & Co." to { showShare() },
+            "🎬 Szenen-Launcher: Spuren-Kombinationen im Takt starten (wie Ableton)" to {
+                if (djMode) switchMode(false)
+                pads.openLauncher()
+                hint("Zeile = Szene: ▶ startet sie auf der nächsten Eins · Felder antippen = Spur an/aus bzw. Pattern A–D · ▶ lange drücken = leeren")
+            },
             "🔁 Loop Station: 4 Spuren, ein großer Knopf (Aufnahme → Overdub)" to {
                 if (djMode) switchMode(false)
                 pads.openStation()
@@ -3046,6 +3051,7 @@ class MainActivity : Activity() {
     override fun onBackPressed() {
         if (pads.slicerOpen) { pads.closeSlicer(); return }
         if (pads.stationOpen) { pads.closeStation(); return }
+        if (pads.launcherOpen) { pads.closeLauncher(); return }
         if (remoteView != null) { leaveRemote(); return }
         if (Dj.gigMode) {
             confirm("Gig läuft", "Wirklich zurück? Die Musik spielt weiter, solange ein Deck läuft.") {
