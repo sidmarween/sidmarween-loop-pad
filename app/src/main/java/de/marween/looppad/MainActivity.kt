@@ -4419,18 +4419,58 @@ class MainActivity : Activity() {
      * Mikro-Timing einmessen: zum Klick 2 Takte lang auf jeden Schlag klatschen oder „tak“ sagen.
      * Der mittlere Versatz (Handy-Mikro, Kopfhörer, Bluetooth …) wird gespeichert und bei Summen/Beatbox abgezogen.
      */
+    /** Mikro-Timing einmessen: erst erklären, dann sichtbar mitklatschen lassen, Ergebnis in Klartext. */
     private fun calibrateMic() {
         if (!hasMic()) { toast("Bitte erst das Mikrofon erlauben"); return }
+        ui().setTitle("🎯 Mikro-Timing einmessen")
+            .setMessage("Warum? Bei jedem Handy kommt der Ton vom Mikrofon etwas verspätet an. Das misst die App jetzt einmal, damit deine Aufnahmen genau im Takt liegen.\n\n" +
+                "So geht's (ca. 10 Sekunden):\n\n" +
+                "1.  Lautsprecher benutzen – keine Bluetooth-Kopfhörer.\n" +
+                "2.  Nach „Start“ hörst du einen Klick: tick · tick · tick · tick.\n" +
+                "3.  Erst nur ZUHÖREN, bis „KLATSCHEN!“ erscheint.\n" +
+                "4.  Dann 8-mal in die Hände klatschen – genau gleichzeitig mit dem Klick. Der leuchtende Punkt zeigt dir jeden Schlag.\n\n" +
+                "Fertig – den Rest rechnet die App aus.")
+            .setPositiveButton("Start") { _, _ -> runMicCalibration() }
+            .setNegativeButton("Abbrechen", null)
+            .show()
+    }
+
+    private fun runMicCalibration() {
         if (!Engine.seqPlaying) Engine.seqPlay()
         val metroWas = Engine.metronome
         Engine.metronome = true
-        val pad = (18 * resources.displayMetrics.density).toInt()
-        val tv = TextView(this).apply { textSize = 20f; setTextColor(Color.WHITE); gravity = Gravity.CENTER; setPadding(pad, pad, pad, pad / 2) }
-        val sub = TextView(this).apply { textSize = 12f; setTextColor(Color.rgb(190, 190, 190)); gravity = Gravity.CENTER; setPadding(pad, 0, pad, pad / 2)
-            text = "Klatsche oder sag „tak“ genau auf jeden Klick – 2 Takte lang (8 Schläge). So lernt die App, wie spät das Mikro bei dir ankommt." }
-        val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; addView(tv); addView(sub) }
+        val d = resources.displayMetrics.density
+        val pad = (18 * d).toInt()
+        val tv = TextView(this).apply { textSize = 26f; setTypeface(typeface, Typeface.BOLD); setTextColor(Color.WHITE); gravity = Gravity.CENTER; setPadding(pad, pad, pad, pad / 3) }
+        // vier Punkte = vier Schläge im Takt; der aktuelle leuchtet
+        var beatNow = -1
+        var clapPhase = false
+        val dots = object : View(this) {
+            val pt = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG)
+            override fun onDraw(c: android.graphics.Canvas) {
+                val n = 4
+                val r = min(height * 0.42f, width / (n * 2.6f))
+                for (i in 0 until n) {
+                    val cx = width * (i + 0.5f) / n
+                    val lit = i == beatNow
+                    pt.color = when {
+                        lit && clapPhase -> Color.rgb(255, 120, 30)
+                        lit -> Color.rgb(120, 190, 255)
+                        else -> Color.argb(60, 255, 255, 255)
+                    }
+                    c.drawCircle(cx, height / 2f, if (lit) r else r * 0.7f, pt)
+                }
+            }
+        }
+        val sub = TextView(this).apply { textSize = 15f; setTextColor(Color.rgb(210, 210, 210)); gravity = Gravity.CENTER; setPadding(pad, pad / 3, pad, pad) }
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            addView(tv)
+            addView(dots, LinearLayout.LayoutParams(-1, (70 * d).toInt()))
+            addView(sub)
+        }
         var cancelled = false
-        val dlg = ui().setTitle("🎯 Mikro-Timing einmessen").setView(box).setCancelable(false).setNegativeButton("Abbrechen") { _, _ -> cancelled = true }.create()
+        val dlg = ui().setTitle("🎯 Mikro-Timing").setView(box).setCancelable(false).setNegativeButton("Abbrechen") { _, _ -> cancelled = true }.create()
         dlg.show()
         val h = android.os.Handler(mainLooper)
         var startStep = Double.NaN
@@ -4440,41 +4480,84 @@ class MainActivity : Activity() {
                 if (cancelled) { Engine.metronome = metroWas; return }
                 val now = Engine.micNow()
                 val st = Engine.micStep(now, raw = true)
-                if (st.isNaN()) { h.postDelayed(this, 40); return }
-                if (startStep.isNaN()) { var s0 = Math.ceil(st / 16.0) * 16.0; if (s0 - st < 3.0) s0 += 16.0; startStep = s0; startFrame = now }
-                val rel = st - startStep
+                val heard = Engine.heardStep()
+                if (st.isNaN() || heard.isNaN()) { tv.text = "Moment …"; h.postDelayed(this, 30); return }
+                // mindestens ein ganzer Takt zum Zuhören, dann 2 Takte (8 Schläge) klatschen
+                if (startStep.isNaN()) { var s0 = Math.ceil(heard / 16.0) * 16.0; if (s0 - heard < 10.0) s0 += 16.0; startStep = s0; startFrame = now }
+                val rel = heard - startStep
+                val b = Math.floorMod(Math.floor(heard / 4.0).toLong(), 4L).toInt()
                 when {
-                    rel < 0 -> tv.text = "Gleich … ${Math.ceil(-rel / 4.0).toInt()}"
-                    rel < 32 -> tv.text = "👏 ${(rel / 4).toInt() + 1} / 8"
-                    rel < 33.5 -> tv.text = "👏 …"
+                    rel < 0 -> {
+                        clapPhase = false
+                        tv.text = "👂 Zuhören …"
+                        tv.setTextColor(Color.rgb(120, 190, 255))
+                        val left = Math.ceil(-rel / 4.0).toInt()
+                        sub.text = "Noch nicht klatschen.\nIn $left ${if (left == 1) "Schlag" else "Schlägen"} geht's los."
+                    }
+                    rel < 32 -> {
+                        clapPhase = true
+                        val n = (rel / 4).toInt() + 1
+                        tv.text = "👏 KLATSCHEN!"
+                        tv.setTextColor(Color.rgb(255, 140, 50))
+                        sub.text = "Klatsch genau mit dem Klick, wenn der Punkt leuchtet.\nSchlag $n von 8"
+                    }
+                    rel < 36 -> {
+                        clapPhase = false
+                        tv.text = "✋ Stopp"
+                        tv.setTextColor(Color.WHITE)
+                        sub.text = "Danke! Ich rechne …"
+                    }
                     else -> {
                         Engine.metronome = metroWas
                         dlg.dismiss()
-                        val audio = Engine.micCopy(startFrame, (now - startFrame).toInt()) ?: run { toast("Mikrofon-Audio nicht verfügbar"); return }
-                        val hits = MicTools.beatbox(audio, Engine.sampleRate)
-                        // Versatz je Schlag zum nächsten Viertel (4 Schritte), in ms
-                        val offs = hits.map { Engine.micStep(startFrame + it.at, raw = true) - startStep }
-                            .filter { !it.isNaN() && it > -2 && it < 34 }
-                            .map { x -> val q = Math.round(x / 4.0) * 4.0; (x - q) * Engine.stepMs() }
-                            .sorted()
-                        if (offs.size < 4) { toast("Zu wenige Schläge erkannt (${offs.size}) – lauter klatschen und nochmal"); return }
-                        val med = offs[offs.size / 2]
-                        val spread = offs[(offs.size * 3) / 4] - offs[offs.size / 4]
-                        ui().setTitle("🎯 Ergebnis").setMessage(String.format(Locale.GERMANY,
-                            "%d Schläge erkannt.\nDein Mikro kommt %.0f ms %s an (Streuung %.0f ms).\n\nÜbernehmen? Mikro-Aufnahmen (Loops, Loop Station, Overdubs), Summen und Beatbox werden dann um diesen Wert korrigiert.",
-                            offs.size, abs(med), if (med >= 0) "zu spät" else "zu früh", spread))
-                            .setPositiveButton("Übernehmen") { _, _ ->
-                                Engine.micOffsetMs = med.toFloat()
-                                Engine.micCalibrated = true
-                                getSharedPreferences("marvpad", MODE_PRIVATE).edit().putFloat("micOffset", med.toFloat()).apply()
-                                hint(String.format(Locale.GERMANY, "🎯 Mikro-Timing: %+.0f ms gespeichert", med))
-                            }.setNegativeButton("Verwerfen", null).show()
+                        finishMicCalibration(startFrame, now, startStep)
                         return
                     }
                 }
-                h.postDelayed(this, 40)
+                if (b != beatNow) { beatNow = b; dots.invalidate() }
+                h.postDelayed(this, 25)
             }
         })
+    }
+
+    private fun finishMicCalibration(startFrame: Long, now: Long, startStep: Double) {
+        val audio = Engine.micCopy(startFrame, (now - startFrame).toInt()) ?: run { toast("Mikrofon-Audio nicht verfügbar"); return }
+        val hits = MicTools.beatbox(audio, Engine.sampleRate)
+        // Versatz je Schlag zum nächsten Viertel (4 Schritte), in ms – nur Klatscher in der Klatsch-Phase
+        val offs = hits.map { Engine.micStep(startFrame + it.at, raw = true) - startStep }
+            .filter { !it.isNaN() && it > -2 && it < 34 }
+            .map { x -> val q = Math.round(x / 4.0) * 4.0; (x - q) * Engine.stepMs() }
+            .sorted()
+        fun again(title: String, msg: String) {
+            ui().setTitle(title).setMessage(msg)
+                .setPositiveButton("Nochmal") { _, _ -> runMicCalibration() }
+                .setNegativeButton("Abbrechen", null).show()
+        }
+        if (offs.size < 4) {
+            again("🎯 Zu leise", "Ich habe nur ${offs.size} von 8 Klatschern gehört.\n\nTipps:\n• kräftiger klatschen\n• näher ans Handy (ca. 30 cm)\n• Mikrofon nicht mit der Hand abdecken")
+            return
+        }
+        val med = offs[offs.size / 2]
+        val spread = offs[(offs.size * 3) / 4] - offs[offs.size / 4]
+        fun apply() {
+            Engine.micOffsetMs = med.toFloat()
+            Engine.micCalibrated = true
+            getSharedPreferences("marvpad", MODE_PRIVATE).edit().putFloat("micOffset", med.toFloat()).apply()
+            hint(String.format(Locale.GERMANY, "🎯 Mikro-Timing: %+.0f ms gespeichert", med))
+        }
+        val what = String.format(Locale.GERMANY, "Dein Mikrofon kommt %.0f ms %s an.", abs(med), if (med >= 0) "zu spät" else "zu früh")
+        if (spread > 70.0) {
+            ui().setTitle("🎯 Etwas ungleichmäßig")
+                .setMessage("$what\n\nDeine Klatscher lagen aber unterschiedlich weit vom Klick weg – das Ergebnis ist deshalb ungenau. Am besten nochmal, ganz ruhig genau auf den Klick.")
+                .setPositiveButton("Nochmal") { _, _ -> runMicCalibration() }
+                .setNeutralButton("Trotzdem übernehmen") { _, _ -> apply() }
+                .setNegativeButton("Abbrechen", null).show()
+            return
+        }
+        apply()
+        ui().setTitle("✅ Fertig!")
+            .setMessage("$what\n\nDas wird ab jetzt bei allen Mikro-Aufnahmen automatisch ausgeglichen – Loops, Loop Station, Overdubs, Summen und Beatbox.\n\nNur nochmal einmessen, wenn du ein anderes Handy, Headset oder Audio-Interface benutzt.")
+            .setPositiveButton("OK", null).show()
     }
 
     /** Takte und Ziel wählen, dann aufnehmen. [kind] 0 = Summen, 1 = Beatbox. */

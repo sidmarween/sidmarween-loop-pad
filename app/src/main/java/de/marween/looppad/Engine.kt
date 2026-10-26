@@ -1985,6 +1985,14 @@ object Engine {
         return (heard - seqStart()).toDouble() * STEPS / bar
     }
 
+    /** Gerade hörbare Position in 1/16-Schritten (für Anzeigen), NaN wenn nichts läuft. */
+    fun heardStep(): Double {
+        if (!seqPlaying) return Double.NaN
+        val bar = seqBar()
+        if (bar <= 0L) return Double.NaN
+        return (heardNow() - seqStart()).toDouble() * STEPS / bar
+    }
+
     /** Mikro-Versatz (ms): so viel kommt das Mikro-Signal gegenüber dem Gehörten zu spät an (eingemessen) – wird abgezogen. */
     @Volatile var micOffsetMs = 0f
     /** true, sobald das Mikro-Timing eingemessen (oder bewusst übersprungen) wurde. */
