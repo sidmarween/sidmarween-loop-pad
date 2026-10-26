@@ -5,7 +5,6 @@ import android.graphics.Canvas
 import android.os.SystemClock
 import android.view.MotionEvent
 import android.view.View
-import androidx.test.core.app.ApplicationProvider
 import org.junit.Assert.fail
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -20,7 +19,7 @@ import org.robolectric.annotation.Config
 @Config(sdk = [34])
 class UiSmokeTest {
     private val errors = ArrayList<String>()
-    private val ctx get() = ApplicationProvider.getApplicationContext<android.content.Context>()
+    private val ctx: android.content.Context get() = org.robolectric.RuntimeEnvironment.getApplication()
 
     private fun safe(what: String, block: () -> Unit) {
         try { block() } catch (t: Throwable) {
