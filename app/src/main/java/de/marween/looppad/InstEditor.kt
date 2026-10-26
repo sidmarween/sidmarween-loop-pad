@@ -555,6 +555,7 @@ class InstEditor(private val host: View) {
         c.save()
         c.clipRect(grid)
         val cw = colW()
+        if (ghosts) drawGhosts(c)
         var k = 0
         while (k < len) {
             if (!aHead(k)) { k++; continue }
@@ -627,6 +628,79 @@ class InstEditor(private val host: View) {
                 fill.color = if (on) (if (isAcc) Color.rgb(255, 170, 40) else Color.rgb(80, 180, 255)) else if (kk % 4 == 0) Color.rgb(38, 40, 48) else Color.rgb(28, 29, 36)
                 c.drawRoundRect(tmp, dp(2f), dp(2f), fill)
             }
+        }
+    }
+
+    // ---------------------------------------------------------------- Andere Spuren durchscheinend
+
+    companion object {
+        /** Andere Spuren in der Piano-Roll blass anzeigen (für alle Editoren gemerkt). */
+        @Volatile var ghosts = true
+        private val GHOST_COLS = intArrayOf(Color.rgb(255, 140, 40), Color.rgb(90, 170, 255), Color.rgb(110, 220, 130), Color.rgb(200, 120, 255))
+    }
+
+    /** Eine melodische Spur als (gate, tie, semi, Länge, Farbe, Name). */
+    private class GSrc(val gate: BooleanArray, val tie: BooleanArray, val semi: IntArray, val len: Int, val col: Int, val name: String, val shift: Int)
+
+    private fun ghostSources(): List<GSrc> {
+        val st = InstState
+        val out = ArrayList<GSrc>()
+        // ACID liegt zwei Oktaven tiefer als SYNTH (C2 statt C4) – auf die Tonhöhe der bearbeiteten Spur umrechnen
+        val acidBase = 36 + 12 * st.acidOct
+        val synBase = { t: InstState.SynTrack -> 60 + 12 * t.oct }
+        val myBase = if (kind == 1) acidBase else synBase(st.syn)
+        if (kind != 1 && st.acidOn) out.add(GSrc(st.acidGate, st.acidTie, st.acidSemi, st.acidLen, GHOST_COLS[0], "ACID", acidBase - myBase))
+        for ((ti, t) in st.synTracks.withIndex()) {
+            if (kind == 3 && ti == st.synCur) continue
+            if (!t.on || !t.hasNotes()) continue
+            out.add(GSrc(t.gate, t.tie, t.semi, t.len, GHOST_COLS[1 + ti % 3], "SYN ${ti + 1}", synBase(t) - myBase))
+        }
+        return out
+    }
+
+    private fun drawGhosts(c: Canvas) {
+        val rows = rowsA
+        val rh = rowH()
+        val srcs = ghostSources()
+        for (g in srcs) {
+            val ol = g.len.coerceIn(1, InstState.MAX)
+            fill.color = Color.argb(55, Color.red(g.col), Color.green(g.col), Color.blue(g.col))
+            stroke.strokeWidth = dp(1f)
+            stroke.color = Color.argb(120, Color.red(g.col), Color.green(g.col), Color.blue(g.col))
+            for (k in col0 until min(len, col0 + visCols + 1)) {
+                val kk = k % ol
+                if (!g.gate[kk]) continue
+                val head = !(g.tie[kk] && g.gate[Math.floorMod(kk - 1, ol)] && kk > 0) || k == col0
+                if (!head) continue
+                var n = 1
+                while (n < ol && k + n < len && g.gate[(kk + n) % ol] && g.tie[(kk + n) % ol]) n++
+                val r = topSemi - (g.semi[kk] + g.shift)
+                if (r < 0 || r >= rows) continue
+                val y0 = grid.top + r * rh
+                tmp.set(colX(k) + dp(1f), y0 + dp(2f), colX(k + n) - dp(1f), y0 + rh - dp(2f))
+                c.drawRoundRect(tmp, dp(3f), dp(3f), fill)
+                c.drawRoundRect(tmp, dp(3f), dp(3f), stroke)
+            }
+        }
+        // Bass Drum als feine Linien (hilft, den Bass auf die Kick zu legen)
+        val st = InstState
+        if (st.drumOn) {
+            val dl = st.drumLen.coerceIn(1, InstState.MAX)
+            stroke.strokeWidth = dp(1.5f)
+            stroke.color = Color.argb(70, 255, 80, 80)
+            for (k in col0 until min(len, col0 + visCols)) if (st.drumSteps[0][k % dl] > 0) c.drawLine(colX(k) + dp(1f), grid.top, colX(k) + dp(1f), grid.bottom, stroke)
+        }
+        // Legende
+        if (srcs.isNotEmpty()) {
+            text.textAlign = Paint.Align.RIGHT
+            text.textSize = dp(8.5f)
+            var x = grid.right - dp(4f)
+            for (g in srcs.reversed()) {
+                text.color = g.col
+                c.drawText(g.name, x, grid.top + dp(10f), text)
+                x -= text.measureText(g.name) + dp(6f)
+            }
+            text.textAlign = Paint.Align.CENTER
         }
     }
 
@@ -797,6 +871,7 @@ class InstEditor(private val host: View) {
             Toggle({ "KLANG: " + st.synWaveNames[st.synWave] }, { false }, { st.synWave = (st.synWave + 1) % st.synWaveNames.size }),
             Toggle({ "AKKORD: " + st.synChordNames[st.synChord] }, { st.synChord != 0 }, { st.synChord = (st.synChord + 1) % st.synChordNames.size }),
             Toggle({ "🎼 AKKORDFOLGE" }, { false }, { onChords?.invoke() }),
+            Toggle({ "👻 ANDERE SPUREN" }, { ghosts }, { ghosts = !ghosts; onHint?.invoke(if (ghosts) "Andere Spuren (ACID, SYNTH) blass im Hintergrund, rote Linien = Bass Drum" else "Andere Spuren ausgeblendet") }),
             Toggle({ "ARP: " + st.arpNames[st.synArp] }, { st.synArp != 0 }, { st.synArp = (st.synArp + 1) % st.arpNames.size; onHint?.invoke(if (st.synArp == 0) "Arpeggiator aus" else "Arpeggiator ${st.arpNames[st.synArp]}: gehaltene Noten/Akkorde laufen als Tonfolge") }),
             Toggle({ "ARP " + st.arpRates[st.synArpRate.coerceIn(0, 2)] + " · ${st.synArpOct} OKT" }, { st.synArp != 0 }, {
                 // 1/8·1 → 1/16·1 → 1/32·1 → 1/8·2 … → 1/32·3
@@ -812,6 +887,7 @@ class InstEditor(private val host: View) {
             Toggle({ if (st.acidOn) "● AN" else "○ AUS" }, { st.acidOn }, { st.acidOn = !st.acidOn }),
             Toggle({ if (st.acidSquare) "⊓ SQUARE" else "⩘ SAW" }, { st.acidSquare }, { st.acidSquare = !st.acidSquare }),
             Toggle({ "FX-BUS" }, { st.acidFx }, { st.acidFx = !st.acidFx }),
+            Toggle({ "👻 ANDERE SPUREN" }, { ghosts }, { ghosts = !ghosts }),
             Toggle({ "SKALA: " + st.scaleLabel() }, { st.scaleType != 0 }, { onScale?.invoke() }),
             Toggle({ "🎲 ZUFALL" }, { false }, { Engine.pushPatternUndo("ACID Zufall"); st.acidRandom() })
         ) else listOf(
