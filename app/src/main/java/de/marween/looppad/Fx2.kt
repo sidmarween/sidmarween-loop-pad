@@ -33,9 +33,12 @@ private class Ring(val size: Int) {
         if (p > maxP) p = maxP
         val i0 = floor(p).toLong()
         val fr = (p - i0).toFloat()
+        // Hermite-Interpolation (4 Punkte): sauberere Höhen bei Tonhöhen-/Zeitmodulation
+        val xm = a[(Math.floorMod(i0 - 1, size.toLong())).toInt()]
         val x0 = a[(i0 % size).toInt()]
         val x1 = a[((i0 + 1) % size).toInt()]
-        return x0 + (x1 - x0) * fr
+        val x2 = a[((i0 + 2) % size).toInt()]
+        return FxDsp.hermite(xm, x0, x1, x2, fr)
     }
 
     /** Wert von vor d Samples (0 = zuletzt geschrieben). */
@@ -117,8 +120,20 @@ class Fx2(private val sr: Int) {
     private val eqL = Biquad(); private val eqM = Biquad(); private val eqH = Biquad()
     // Filter
     private var ic1 = 0f; private var ic2 = 0f
-    // Sättigung
-    private var lp1 = 0f; private var hp1 = 0f
+    // Sättigung (4-fach überabgetastet, trockenes Signal passend verzögert)
+    private var lp1 = 0f; private var hp1 = 0f; private var lp2 = 0f
+    private val os = Os4()
+    private val osBuf = FloatArray(4)
+    private val dryLine = FloatArray(Os4.LATENCY + 1)
+    private var dryW = 0
+    private fun dryDelayed(x: Float): Float {
+        dryLine[dryW] = x
+        dryW = if (dryW + 1 == dryLine.size) 0 else dryW + 1
+        return dryLine[dryW]
+    }
+    private var prevDrv = 0f
+    private val pitchHead = PitchHead(sr, 50f)
+    private var ptFb = 0f
     // Granular
     private var gCount = 0
     private var ptPh = 0.0
@@ -168,7 +183,9 @@ class Fx2(private val sr: Int) {
         for (g in grains) g.active = false
         java.util.Arrays.fill(apS, 0f); phFb = 0f
         eqL.reset(); eqM.reset(); eqH.reset()
-        ic1 = 0f; ic2 = 0f; lp1 = 0f; hp1 = 0f
+        ic1 = 0f; ic2 = 0f; lp1 = 0f; hp1 = 0f; lp2 = 0f
+        os.reset(); java.util.Arrays.fill(dryLine, 0f); prevDrv = 0f
+        pitchHead.reset(); ptFb = 0f
         java.util.Arrays.fill(inFifo, 0f); java.util.Arrays.fill(outAcc, 0f)
         java.util.Arrays.fill(held, 0f); frozen = false
         java.util.Arrays.fill(hA, 0f); java.util.Arrays.fill(hB, 0f); fsFb = 0f; fmFb = 0f
@@ -266,8 +283,8 @@ class Fx2(private val sr: Int) {
         var coef = 0f
         for (i in 0 until n) {
             stepEngage(target, eRate)
-            if (i % 16 == 0) {
-                phLfo += rate * 16 / sr
+            if (i % 4 == 0) {
+                phLfo += rate * 4 / sr
                 if (phLfo > 1.0) phLfo -= 1.0
                 val l = 0.5f + 0.5f * sin(2 * PI * phLfo).toFloat()
                 val fc = min(0.45f * sr, 200f * 20f.pow(0.3f + (l - 0.3f) * sy))
@@ -348,7 +365,8 @@ class Fx2(private val sr: Int) {
         for (i in 0 until n) {
             stepEngage(target, eRate)
             val d = buf[i]
-            val v0 = if (drive < 0.01f) d else tanh(d * gain) * norm
+            val v0 = if (drive < 0.01f) d else FxDsp.tanhAA(prevDrv * gain, d * gain) * norm
+            prevDrv = d
             val v3 = v0 - ic2
             val v1 = a1 * ic1 + a2 * v3
             val v2 = ic2 + a2 * ic1 + a3 * v3
@@ -369,10 +387,17 @@ class Fx2(private val sr: Int) {
         val norm = 1f / max(0.2f, tanh(drive))
         val a = onePole(18000f * 0.12f.pow(sy))
         val out = 0.4f + level * 0.9f
+        val dcA = onePole(12f)
         for (i in 0 until n) {
             stepEngage(target, eRate)
-            val d = buf[i]
-            val y = (tanh(drive * (d + bias)) - off) * norm
+            val dNow = buf[i]
+            val d = dryDelayed(dNow)
+            os.up(dNow, osBuf)
+            for (k in 0 until 4) osBuf[k] = (tanh(drive * (osBuf[k] + bias)) - off) * norm
+            var y = os.down(osBuf)
+            // Gleichanteil durch den Bias entfernen
+            hp1 += (y - hp1) * dcA
+            y -= hp1
             lp1 += (y - lp1) * a
             buf[i] = d + (lp1 * out - d) * engage * mix
         }
@@ -381,16 +406,20 @@ class Fx2(private val sr: Int) {
     private fun overdrive(buf: FloatArray, n: Int, target: Float, eRate: Float, mix: Float, bass: Float, level: Float, sx: Float, sy: Float) {
         val drive = 1f + sx * 40f
         val hpA = onePole(400f * 0.1f.pow(bass))
-        val lpA = onePole(800f * 20f.pow(sy))
-        val out = 0.3f + level * 0.8f
+        val lpA = onePole(1200f * 12f.pow(sy))
+        val out = (0.3f + level * 0.8f) / (1f + 0.12f * kotlin.math.ln(drive))
         for (i in 0 until n) {
             stepEngage(target, eRate)
-            val d = buf[i]
-            hp1 += (d - hp1) * hpA
-            val v = (d - hp1) * drive
-            val y = if (v >= 0f) 1f - exp(-v) else -0.8f * (1f - exp(1.25f * v))
+            val dNow = buf[i]
+            val d = dryDelayed(dNow)
+            hp1 += (dNow - hp1) * hpA
+            os.up((dNow - hp1) * drive, osBuf)
+            for (k in 0 until 4) { val v = osBuf[k]; osBuf[k] = if (v >= 0f) 1f - exp(-v) else -0.8f * (1f - exp(1.25f * v)) }
+            val y = os.down(osBuf)
+            // zwei Pole Tiefpass: warm statt kratzig
             lp1 += (y - lp1) * lpA
-            buf[i] = d + (lp1 * out - d) * engage * mix
+            lp2 += (lp1 - lp2) * lpA
+            buf[i] = d + (lp2 * out - d) * engage * mix
         }
     }
 
@@ -418,21 +447,17 @@ class Fx2(private val sr: Int) {
     }
 
     private fun pitch(buf: FloatArray, n: Int, target: Float, eRate: Float, mix: Float, fb: Float, spray: Float, sx: Float, sy: Float) {
-        val r = 2.0.pow(semis(sx) / 12.0)
-        val base = (0.03 + sy * 0.12) * sr
+        // Y (GRÖSSE): ganz leichte Verstimmung für Breite; Streuung macht den Klang lebendiger
+        val r = 2.0.pow((semis(sx) + (sy - 0.5) * 0.3 + spray * 0.15 * sin(2 * PI * lfoPh)) / 12.0)
+        lfoPh += n * 0.4 / sr
+        if (lfoPh > 1.0) lfoPh -= 1.0
         for (i in 0 until n) {
             stepEngage(target, eRate)
-            ptPh += (1.0 - r) / ptG
-            if (ptPh >= 1.0 || ptPh < 0.0) {
-                ptPh = ((ptPh % 1.0) + 1.0) % 1.0
-                ptG = base * (1.0 + spray * (rnd.nextDouble() - 0.5))
-            }
-            val ph2 = (ptPh + 0.5) % 1.0
-            val w1 = (1.0 - abs(2 * ptPh - 1)).toFloat()
-            val w2 = (1.0 - abs(2 * ph2 - 1)).toFloat()
-            val o = hist.back(2 + ptPh * ptG) * w1 + hist.back(2 + ph2 * ptG) * w2
             val d = buf[i]
-            hist.write(d + o * fb * 0.8f)
+            hist.write(d)
+            // Rückkopplung durch eine Bremse (tanh), damit Kaskaden nicht kippen
+            val o = pitchHead.tick(d + tanh(ptFb * fb * 0.8f), r)
+            ptFb = o
             buf[i] = d + (o - d) * engage * mix
         }
     }
@@ -451,7 +476,7 @@ class Fx2(private val sr: Int) {
             if (stRp > hist.w - 2 - g * rate) stRp = hist.w - 2 - g * rate
             if (++gCount >= hopN) {
                 gCount = 0
-                spawn(hist, stRp + (rnd.nextDouble() - 0.5) * spray * g, rate, g, 0.5f)
+                spawn(hist, stRp + (rnd.nextDouble() - 0.5) * spray * g, rate, g, 0.75f)
             }
             val o = grainSum()
             buf[i] = d + (o - d) * engage * mix
@@ -463,7 +488,7 @@ class Fx2(private val sr: Int) {
         val density = 4f + sy * 76f
         val size = ((0.02 + sizeK * 0.28) * sr).toInt()
         val overlap = density * size / sr
-        val gain = 0.7f / sqrt(max(1f, overlap))
+        val gain = 1.4f / sqrt(max(1f, overlap))
         val prob = density / sr
         val steps = intArrayOf(-12, -5, 0, 0, 7, 12)
         for (i in 0 until n) {

@@ -12,46 +12,6 @@ import kotlin.math.sin
 import kotlin.math.tan
 import kotlin.math.tanh
 
-/** Freeverb (mono) – für REVERB (Raum) und HALL (große Halle). */
-private class Verb(sr: Int, scale: Float) {
-    private val combTun = intArrayOf(1116, 1188, 1277, 1356, 1422, 1491, 1557, 1617)
-    private val apTun = intArrayOf(556, 441, 341, 225)
-    private val combs = Array(8) { FloatArray(max(1, (combTun[it] * scale * sr / 44100f).toInt())) }
-    private val combIdx = IntArray(8)
-    private val combStore = FloatArray(8)
-    private val aps = Array(4) { FloatArray(max(1, (apTun[it] * sr / 44100f).toInt())) }
-    private val apIdx = IntArray(4)
-
-    fun reset() {
-        for (c in combs) java.util.Arrays.fill(c, 0f)
-        java.util.Arrays.fill(combStore, 0f)
-        for (a in aps) java.util.Arrays.fill(a, 0f)
-    }
-
-    fun tick(input: Float, room: Float, damp: Float): Float {
-        var acc = 0f
-        for (c in 0 until 8) {
-            val cb = combs[c]
-            val ci = combIdx[c]
-            val yv = cb[ci]
-            combStore[c] = yv * (1f - damp) + combStore[c] * damp
-            cb[ci] = input + combStore[c] * room
-            combIdx[c] = if (ci + 1 == cb.size) 0 else ci + 1
-            acc += yv
-        }
-        for (a in 0 until 4) {
-            val ab = aps[a]
-            val ai = apIdx[a]
-            val bo = ab[ai]
-            val o = -acc + bo
-            ab[ai] = acc + bo * 0.5f
-            apIdx[a] = if (ai + 1 == ab.size) 0 else ai + 1
-            acc = o
-        }
-        return acc
-    }
-}
-
 /** Bandpass (TPT-SVF) für den Vocoder. */
 private class Band {
     var a1 = 0f
@@ -234,6 +194,8 @@ class Fx(private val sr: Int) {
     private val sic1 = FloatArray(4)
     private val sic2 = FloatArray(4)
 
+    private var prevDrv = 0f
+
     // BELL (bis 3 Stufen Biquad)
     private val bz1 = FloatArray(3)
     private val bz2 = FloatArray(3)
@@ -251,6 +213,7 @@ class Fx(private val sr: Int) {
     private var dlW = 0
     private var dlTime = sr * 0.25f
     private var dlLp = 0f
+    private var dlHp = 0f
     private var lfo = 0.0
 
     // STUTTER
@@ -270,8 +233,8 @@ class Fx(private val sr: Int) {
     private var mdLfo = 0.0
 
     // REVERB / HALL
-    private val room = Verb(sr, 1f)
-    private val hall = Verb(sr, 1.7f)
+    private val room = Plate(sr, 0.55f)
+    private val hall = Plate(sr, 1.0f)
     private val preSize = sr / 2 + 1
     private val pre = FloatArray(preSize)
     private var preW = 0
@@ -285,20 +248,35 @@ class Fx(private val sr: Int) {
     private val env = FloatArray(bandCount)
     private val oscPh = DoubleArray(3)
     private var vocFormant = -1f
+    private val vocRnd = java.util.Random(7)
 
-    // DISTORTION
+    // DISTORTION (4-fach überabgetastet)
     private var dsLp = 0f
     private var dsHp = 0f
+    private val os = Os4()
+    private val osBuf = FloatArray(4)
+    private val dryLine = FloatArray(Os4.LATENCY + 1)
+    private var dryW = 0
+    private var dsX = 0f
+    private var dsLp2 = 0f
+
+    /** Trockenes Signal um die Laufzeit der Überabtastung verzögert (sonst Kammfilter beim Mischen). */
+    private fun dryDelayed(x: Float): Float {
+        dryLine[dryW] = x
+        dryW = if (dryW + 1 == dryLine.size) 0 else dryW + 1
+        return dryLine[dryW]
+    }
 
     private fun reset() {
         java.util.Arrays.fill(sic1, 0f); java.util.Arrays.fill(sic2, 0f)
         java.util.Arrays.fill(bz1, 0f); java.util.Arrays.fill(bz2, 0f)
         java.util.Arrays.fill(cb, 0f); cbLp = 0f
-        java.util.Arrays.fill(dl, 0f); dlLp = 0f
+        java.util.Arrays.fill(dl, 0f); dlLp = 0f; dlHp = 0f
         gateEnv = 0f; rpLp = 0f
         holdCount = 0f; held = 0f; crLp = 0f
         java.util.Arrays.fill(md, 0f)
         room.reset(); hall.reset()
+        os.reset(); java.util.Arrays.fill(dryLine, 0f); dsX = 0f
         java.util.Arrays.fill(pre, 0f)
         hpState = 0f; verbLp = 0f
         for (b in modBands) b.reset()
@@ -312,7 +290,45 @@ class Fx(private val sr: Int) {
 
     private fun onePole(cutoff: Float): Float = (1.0 - exp(-2.0 * PI * cutoff / sr)).toFloat()
 
+    // ---- Lautheits-Ausgleich: Effekte, die den Pegel stark anheben (Verzerrer, EQ, Filter-Resonanz, Vocoder …),
+    // werden auf höchstens +3 dB über dem trockenen Signal gehalten – sonst übersteuert der Master und es klirrt.
+    private var lvDry = 1e-6
+    private var lvOut = 1e-6
+    private var lvGain = 1f
+
+    private fun levelMatched(type: Int): Boolean = type <= PEAK || type == COMB || type == VOCODER || type == DISTORTION || type == CRUSH ||
+        type == EQ || type == FILTER || type == SATURATE || type == OVERDRIVE || type == SMEAR || type == FREQSHIFT ||
+        type == RESONATOR || type == MULTIFX || type == RINGMOD || type == FM || type == ROBOT || type == PHASER || type == FLANGER
+
     fun process(
+        buf: FloatArray, n: Int, frame0: Long,
+        type: Int, x: Float, y: Float, touching: Boolean,
+        mix: Float, p1: Float, p2: Float,
+        masterLen: Long, masterStart: Long,
+        mic: FloatArray
+    ) {
+        if (!levelMatched(type)) {
+            lvGain = 1f
+            processInner(buf, n, frame0, type, x, y, touching, mix, p1, p2, masterLen, masterStart, mic)
+            return
+        }
+        var eD = 0.0
+        for (i in 0 until n) eD += buf[i] * buf[i]
+        processInner(buf, n, frame0, type, x, y, touching, mix, p1, p2, masterLen, masterStart, mic)
+        var eO = 0.0
+        for (i in 0 until n) eO += buf[i] * buf[i]
+        // Hüllkurven (~250 ms), dann Ziel-Verstärkung; nur absenken, nie anheben
+        val a = 1.0 - exp(-n / (0.25 * sr))
+        lvDry += (eD / n - lvDry) * a
+        lvOut += (eO / n - lvOut) * a
+        val target = if (lvOut > 1e-9) min(1.0, kotlin.math.sqrt((lvDry * 2.0 + 1e-9) / lvOut)).toFloat() else 1f
+        val g0 = lvGain
+        val g1 = g0 + (target - g0) * min(1f, (n / (0.05f * sr)))
+        if (g0 < 0.999f || g1 < 0.999f) for (i in 0 until n) buf[i] *= g0 + (g1 - g0) * (i + 1) / n
+        lvGain = g1
+    }
+
+    private fun processInner(
         buf: FloatArray, n: Int, frame0: Long,
         type: Int, x: Float, y: Float, touching: Boolean,
         mix: Float, p1: Float, p2: Float,
@@ -363,8 +379,8 @@ class Fx(private val sr: Int) {
             STUTTER -> stutter(buf, n, frame0, target, eRate, mix, p1, p2, bar)
             FLANGER -> flanger(buf, n, target, eRate, mix, p1, p2)
             CHORUS -> chorus(buf, n, target, eRate, mix, p1, p2)
-            REVERB -> reverb(buf, n, target, eRate, mix, p1, p2, room, 0.7f + sx * 0.28f, sy * 0.7f)
-            HALL -> reverb(buf, n, target, eRate, mix, p1, p2, hall, 0.88f + sx * 0.115f, 0.6f - sy * 0.55f)
+            REVERB -> reverb(buf, n, target, eRate, mix, p1, p2, room, 0.35f + sx * 0.55f, sy * 0.85f)
+            HALL -> reverb(buf, n, target, eRate, mix, p1, p2, hall, 0.7f + sx * 0.28f, 0.85f - sy * 0.8f)
             VOCODER -> vocoder(buf, n, target, eRate, mix, p1, p2, mic)
             DISTORTION -> distortion(buf, n, target, eRate, mix, p1, p2)
             CRUSH -> crush(buf, n, target, eRate, mix, p1, p2)
@@ -392,7 +408,8 @@ class Fx(private val sr: Int) {
         for (i in 0 until n) {
             stepEngage(target, eRate)
             val dry = buf[i]
-            var v = if (drive < 0.01f) dry else tanh(dry * gain) * norm
+            var v = if (drive < 0.01f) dry else FxDsp.tanhAA(prevDrv * gain, dry * gain) * norm
+            prevDrv = dry
             for (s in 0 until st) {
                 val last = s == st - 1
                 val k = if (last) kRes else kBut
@@ -459,7 +476,8 @@ class Fx(private val sr: Int) {
         for (i in 0 until n) {
             stepEngage(target, eRate)
             val dry = buf[i]
-            val v0 = if (drive < 0.01f) dry else tanh(dry * gain) * norm
+            val v0 = if (drive < 0.01f) dry else FxDsp.tanhAA(prevDrv * gain, dry * gain) * norm
+            prevDrv = dry
             val v3 = v0 - sic2[0]
             val v1 = a1 * sic1[0] + a2 * v3
             val v2 = sic2[0] + a2 * sic1[0] + a3 * v3
@@ -512,6 +530,7 @@ class Fx(private val sr: Int) {
         val lpA = onePole(600f * (16000f / 600f).pow(tone))
         val lfoInc = 2.0 * PI * 0.6 / sr
         val wobDepth = wobble * 0.004f * sr
+        val hpA = onePole(120f)
         for (i in 0 until n) {
             stepEngage(target, eRate)
             dlTime += (t - dlTime) * 0.0006f
@@ -520,22 +539,20 @@ class Fx(private val sr: Int) {
             val d = dlTime + wobDepth * sin(lfo).toFloat()
             val out = readInterp(dl, dlSize, dlW - d)
             dlLp += (out - dlLp) * lpA
+            dlHp += (dlLp - dlHp) * hpA
             val dry = buf[i]
-            dl[dlW] = dry * engage + dlLp * fb
+            // Rückkopplung ohne Bass-Matsch und mit weicher Sättigung (wird nie hart/kratzig)
+            val f = (dlLp - dlHp) * fb
+            dl[dlW] = dry * engage + (if (f > 0.6f || f < -0.6f) tanh(f) else f)
             dlW++
             if (dlW == dlSize) dlW = 0
             buf[i] = dry + out * mix
         }
     }
 
-    private fun readInterp(b: FloatArray, size: Int, pos: Float): Float {
-        var rp = pos
-        while (rp < 0f) rp += size
-        val i0 = rp.toInt() % size
-        val i1 = (i0 + 1) % size
-        val fr = rp - floor(rp)
-        return b[i0] + (b[i1] - b[i0]) * fr
-    }
+    /** Interpoliertes Lesen 3. Ordnung (Hermite): keine dumpfen Höhen und kein Rauschen bei Modulation. */
+    @Suppress("UNUSED_PARAMETER")
+    private fun readInterp(b: FloatArray, size: Int, pos: Float): Float = FxDsp.readRing(b, pos)
 
     // ------------------------------------------------------------------ STUTTER (taktsynchron)
 
@@ -628,7 +645,7 @@ class Fx(private val sr: Int) {
 
     private fun reverb(
         buf: FloatArray, n: Int, target: Float, eRate: Float, mix: Float,
-        preDelay: Float, lowCut: Float, verb: Verb, roomFb: Float, damp: Float
+        preDelay: Float, lowCut: Float, verb: Plate, decay: Float, damp: Float
     ) {
         val preS = min(preSize - 1, (preDelay * 0.5f * sr).toInt())
         val hpA = onePole(20f * 40f.pow(lowCut))
@@ -642,8 +659,8 @@ class Fx(private val sr: Int) {
             preW++
             if (preW == preSize) preW = 0
             hpState += (delayedIn - hpState) * hpA
-            val out = verb.tick((delayedIn - hpState) * 0.015f, roomFb, damp)
-            buf[i] = dry + out * mix * 2.5f
+            val out = verb.tick(delayedIn - hpState, decay, damp)
+            buf[i] = dry + out * mix * 0.64f
         }
     }
 
@@ -675,9 +692,11 @@ class Fx(private val sr: Int) {
                 oscPh[o] += incs[o]
                 if (oscPh[o] >= 1.0) oscPh[o] -= 1.0
             }
-            car += (2.0 * oscPh[0] - 1.0).toFloat()
-            car += (2.0 * oscPh[1] - 1.0).toFloat() * v2
-            car += (2.0 * oscPh[2] - 1.0).toFloat() * v3
+            car += (2.0 * oscPh[0] - 1.0 - FxDsp.blep(oscPh[0], incs[0])).toFloat()
+            car += (2.0 * oscPh[1] - 1.0 - FxDsp.blep(oscPh[1], incs[1])).toFloat() * v2
+            car += (2.0 * oscPh[2] - 1.0 - FxDsp.blep(oscPh[2], incs[2])).toFloat() * v3
+            // etwas Rauschen für S- und T-Laute (Verständlichkeit)
+            car += (vocRnd.nextFloat() - 0.5f) * 0.25f
             val mod = dry + (if (i < mic.size) mic[i] else 0f) * micAmt * 2f
             var wet = 0f
             for (b in 0 until bandCount) {
@@ -686,7 +705,7 @@ class Fx(private val sr: Int) {
                 env[b] = e + (m - e) * (if (m > e) att else rel)
                 wet += carBands[b].bp(car) * env[b]
             }
-            wet *= 6f
+            wet *= 0.2f
             buf[i] = dry + (wet - dry) * engage * mix
         }
     }
@@ -695,20 +714,33 @@ class Fx(private val sr: Int) {
 
     private fun distortion(buf: FloatArray, n: Int, target: Float, eRate: Float, mix: Float, kind: Float, level: Float) {
         val gain = 1f + sx * sx * 60f
-        val lpA = onePole(700f * (14000f / 700f).pow(sy))
-        val hpA = onePole(60f)
-        val outGain = 0.3f + level * 0.9f
+        // Ton: zwei Pole Tiefpass (wie ein Gitarren-Speaker), weniger „Sägen“
+        val lpA = onePole(1500f * (16000f / 1500f).pow(sy))
+        val hpA = onePole(70f)
+        // Lautheit ausgleichen: mehr Drive ≠ viel lauter
+        val outGain = (0.3f + level * 0.9f) / (1f + 0.15f * kotlin.math.ln(gain))
+        val tilt = onePole(700f)
         for (i in 0 until n) {
             stepEngage(target, eRate)
-            val dry = buf[i]
-            dsHp += (dry - dsHp) * hpA
-            val v = (dry - dsHp) * gain
-            val soft = tanh(v)
-            val hard = v.coerceIn(-1f, 1f)
-            val fold = sin(v * 1.5f)
-            val shaped = if (kind < 0.5f) soft + (hard - soft) * kind * 2f else hard + (fold - hard) * (kind - 0.5f) * 2f
+            val dryNow = buf[i]
+            val dry = dryDelayed(dryNow)
+            dsHp += (dryNow - dsHp) * hpA
+            // leichte Mitten-Betonung vor der Verzerrung (weniger Matsch im Bass)
+            val hpIn = dryNow - dsHp
+            dsX += (hpIn - dsX) * tilt
+            val pre = (hpIn + (hpIn - dsX) * 0.6f) * gain
+            os.up(pre, osBuf)
+            for (k in 0 until 4) {
+                val v = osBuf[k]
+                val soft = tanh(v)
+                val hard = v.coerceIn(-1f, 1f)
+                val fold = sin(v * 1.5f)
+                osBuf[k] = if (kind < 0.5f) soft + (hard - soft) * kind * 2f else hard + (fold - hard) * (kind - 0.5f) * 2f
+            }
+            val shaped = os.down(osBuf)
             dsLp += (shaped - dsLp) * lpA
-            buf[i] = dry + (dsLp * outGain - dry) * engage * mix
+            dsLp2 += (dsLp - dsLp2) * lpA
+            buf[i] = dry + (dsLp2 * outGain - dry) * engage * mix
         }
     }
 

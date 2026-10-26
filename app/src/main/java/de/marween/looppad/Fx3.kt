@@ -13,41 +13,6 @@ import kotlin.math.round
 import kotlin.math.sin
 import kotlin.math.tanh
 
-/** Tonhöhenverschiebung in Echtzeit (zwei überblendete Leseköpfe auf einer Verzögerungsleitung). */
-private class Shifter(sr: Int, winMs: Float = 40f) {
-    private val size = 1 shl 15
-    private val mask = size - 1
-    private val buf = FloatArray(size)
-    private var w = 0
-    private var phase = 0.0
-    private val win = max(64.0, sr * winMs / 1000.0)
-
-    fun reset() {
-        java.util.Arrays.fill(buf, 0f)
-        phase = 0.0
-    }
-
-    private fun read(d: Double): Float {
-        val p = w - 1 - d
-        val i0 = floor(p).toInt()
-        val fr = (p - i0).toFloat()
-        val a = buf[i0 and mask]
-        val b = buf[(i0 + 1) and mask]
-        return a + (b - a) * fr
-    }
-
-    fun tick(x: Float, ratio: Double): Float {
-        buf[w and mask] = x
-        w++
-        phase += (1.0 - ratio) / win
-        phase -= floor(phase)
-        val p2 = (phase + 0.5) % 1.0
-        val g1 = (0.5 - 0.5 * cos(2 * PI * phase)).toFloat()
-        val g2 = (0.5 - 0.5 * cos(2 * PI * p2)).toFloat()
-        return read(phase * win + 2) * g1 + read(p2 * win + 2) * g2
-    }
-}
-
 /**
  * Neue Kaoss-Effekte: Tape-Echo und Space-Echo (Zeit + Pitch per Wischen), Looper, Slicer, Reverse
  * sowie Vocal-Effekte: Harmonizer, Autotune, Roboter.
@@ -72,10 +37,11 @@ class Fx3(private val sr: Int) {
     private var flPh = 0.0
     private var lp = 0f
     private var hp = 0f
-    private val shA = Shifter(sr)
-    private val shB = Shifter(sr)
-    private val shC = Shifter(sr, 30f)
-    private val verb = SpaceVerb(sr)
+    private val shA = PitchHead(sr, 50f)
+    private val shB = PitchHead(sr, 50f)
+    private val shC = PitchHead(sr, 40f)
+    /** Federhall-artiger kleiner Plate-Hall für das Space-Echo. */
+    private val verb = Plate(sr, 0.4f)
 
     // Looper
     private var loop = FloatArray(0)
@@ -196,7 +162,7 @@ class Fx3(private val sr: Int) {
             dl[dW and dMask] = x * engage + fbSig
             dW++
             var out = lp - hp
-            if (space && verbAmt > 0.01f) out += verb.tick(out * 0.5f + x * engage * 0.2f) * verbAmt
+            if (space && verbAmt > 0.01f) out += verb.tick(out * 0.5f + x * engage * 0.2f, 0.72f, 0.45f, 0.6f) * verbAmt * 0.9f
             buf[i] = x + out * mix
         }
     }
@@ -205,9 +171,7 @@ class Fx3(private val sr: Int) {
         val p = dW - 1 - d
         val i0 = floor(p).toInt()
         val fr = (p - i0).toFloat()
-        val a = dl[i0 and dMask]
-        val b = dl[(i0 + 1) and dMask]
-        return a + (b - a) * fr
+        return FxDsp.hermite(dl[(i0 - 1) and dMask], dl[i0 and dMask], dl[(i0 + 1) and dMask], dl[(i0 + 2) and dMask], fr)
     }
 
     // ------------------------------------------------------------------ LOOPER
@@ -468,31 +432,5 @@ class Fx3(private val sr: Int) {
             lp += toneC * (v - lp)
             buf[i] = x * (1f - engage * mix) + lp * engage * mix
         }
-    }
-}
-
-/** Kleiner Federhall für das Space-Echo. */
-private class SpaceVerb(sr: Int) {
-    private val lens = intArrayOf(1499, 1777, 1933, 2207).map { max(16, it * sr / 44100) }
-    private val bufs = lens.map { FloatArray(it) }
-    private val idx = IntArray(4)
-    private var lp = 0f
-
-    fun reset() {
-        for (b in bufs) java.util.Arrays.fill(b, 0f)
-        lp = 0f
-    }
-
-    fun tick(x: Float): Float {
-        var out = 0f
-        for (k in 0 until 4) {
-            val b = bufs[k]
-            val v = b[idx[k]]
-            out += v
-            lp += 0.3f * (v - lp)
-            b[idx[k]] = x + lp * 0.62f
-            idx[k] = (idx[k] + 1) % b.size
-        }
-        return out * 0.35f
     }
 }
