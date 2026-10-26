@@ -8890,6 +8890,10 @@ class PadView(context: Context) : View(context) {
         ) }
     ) }
 
+    /** Für die automatischen Tests: Schritte einer Lektion und Sprung zu einem Schritt. */
+    internal fun testLessonSteps(): Int = lSteps.size
+    internal fun testLessonGo(i: Int) = enterStep(i)
+
     /** Namen und Beschreibungen der Lektionen (für die Auswahl). */
     fun lessonList(): List<Pair<String, String>> = lessons.map { it.name to it.desc }
 

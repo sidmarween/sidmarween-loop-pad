@@ -1,0 +1,42 @@
+name: Tests
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.11.1'
+      - name: Oberflächen-Tests
+        run: gradle testDebugUnitTest --no-daemon 2>&1 | tee test.log || true
+      - name: Bericht ablegen
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python3 - <<'PY'
+          import glob, xml.etree.ElementTree as ET
+          out = []
+          for f in glob.glob('app/build/test-results/**/*.xml', recursive=True):
+              r = ET.parse(f).getroot()
+              out.append(f"{r.get('name')}: tests={r.get('tests')} failures={r.get('failures')} errors={r.get('errors')}")
+              for tc in r.iter('testcase'):
+                  for fl in list(tc.iter('failure')) + list(tc.iter('error')):
+                      out.append(f"--- {tc.get('name')}\n" + (fl.text or fl.get('message') or '')[:20000])
+          if not out:
+              out.append(open('test.log', errors='ignore').read()[-15000:])
+          open('tests.txt', 'w').write("\n".join(out))
+          PY
+          gh release view ai-ci-log >/dev/null 2>&1 || gh release create ai-ci-log --title "Prüfprotokolle" --notes "Automatische Prüfungen" --prerelease
+          gh release upload ai-ci-log tests.txt --clobber

@@ -576,6 +576,7 @@ object MicTools {
 
         fun process(x: FloatArray, n: Int, allowed: (Int) -> Boolean, level: Float) {
             val vs = voices
+            val nv = min(3, vs.size)
             for (i in 0 until n) {
                 val v = x[i]
                 tr.push(v)
@@ -583,7 +584,7 @@ object MicTools {
                     val m = tr.midi
                     if (m.isNaN()) for (k in 0 until 3) target[k] = 1.0 else {
                         val base = nearestAllowed(m, allowed)
-                        for (k in vs.indices.take(3)) {
+                        for (k in 0 until nv) {
                             val t = scaleStep(base, vs[k], allowed)
                             target[k] = Math.pow(2.0, (t - m) / 12.0).coerceIn(0.4, 2.2)
                             sh[k].period = sr / hzOf(m)
@@ -591,7 +592,7 @@ object MicTools {
                     }
                 }
                 var add = 0f
-                for (k in vs.indices.take(3)) {
+                for (k in 0 until nv) {
                     val s = sh[k]
                     s.ratio += (target[k] - s.ratio) * 0.02
                     add += s.next(v)

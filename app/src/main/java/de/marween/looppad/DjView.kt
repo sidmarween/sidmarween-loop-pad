@@ -694,6 +694,10 @@ class DjView(context: Context) : View(context) {
         return if (any) u else null
     }
 
+    internal fun testLessonSteps(): Int = lSteps.size
+    internal fun testLessonGo(i: Int) = enter(i)
+    internal fun testPadMode(m: Int) { padMode = m; layoutAll() }
+
     fun startLesson() {
         lesson = 0
         lSteps = djLesson

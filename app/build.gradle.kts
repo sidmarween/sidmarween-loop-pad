@@ -52,6 +52,7 @@ android {
     }
     // native Bibliotheken (KI) gepackt ausliefern – kleinere APK
     packaging { jniLibs { useLegacyPackaging = true } }
+    testOptions { unitTests { isIncludeAndroidResources = true; isReturnDefaultValues = true } }
     lint {
         checkReleaseBuilds = false
         abortOnError = false
@@ -63,4 +64,7 @@ android {
 dependencies {
     // KI-Stem-Trennung (Spleeter als ONNX)
     implementation("com.microsoft.onnxruntime:onnxruntime-android:1.20.0")
+    // Automatische Oberflächen-Tests (zeichnen + zufällige Berührungen, findet Abstürze)
+    testImplementation("junit:junit:4.13.2")
+    testImplementation("org.robolectric:robolectric:4.13")
 }
