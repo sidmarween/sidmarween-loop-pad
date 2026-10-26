@@ -71,6 +71,7 @@ class MainActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        CrashLog.install(this)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         if (Build.VERSION.SDK_INT >= 28) {
             val lp = window.attributes
@@ -197,6 +198,20 @@ class MainActivity : Activity() {
             }
         }
         if (!prefs.getBoolean("tourDone", false)) pads.postDelayed({ if (!djMode && pads.parent != null) pads.startTour() }, 2500L)
+        CrashLog.take(this)?.let { rep ->
+            pads.postDelayed({
+                ui().setTitle("😕 Marv PAD ist beim letzten Mal abgestürzt")
+                    .setMessage("Schick den Bericht an den Entwickler (Teilen) oder kopiere ihn – dann lässt sich der Fehler genau finden.\n\n" + rep.take(1500))
+                    .setPositiveButton("Teilen") { _, _ ->
+                        try { startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).apply { type = "text/plain"; putExtra(Intent.EXTRA_SUBJECT, "Marv PAD Absturz"); putExtra(Intent.EXTRA_TEXT, rep) }, "Bericht teilen")) } catch (e: Exception) {}
+                    }
+                    .setNeutralButton("Kopieren") { _, _ ->
+                        (getSystemService(CLIPBOARD_SERVICE) as android.content.ClipboardManager).setPrimaryClip(android.content.ClipData.newPlainText("Absturz", rep))
+                        toast("Bericht kopiert – einfach in den Chat einfügen")
+                    }
+                    .setNegativeButton("Schließen", null).show()
+            }, 1200L)
+        }
         pads.onSlicerToPads = {
             val n = Engine.slicerToPads(PadView.VISIBLE_PADS)
             hint(if (n > 0) "✂ $n Slices als ⚡ One-Shots auf freie Pads gelegt" else "Keine freien Pads – erst Pads leeren")

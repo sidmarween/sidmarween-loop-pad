@@ -17,7 +17,7 @@ object Ghost {
     /** Drums-Filter: 0 alles, 1 nur Hi-Hats & Becken, 2 nur Percussion, 3 ohne Bass Drum. */
     @Volatile var drumFilter = 1
     val FILTERS = arrayOf("ALLES", "NUR HATS", "NUR PERC", "OHNE KICK")
-    val laneName = arrayOf("–", "–", "–")
+    val laneName = arrayOf("–", "–", "–", "–")
     /** Grundton/Moll der geladenen Bass-/Synth-Patterns (für die Transponierung). */
     @Volatile private var acidTonic = 0
     @Volatile private var acidMinor = true

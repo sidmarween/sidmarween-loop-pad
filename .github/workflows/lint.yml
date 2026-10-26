@@ -1,0 +1,33 @@
+name: Lint
+
+# Android-Lint (findet u. a. Aufrufe, die auf älteren Android-Versionen abstürzen) – Bericht als Release-Datei
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.11.1'
+      - name: Lint
+        run: gradle lintRelease --no-daemon || true
+      - name: Bericht ablegen
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          f=$(ls app/build/reports/lint-results*.txt 2>/dev/null | head -1)
+          [ -z "$f" ] && f=$(ls app/build/intermediates/lint_intermediate_text_report/*/*/lint-results*.txt 2>/dev/null | head -1)
+          [ -z "$f" ] && { find app/build -name "lint-results*" > lint.txt; } || cp "$f" lint.txt
+          gh release view ai-ci-log >/dev/null 2>&1 || gh release create ai-ci-log --title "Prüfprotokolle" --notes "Automatische Prüfungen" --prerelease
+          gh release upload ai-ci-log lint.txt --clobber
