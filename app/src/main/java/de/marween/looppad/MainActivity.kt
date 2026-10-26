@@ -6021,6 +6021,10 @@ class MainActivity : Activity() {
         }
         box.addView(keysBtn)
         box.addView(Button(this).apply {
+            text = "🎹 MIDI-Ausgang: Instrumente spielen externe Synths …"
+            setOnClickListener { midiOutSetup() }
+        })
+        box.addView(Button(this).apply {
             text = "🎛 Regler & Fader zuordnen (CC lernen) …"
             setOnClickListener { midiCcMap() }
         })
@@ -6114,6 +6118,60 @@ class MainActivity : Activity() {
             }
             .setNegativeButton("Fertig") { _, _ -> Midi.learnBtn = -1; Midi.save(getSharedPreferences("marvpad", MODE_PRIVATE)) }
             .show()
+    }
+
+    /** MIDI-Ausgang: je Instrument intern / extern / beides und Kanal, Feinabgleich, Testnote. */
+    private fun midiOutSetup() {
+        val prefs = getSharedPreferences("marvpad", MODE_PRIVATE)
+        val (box, scroll) = dialogBox()
+        note(box, "Die Patterns von 303, Drums und Synths können externe Geräte spielen (z. B. microKORG, Drumcomputer) – über ein USB-MIDI-Kabel oder ein Gerät mit USB-MIDI. " +
+            "„Nur extern“ schaltet das interne Instrument stumm. Den Klang des Geräts kannst du über ein Audio-Interface wieder als Loop aufnehmen.")
+        if (!Midi.hasOutputs()) note(box, "⚠ Gerade ist kein MIDI-Gerät angeschlossen.", Color.rgb(255, 170, 80))
+        val modes = arrayOf("Nur intern", "Nur extern", "Intern + extern")
+        val d = resources.displayMetrics.density
+        for (i in Midi.OUT_NAMES.indices) {
+            val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; setPadding(0, (4 * d).toInt(), 0, (4 * d).toInt()) }
+            row.addView(TextView(this).apply { text = Midi.OUT_NAMES[i]; setTextColor(Color.WHITE); textSize = 14f }, LinearLayout.LayoutParams(0, -2, 1.2f))
+            val bm = Button(this).apply { text = modes[Midi.outMode[i]]; textSize = 12f }
+            bm.setOnClickListener {
+                ui().setTitle(Midi.OUT_NAMES[i]).setSingleChoiceItems(modes, Midi.outMode[i]) { dd, w ->
+                    Midi.outMode[i] = w; bm.text = modes[w]; Midi.save(prefs); dd.dismiss()
+                    if (w == 0) Midi.outAllOff()
+                }.show()
+            }
+            row.addView(bm, LinearLayout.LayoutParams(0, -2, 1.4f))
+            val bc = Button(this).apply { text = "Kanal ${Midi.outCh[i]}"; textSize = 12f }
+            bc.setOnClickListener {
+                ui().setTitle("MIDI-Kanal für ${Midi.OUT_NAMES[i]}").setSingleChoiceItems(Array(16) { "Kanal ${it + 1}" + if (it == 9) " (Drums)" else "" }, Midi.outCh[i] - 1) { dd, w ->
+                    Midi.outAllOff(); Midi.outCh[i] = w + 1; bc.text = "Kanal ${w + 1}"; Midi.save(prefs); dd.dismiss()
+                }.show()
+            }
+            row.addView(bc, LinearLayout.LayoutParams(0, -2, 1f))
+            box.addView(row)
+        }
+        note(box, "Feinabgleich: Kommen die externen Töne zu spät, nach rechts schieben (Noten werden früher gesendet).", Color.WHITE)
+        val tv = TextView(this).apply { setTextColor(Color.rgb(200, 200, 200)) }
+        fun lbl() { tv.text = String.format(Locale.GERMANY, "%+.0f ms früher", Midi.outEarlyMs) }
+        lbl()
+        val sb = SeekBar(this).apply { max = 200; progress = (Midi.outEarlyMs + 50f).toInt().coerceIn(0, 200) }
+        sb.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(s: SeekBar?, p: Int, fromUser: Boolean) { Midi.outEarlyMs = (p - 50).toFloat(); lbl() }
+            override fun onStartTrackingTouch(s: SeekBar?) {}
+            override fun onStopTrackingTouch(s: SeekBar?) { Midi.save(prefs) }
+        })
+        box.addView(sb); box.addView(tv)
+        note(box, "Tipp: Für Arpeggiatoren und Delays im externen Gerät zusätzlich „MIDI-Clock senden“ einschalten. Drums nutzen General-MIDI-Noten (Kick 36, Snare 38, Clap 39, Hi-Hat 42/46 …).")
+        ui().setTitle("🎹 MIDI-Ausgang").setView(scroll)
+            .setNeutralButton("Testnote") { _, _ ->
+                if (!Midi.hasOutputs()) { toast("Kein MIDI-Gerät angeschlossen"); return@setNeutralButton }
+                val now = System.nanoTime()
+                for ((k, nn) in intArrayOf(48, 52, 55, 60).withIndex()) {
+                    Midi.outNote(0, now + k * 150_000_000L, nn, 100, true)
+                    Midi.outNote(0, now + k * 150_000_000L + 130_000_000L, nn, 0, false)
+                }
+                toast("Testnoten auf Kanal ${Midi.outCh[0]} gesendet")
+            }
+            .setPositiveButton("Fertig") { _, _ -> Midi.save(prefs) }.show()
     }
 
     private fun midiCcMap() {

@@ -213,6 +213,8 @@ object Engine {
         val a = acid
         val al = st.acidLen.coerceIn(1, InstState.MAX)
         val step = Math.floorMod(n, al.toLong()).toInt()
+        val acidOut = Midi.outActive(0)
+        val acidIn = Midi.internalOn(0)
         if (a != null && st.acidOn && st.acidGate[step]) {
             val prev = Math.floorMod(step - 1, al)
             val next = (step + 1) % al
@@ -227,11 +229,24 @@ object Engine {
                     if (rnd01(n, 701) < la * 0.08f) semi += 12
                     if (rnd01(n, 702) < la * 0.12f) acc = !acc
                 }
-                a.queue(f, true, semi, acc, slideIn, grooveVel(0, n, st.acidVel[step]))
+                val vel = grooveVel(0, n, st.acidVel[step])
+                if (acidIn) a.queue(f, true, semi, acc, slideIn, vel)
+                if (acidOut) {
+                    // Slide = Legato: neue Note an, dann erst die alte aus (Synths gleiten bei überlappenden Noten)
+                    val nn = 36 + 12 * st.acidOct + st.acidTune + semi
+                    val at = frameNanos(f)
+                    val prev = acidMidiNote
+                    Midi.outNote(0, at, nn, ((if (acc) 127f else 96f) * vel).toInt(), true)
+                    if (prev >= 0 && prev != nn) Midi.outNote(0, at + 2_000_000L, prev, 0, false)
+                    acidMidiNote = nn
+                }
             }
             // Ton endet nach halbem Schritt – außer Slide oder der nächste Schritt hält ihn (Tie)
             val holds = st.acidGate[next] && (st.acidSlide[step] || st.acidTie[next])
-            if (!holds) a.queue(f + stepLen / 2, false, 0, false, false)
+            if (!holds) {
+                if (acidIn) a.queue(f + stepLen / 2, false, 0, false, false)
+                if (acidOut && acidMidiNote >= 0) { Midi.outNote(0, frameNanos(f + stepLen / 2), acidMidiNote, 0, false); acidMidiNote = -1 }
+            }
         }
         val sys = synths
         if (sys != null) for (ti in 0 until InstState.SYN_TRACKS) {
@@ -242,7 +257,7 @@ object Engine {
             val k = Math.floorMod(n, sl.toLong()).toInt()
             f = base + grooveOff(2 + ti, n, stepLen)
             if (t.arp != 0) {
-                arpStep(t, sy, k, sl, f, stepLen)
+                arpStep(t, sy, k, sl, f, stepLen, ti)
                 continue
             }
             if (t.gate[k] && !(t.tie[k] && t.gate[Math.floorMod(k - 1, sl)])) {
@@ -263,8 +278,14 @@ object Engine {
                     else if (r < pv) skip = true
                 }
                 if (skip) continue
-                sy.queue(f, true, semi, grooveVel(2 + ti, n, t.vel[k]), tag, InstState.chordOf(t, k))
-                sy.queue(f + stepLen * len - stepLen / 8, false, 0, 0f, tag)
+                val iv = InstState.chordOf(t, k)
+                val vel = grooveVel(2 + ti, n, t.vel[k])
+                val offAt = f + stepLen * len - stepLen / 8
+                if (Midi.internalOn(2 + ti)) {
+                    sy.queue(f, true, semi, vel, tag, iv)
+                    sy.queue(offAt, false, 0, 0f, tag)
+                }
+                if (Midi.outActive(2 + ti)) synMidi(ti, t, semi, iv, vel, f, offAt)
             }
         }
         val d = drum
@@ -275,6 +296,8 @@ object Engine {
             val inBar = Math.floorMod(n, 16L).toInt()
             val ph = max(1, st.livePhrase).toLong()
             val o = liveOut
+            val drumIn = Midi.internalOn(1)
+            val drumOut = Midi.outActive(1)
             for (v in 0 until InstState.DV) { o.x[v] = st.drumSteps[v][ds]; o.vel[v] = st.drumVel[v][ds] }
             if (la > 0f) {
                 if (inBar == 0 || liveUsedStep != n - 1) for (v in 0 until InstState.DV) liveUsed[v] = rowUsed(v)
@@ -296,7 +319,9 @@ object Engine {
                 if (x > 0 && !st.drumMute[v]) {
                     val fd = base + grooveOff(1, n, stepLen, v)
                     if (v == 0 && scSource == 0) scKick(fd)
-                    d.trigger(v, (fd - w).toInt(), x == 2, grooveVel(1, n, o.vel[v], v))
+                    val gv = grooveVel(1, n, o.vel[v], v)
+                    if (drumIn) d.trigger(v, (fd - w).toInt(), x == 2, gv)
+                    if (drumOut) drumMidi(v, fd, if (x == 2) 1f else gv * 0.85f)
                 }
             }
             // Zwischenschläge (32tel, Vorschläge)
@@ -304,7 +329,9 @@ object Engine {
                 val v = o.exV[i]
                 if (st.drumMute[v]) continue
                 val fd = base + grooveOff(1, n, stepLen, v) + (o.exFrac[i] * stepLen).toLong()
-                d.triggerExtra(v, (fd - w).toInt(), grooveVel(1, n, o.exVel[i], v + 40))
+                val gv = grooveVel(1, n, o.exVel[i], v + 40)
+                if (drumIn) d.triggerExtra(v, (fd - w).toInt(), gv)
+                if (drumOut) drumMidi(v, fd, gv * 0.85f)
             }
         }
         // Slicer-Pattern (Groove wie die Drums)
@@ -329,8 +356,31 @@ object Engine {
 
     private val ARP_ONE = intArrayOf(0)
 
+    /** Gerade per MIDI klingende 303-Note (für Slide/Legato), −1 = keine. */
+    private var acidMidiNote = -1
+
+    /** Ausgabe-Frame → Zeitpunkt (System.nanoTime), an dem er zu hören ist. */
+    fun frameNanos(frame: Long): Long = outClock.nanosAt(frame, sampleRate)
+
+    /** Drum-Schlag per MIDI (General-MIDI-Noten, kurze Note). */
+    private fun drumMidi(v: Int, frame: Long, vel: Float) {
+        val a = frameNanos(frame)
+        val nn = Midi.DRUM_NOTES[v]
+        Midi.outNote(1, a, nn, (vel * 127f).toInt(), true)
+        Midi.outNote(1, a + 40_000_000L, nn, 0, false)
+    }
+
+    /** Synth-Note (mit Akkord) per MIDI senden. */
+    private fun synMidi(ti: Int, t: InstState.SynTrack, semi: Int, iv: IntArray, vel: Float, on: Long, off: Long) {
+        val base = 60 + 12 * t.oct + t.transpose + semi
+        val a = frameNanos(on)
+        val b = frameNanos(off)
+        val v = (vel * 112f).toInt()
+        for (o in iv) { Midi.outNote(2 + ti, a, base + o, v, true); Midi.outNote(2 + ti, b, base + o, 0, false) }
+    }
+
     /** Arpeggiator: solange eine Note (bzw. ein Akkord) gehalten wird, ihre Töne nacheinander spielen. */
-    private fun arpStep(t: InstState.SynTrack, sy: PolySynth, k: Int, sl: Int, f: Long, stepLen: Long) {
+    private fun arpStep(t: InstState.SynTrack, sy: PolySynth, k: Int, sl: Int, f: Long, stepLen: Long, track: Int) {
         if (!t.gate[k]) return
         // Kopf der Note, die diesen Schritt abdeckt
         var h = k
@@ -355,8 +405,12 @@ object Engine {
             }
             val at = f + sub * tickLen
             val tag = 3000 + k * 2 + sub
-            sy.queue(at, true, t.semi[h] + tones[idx], t.vel[h] * (if (ti == 0) 1f else 0.85f), tag, ARP_ONE)
-            sy.queue(at + tickLen * 3 / 4, false, 0, 0f, tag)
+            val ve = t.vel[h] * (if (ti == 0) 1f else 0.85f)
+            if (Midi.internalOn(2 + track)) {
+                sy.queue(at, true, t.semi[h] + tones[idx], ve, tag, ARP_ONE)
+                sy.queue(at + tickLen * 3 / 4, false, 0, 0f, tag)
+            }
+            if (Midi.outActive(2 + track)) synMidi(track, t, t.semi[h] + tones[idx], ARP_ONE, ve, at, at + tickLen * 3 / 4)
         }
     }
 
@@ -3779,6 +3833,8 @@ object Engine {
         countFrom = Long.MIN_VALUE
         countTo = Long.MIN_VALUE
         acid?.queue(-1, false, 0, false, false)
+        acidMidiNote = -1
+        Midi.outAllOff()
     }
 
     /** Läuft gerade der Einzähler? Schlag 1..4, sonst 0. */

@@ -152,6 +152,9 @@ object Midi {
             o.optJSONArray("cc")?.let { a -> for (i in 0 until min(ccMap.size, a.length())) ccMap[i] = a.optInt(i, -1) }
             o.optJSONArray("djBtn")?.let { a -> for (i in 0 until min(djBtn.size, a.length())) djBtn[i] = a.optInt(i, -1) }
             jogMode = o.optInt("jog", 0)
+            o.optJSONArray("outMode")?.let { a -> for (i in 0 until min(5, a.length())) outMode[i] = a.optInt(i, 0) }
+            o.optJSONArray("outCh")?.let { a -> for (i in 0 until min(5, a.length())) outCh[i] = a.optInt(i, outCh[i]).coerceIn(1, 16) }
+            outEarlyMs = o.optDouble("outEarly", 0.0).toFloat()
             disabled.clear()
             o.optJSONArray("off")?.let { a -> for (i in 0 until a.length()) disabled.add(a.optString(i)) }
         } catch (ignored: Exception) {}
@@ -166,6 +169,9 @@ object Midi {
         o.put("cc", JSONArray().apply { ccMap.forEach { put(it) } })
         o.put("djBtn", JSONArray().apply { djBtn.forEach { put(it) } })
         o.put("jog", jogMode)
+        o.put("outMode", JSONArray().apply { outMode.forEach { put(it) } })
+        o.put("outCh", JSONArray().apply { outCh.forEach { put(it) } })
+        o.put("outEarly", outEarlyMs.toDouble())
         o.put("off", JSONArray().apply { disabled.forEach { put(it) } })
         p.edit().putString("midi", o.toString()).apply()
     }
@@ -596,6 +602,74 @@ object Midi {
     }
 
     private var clockThread: Thread? = null
+
+    // ---------------------------------------------------------------- MIDI-Ausgang der Instrumente
+
+    /** Instrumente, die Noten nach außen senden können. */
+    val OUT_NAMES = arrayOf("303 (Acid-Bass)", "909 (Drums)", "Synth 1", "Synth 2", "Synth 3")
+    /** Je Instrument: 0 = nur intern, 1 = nur extern (internes stumm), 2 = beides. */
+    val outMode = IntArray(5)
+    /** MIDI-Kanal 1..16 je Instrument. */
+    val outCh = intArrayOf(1, 10, 2, 3, 4)
+    /** Feinabgleich (ms): positiv = Noten früher senden (gleicht die Verzögerung des externen Geräts aus). */
+    @Volatile var outEarlyMs = 0f
+    /** Drum-Noten (General MIDI) je Drum-Stimme BD SD LT MT HT RS CP CH OH CR RD. */
+    val DRUM_NOTES = intArrayOf(36, 38, 41, 45, 48, 37, 39, 42, 46, 49, 51)
+
+    fun outActive(i: Int): Boolean = outMode[i] != 0 && hasOutputs()
+    /** Spielt das interne Instrument (nicht nur extern)? */
+    fun internalOn(i: Int): Boolean = outMode[i] != 1 || !hasOutputs()
+    fun hasOutputs(): Boolean = inPorts.size > 0  // ohne Sperre: wird im Audio-Thread abgefragt
+
+    private class OutEv(val at: Long, val b0: Int, val b1: Int, val b2: Int)
+    private val outQ = java.util.concurrent.LinkedBlockingQueue<OutEv>()
+    /** Klingende Noten je Kanal (für „alle aus“ beim Stopp). */
+    private val sounding = Array(16) { BooleanArray(128) }
+    private var outThread: Thread? = null
+
+    /** Note an/aus für Instrument [i] zum Zeitpunkt [nanos] (System.nanoTime-Basis). Läuft ohne Warten (Audio-Thread). */
+    fun outNote(i: Int, nanos: Long, note: Int, vel: Int, on: Boolean) {
+        if (note !in 0..127) return
+        val ch = (outCh[i] - 1).coerceIn(0, 15)
+        val at = nanos - (outEarlyMs * 1_000_000f).toLong()
+        outQ.offer(OutEv(at, (if (on) 0x90 else 0x80) or ch, note, if (on) vel.coerceIn(1, 127) else 0))
+        ensureOutThread()
+    }
+
+    /** Alle klingenden Noten beenden (Stopp, Ausschalten). */
+    fun outAllOff() {
+        outQ.offer(OutEv(-1L, 0, 0, 0))
+        ensureOutThread()
+    }
+
+    private fun ensureOutThread() {
+        if (outThread != null) return
+        synchronized(this) {
+            if (outThread != null) return
+            outThread = Thread({
+                val buf = ByteArray(3)
+                while (true) {
+                    val e = try { outQ.take() } catch (x: InterruptedException) { return@Thread }
+                    try {
+                        if (e.at == -1L) {
+                            // alle aus: gemerkte Noten einzeln + „All Notes Off“ je benutztem Kanal
+                            for (ch in 0 until 16) {
+                                var any = false
+                                for (n in 0 until 128) if (sounding[ch][n]) { sounding[ch][n] = false; any = true; sendAll(byteArrayOf((0x80 or ch).toByte(), n.toByte(), 0), 0) }
+                                if (any) sendAll(byteArrayOf((0xB0 or ch).toByte(), 123, 0), 0)
+                            }
+                            continue
+                        }
+                        val ch = e.b0 and 0x0F
+                        if (e.b0 and 0xF0 == 0x90) sounding[ch][e.b1] = true else sounding[ch][e.b1] = false
+                        buf[0] = e.b0.toByte(); buf[1] = e.b1.toByte(); buf[2] = e.b2.toByte()
+                        // Zeitstempel in der Zukunft: Android plant die Ausgabe genau
+                        sendAll(buf.copyOf(), if (e.at > System.nanoTime()) e.at else 0L)
+                    } catch (ignored: Exception) {}
+                }
+            }, "MarvPAD-MidiOut").also { it.isDaemon = true; it.priority = Thread.MAX_PRIORITY; it.start() }
+        }
+    }
 
     /** MIDI-Clock senden (24 pro Viertel) + Start/Stopp mit dem Transport. */
     private fun startClockThread() {
