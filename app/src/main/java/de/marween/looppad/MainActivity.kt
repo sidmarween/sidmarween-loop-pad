@@ -188,6 +188,13 @@ class MainActivity : Activity() {
                  else "Start-Raster ${Engine.LAUNCH_NAMES[Engine.launchIdx]}: angetippte Loops starten/stoppen auf dem nächsten Rasterpunkt")
         }
         pads.onSongStopped = { finishSong() }
+        run {
+            // „Claudes Design“ einmalig aktivieren (danach gilt wieder die eigene Wahl)
+            val pr = getSharedPreferences("marvpad", MODE_PRIVATE)
+            if (!pr.getBoolean("claudeDesignOnce", false)) {
+                pr.edit().putBoolean("claudeDesignOnce", true).putInt("design", PadView.CLAUDE).putInt("djSkin", DjView.SKINS.size - 1).apply()
+            }
+        }
         pads.theme = getSharedPreferences("marvpad", MODE_PRIVATE).getInt("design", PadView.NOIR)
         pads.infoMode = getSharedPreferences("marvpad", MODE_PRIVATE).getBoolean("info", false)
         Engine.outKey = prefs.getString("outDev", null)

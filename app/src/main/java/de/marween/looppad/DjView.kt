@@ -120,7 +120,10 @@ class DjView(context: Context) : View(context) {
             Skin("CHIHUAHUA MAMA", c(0xd9def0), c(0xf8efe6), c(0xf3e6e0), 8, 0, false, 1,
                 intArrayOf(c(0xf3b8cb), c(0xc9b6ea), c(0xa9dccb), c(0xf2e3a2)), 3, intArrayOf(), 13,
                 intArrayOf(c(0xf6c6d4), c(0xf3e7a8), c(0xbfe6da), c(0xf6cbbf), c(0xcfc0ec), c(0xbcd6f0)), c(0xf3a6c0), 9, 4, 11,
-                c(0x7d6b86), c(0xe88fb2), c(0xb9a2e6), c(0xf2a98a), c(0xfdf7f1), c(0x6e5a78), false)
+                c(0x7d6b86), c(0xe88fb2), c(0xb9a2e6), c(0xf2a98a), c(0xfdf7f1), c(0x6e5a78), false),
+            // Claudes Design: warmes Graphit, Elfenbein, Ton-Orange (Deck A) und Salbei (Deck B)
+            Skin("CLAUDES DESIGN – Ton, Elfenbein & Ruhe", c(0x141312), c(0x22211f), c(0x1b1a18), 5, 0, false, 8, intArrayOf(), 6, intArrayOf(), 11, intArrayOf(c(0x232220)), c(0xd97757), 7, 0, 9,
+                c(0xede9e0), c(0xd97757), c(0xd97757), c(0x8fb3a3), c(0x121110), c(0xe8a07e), true)
         )
     }
 

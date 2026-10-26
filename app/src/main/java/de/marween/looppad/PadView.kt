@@ -454,6 +454,9 @@ class PadView(context: Context) : View(context) {
     var theme = NEON
         set(v) {
             field = v.coerceIn(0, DESIGN_NAMES.size - 1)
+            // Claudes Design: ruhige, gut lesbare Schrift statt Monospace
+            textPaint.typeface = if (field == CLAUDE) Typeface.create("sans-serif-medium", Typeface.NORMAL) else Typeface.create(Typeface.MONOSPACE, Typeface.BOLD)
+            textPaint.letterSpacing = if (field == CLAUDE) 0.03f else 0f
             layoutPads()
             invalidate()
         }
@@ -649,7 +652,7 @@ class PadView(context: Context) : View(context) {
             HUD -> dp(5f)
             RETRO -> dp(4f)
             COMIC -> cell * 0.26f
-            in GLASS..GREY -> cell * SKINS[theme - GLASS].padRadius
+            in GLASS..CLAUDE -> cell * SKINS[theme - GLASS].padRadius
             else -> cell * 0.17f
         }
         if (theme == RETRO) {
@@ -5661,6 +5664,14 @@ class PadView(context: Context) : View(context) {
                 canvas.drawCircle(cx, cy, rad * 0.4f, fillPaint)
                 fillPaint.shader = null
             }
+            KN_ARC -> {
+                // flache Scheibe, der Wertebogen außen ist die eigentliche Anzeige
+                dotPaint.color = sk.knobCap
+                canvas.drawCircle(cx, cy, rad * 0.82f, dotPaint)
+                strokePaint.strokeWidth = dp(1.2f)
+                strokePaint.color = sk.knobRing
+                canvas.drawCircle(cx, cy, rad * 0.82f, strokePaint)
+            }
             else -> { // KN_GLASS
                 fillPaint.shader = RadialGradient(cx, cy - rad * 0.3f, rad * 1.1f, Color.argb(230, 255, 255, 255), Color.argb(200, 205, 214, 226), Shader.TileMode.CLAMP)
                 canvas.drawCircle(cx, cy, rad * 0.95f, fillPaint)
@@ -5778,6 +5789,17 @@ class PadView(context: Context) : View(context) {
                 strokePaint.strokeWidth = dp(1f)
                 canvas.drawLine(r.centerX(), r.top, r.centerX(), r.bottom, strokePaint)
                 canvas.drawLine(r.left, r.centerY(), r.right, r.centerY(), strokePaint)
+            }
+            XY_DOTS -> {
+                // ruhiges Punktraster, nahe am Finger heller
+                for (cx0 in 0..sk.xyCols) for (cy0 in 0..sk.xyRows) {
+                    val x = gl + (gr - gl) * cx0 / sk.xyCols
+                    val y = gt + (gb - gt) * cy0 / sk.xyRows
+                    val dd = kotlin.math.hypot(x - fx, y - fy) / r.width()
+                    val near = if (touching) (1f - dd * 3f).coerceIn(0f, 1f) else 0f
+                    dotPaint.color = blend(sk.xyGrid, sk.accent, near)
+                    canvas.drawCircle(x, y, dp(1.3f) + near * dp(1.6f), dotPaint)
+                }
             }
             else -> { // XY_INSET
                 strokePaint.strokeWidth = dp(1.2f)
@@ -5907,6 +5929,33 @@ class PadView(context: Context) : View(context) {
                 strokePaint.strokeWidth = dp(1.2f)
                 canvas.drawRoundRect(inner, rad * 0.7f, rad * 0.7f, strokePaint)
             }
+            PS_CLAUDE -> {
+                // Zustand = Farbe: leer gestrichelt, läuft = Ton-Orange (atmet mit dem Pegel), aus = gedämpft, Aufnahme = Rot
+                val fillCol = when (st) {
+                    Engine.PadState.EMPTY -> base
+                    Engine.PadState.MUTED -> blend(base, Color.WHITE, 0.03f)
+                    Engine.PadState.RECORDING -> blend(base, Color.rgb(214, 64, 69), (0.45f + 0.25f * sin(time * 10f) + 0.2f * inLvl).coerceIn(0f, 1f))
+                    Engine.PadState.OVERDUB -> blend(base, Color.rgb(214, 64, 69), (0.35f + 0.3f * inLvl).coerceIn(0f, 1f))
+                    Engine.PadState.ONESHOT -> blend(base, acc, (0.10f + (if (progress >= 0f) 0.55f * lvl + 0.15f else 0f)).coerceIn(0f, 1f))
+                    else -> blend(base, acc, (0.22f + 0.5f * lvl + 0.3f * flash[i]).coerceIn(0f, 1f))
+                }
+                fillPaint.shader = null
+                fillPaint.color = fillCol
+                canvas.drawRoundRect(r, rad, rad, fillPaint)
+                strokePaint.strokeWidth = dp(1.2f)
+                if (st == Engine.PadState.EMPTY) {
+                    strokePaint.pathEffect = dashEffect
+                    strokePaint.color = alpha(sk.ink, 0.22f)
+                    tmpRect.set(r.left + dp(1f), r.top + dp(1f), r.right - dp(1f), r.bottom - dp(1f))
+                    canvas.drawRoundRect(tmpRect, rad, rad, strokePaint)
+                    strokePaint.pathEffect = null
+                } else {
+                    strokePaint.color = if (st == Engine.PadState.MUTED) sk.padOutline else alpha(acc, 0.55f)
+                    canvas.drawRoundRect(r, rad, rad, strokePaint)
+                }
+                glow = 0f
+                led = Color.TRANSPARENT
+            }
             PS_GLASS -> {
                 fillPaint.shader = LinearGradient(0f, r.top, 0f, r.bottom, Color.argb(235, 250, 252, 255), Color.argb(215, 226, 234, 244), Shader.TileMode.CLAMP)
                 canvas.drawRoundRect(r, rad, rad, fillPaint)
@@ -5958,8 +6007,17 @@ class PadView(context: Context) : View(context) {
             canvas.drawText("⚡", inner.left + dp(5f), inner.top + inner.width() * 0.22f, textPaint)
             textPaint.textAlign = Paint.Align.CENTER
         }
-        // Lauflicht
-        if (progress >= 0f && padLengths[i] > 0f) {
+        // Lauflicht – Claudes Design: durchgehende Linie am Rand statt Punkte
+        if (sk.padStyle == PS_CLAUDE && progress >= 0f && padLengths[i] > 0f) {
+            val len = padLengths[i]
+            val seg = Path()
+            padMeasures[i].getSegment(0f, progress.coerceIn(0f, 1f) * len, seg, true)
+            strokePaint.strokeWidth = dp(3f)
+            strokePaint.strokeCap = Paint.Cap.ROUND
+            strokePaint.color = if (st == Engine.PadState.MUTED) alpha(sk.ink, 0.25f) else blend(acc, Color.WHITE, 0.25f)
+            canvas.drawPath(seg, strokePaint)
+            strokePaint.strokeCap = Paint.Cap.BUTT
+        } else if (progress >= 0f && padLengths[i] > 0f) {
             val len = padLengths[i]
             val faded = st == Engine.PadState.MUTED
             for (j in 0 until 10) {
@@ -9413,6 +9471,7 @@ class PadView(context: Context) : View(context) {
         const val CREAM = 9
         const val NOIR = 10
         const val GREY = 11
+        const val CLAUDE = 12
         const val NEON = 0
         const val GLOW = 1
         const val STUDIO = 2
@@ -9429,7 +9488,8 @@ class PadView(context: Context) : View(context) {
             "HOLZ – Walnuss, Messing & Leinen",
             "CREME – Beige & Rändel",
             "NOIR – Schwarz im Walnussrahmen",
-            "GRAU – Hellgrau & Rändel"
+            "GRAU – Hellgrau & Rändel",
+            "CLAUDES DESIGN – Ton, Elfenbein & Ruhe"
         )
         private val ORANGE = Color.rgb(255, 106, 16)
         private val AMBER = Color.rgb(255, 196, 40)
@@ -9449,16 +9509,19 @@ class PadView(context: Context) : View(context) {
         private const val KN_BRASS = 2
         private const val KN_GLASS = 3
         private const val KN_GREYCAP = 4
+        private const val KN_ARC = 5
         private const val XY_GLOW = 0
         private const val XY_GRID = 1
         private const val XY_STITCH = 2
         private const val XY_DIAG = 3
         private const val XY_CROSS = 4
         private const val XY_INSET = 5
+        private const val XY_DOTS = 6
         private const val PS_FLAT = 0
         private const val PS_GLASS = 1
         private const val PS_FRAMED = 2
         private const val PS_DOUBLE = 3
+        private const val PS_CLAUDE = 4
         private val WOOD_BASE = Color.parseColor("#5A3522")
 
         private val SKINS = arrayOf(
@@ -9509,7 +9572,16 @@ class PadView(context: Context) : View(context) {
                 XY_INSET, Color.parseColor("#ECECEC"), Color.parseColor("#ECECEC"), Color.parseColor("#9A9A9A"), 4, 4, Color.parseColor("#5A5A5A"), Color.parseColor("#FF6A10"),
                 PS_DOUBLE, Color.parseColor("#D9D9D9"), null, Color.parseColor("#4A4A4A"), 0.05f, false,
                 Color.parseColor("#E2E2E2"), Color.parseColor("#5A5A5A"), Color.parseColor("#4A4A4A"),
-                Color.parseColor("#DCDCDC"), Color.parseColor("#3A3A3A"), Color.parseColor("#5A5A5A"), true)
+                Color.parseColor("#DCDCDC"), Color.parseColor("#3A3A3A"), Color.parseColor("#5A5A5A"), true),
+            // CLAUDES DESIGN: warmes Graphit, Elfenbein-Schrift, Ton-Orange als einziger Akzent, Bernstein für One-Shots.
+            // Keine Effekte um der Effekte willen – Farbe zeigt nur Zustand (läuft, aus, nimmt auf).
+            Skin(Color.parseColor("#1A1918"), Color.parseColor("#151413"), TEX_NONE, Color.parseColor("#232220"), Color.parseColor("#34322F"),
+                Color.parseColor("#EDE9E0"), Color.parseColor("#F5F2EA"), Color.parseColor("#D97757"), Color.parseColor("#E5B158"),
+                KN_ARC, Color.parseColor("#2A2826"), Color.parseColor("#3A3835"), Color.parseColor("#EDE9E0"), Color.parseColor("#EDE9E0"),
+                XY_DOTS, Color.parseColor("#1F1E1C"), Color.parseColor("#1F1E1C"), Color.parseColor("#4A4743"), 16, 10, Color.parseColor("#34322F"), Color.parseColor("#D97757"),
+                PS_CLAUDE, Color.parseColor("#242321"), null, Color.parseColor("#3A3835"), 0.16f, false,
+                Color.parseColor("#262523"), Color.parseColor("#3A3835"), Color.parseColor("#EDE9E0"),
+                Color.parseColor("#121110"), Color.parseColor("#E8A07E"), Color.parseColor("#34322F"), false)
         )
         private val R_BG = Color.rgb(207, 207, 207)
         private val R_GREEN = Color.rgb(24, 200, 75)
