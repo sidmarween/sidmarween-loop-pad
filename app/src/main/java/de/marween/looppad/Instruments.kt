@@ -9,6 +9,7 @@ import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.pow
 import kotlin.math.sin
+import kotlin.math.tan
 import kotlin.math.tanh
 
 /** Einstellungen und Pattern der virtuellen Instrumente (bleiben über Audio-Neustarts erhalten). */
@@ -585,45 +586,57 @@ object InstState {
     }
 }
 
-/** 303-artiger Bass-Synth: Sägezahn/Rechteck, resonantes 4-Pol-Filter, Hüllkurve, Accent und Slide. */
+/**
+ * TB-303-Modell („Acid“): Klangerzeugung nach dem Vorbild des Originals und von Open303 (Robin Schmidt, MIT):
+ *  - Sägezahn (bandbegrenzt) bzw. Rechteck, davor ein leichter Hochpass wie im Original
+ *  - Diodenleiter-Filter (gekoppelte Stufen statt idealer Moog-Leiter) mit Hochpass in der Rückkopplung –
+ *    das typische „quakende“ 303-Resonanzverhalten, auch bei hoher Resonanz noch stabil
+ *  - Filter-Hüllkurve (Decay einstellbar, bei Accent fest kurz), Accent-Kreis: lauter + „Wow“ im Filter,
+ *    Slide mit fester Gleitzeit wie im Original, Amp-Hüllkurve mit kurzem Release
+ */
 class AcidSynth(private val sr: Int) {
     private class Ev(val frame: Long, val on: Boolean, val semi: Int, val acc: Boolean, val slide: Boolean, val vel: Float = 1f)
 
     private val queue = ArrayList<Ev>()
     private val lock = Any()
     private var phase = 0.0
-    private var freq = 55.0
-    private var target = 55.0
+    private var pitch = 33.0   // MIDI-Ton (gleitet)
+    private var pitchTarget = 33.0
     private var gate = false
     private var amp = 0f
-    private var fenv = 0f
+    private var ampEnv = 0f
+    private var meg = 0f          // Filter-Hüllkurve
+    private var megDecay = 0.999f
     private var accNow = false
-    private var y1 = 0f; private var y2 = 0f; private var y3 = 0f; private var y4 = 0f
-    private var accEnv = 0f
+    private var accPulse = 0f     // Accent-Hüllkurve (geglättet → „Wow“)
+    private var accRc = 0f
+    private var velNow = 1f
+    // Filter
+    private var y1 = 0.0; private var y2 = 0.0; private var y3 = 0.0; private var y4 = 0.0
+    private var fbHp = 0.0
+    private var preHp = 0.0; private var preX = 0.0
+    private var postHp = 0.0; private var postX = 0.0
+    private var cutSm = 0.0
 
-    private fun hz(semi: Int): Double = 440.0 * 2.0.pow((36 + 12 * InstState.acidOct + InstState.acidTune + semi - 69) / 12.0)
+    private fun midi(semi: Int): Double = 36.0 + 12 * InstState.acidOct + InstState.acidTune + semi
 
     /** frame < 0 = sofort. */
     fun queue(frame: Long, on: Boolean, semi: Int, acc: Boolean, slide: Boolean, vel: Float = 1f) {
         synchronized(lock) { queue.add(Ev(frame, on, semi, acc, slide, vel)) }
     }
 
-    private var velNow = 1f
-
     private fun apply(e: Ev) {
-        if (!e.on) {
-            gate = false
-            return
-        }
-        target = hz(e.semi)
-        if (!(e.slide && gate)) velNow = e.vel
+        if (!e.on) { gate = false; return }
+        pitchTarget = midi(e.semi)
         if (e.slide && gate) {
-            // Slide: Tonhöhe gleitet, Hüllkurven laufen weiter
+            // Slide: nur die Tonhöhe gleitet, Hüllkurven laufen weiter (wie beim Original)
         } else {
-            freq = target
-            fenv = 1f
+            pitch = pitchTarget
+            velNow = e.vel
+            meg = 1f
             accNow = e.acc
-            if (e.acc) accEnv = 1f
+            if (e.acc) accPulse = 1f
+            ampEnv = 1f
         }
         gate = true
     }
@@ -644,77 +657,131 @@ class AcidSynth(private val sr: Int) {
         }
         var ei = 0
         val st = InstState
-        val decT = (0.04 + st.acidDec * 1.6) * sr
-        val fDec = exp(-1.0 / decT).toFloat()
-        val accDec = exp(-1.0 / (0.12 * sr)).toFloat()
-        val glide = 1.0 - exp(-1.0 / ((0.01 + st.acidGlide * 0.24) * sr))
-        val accAmt = st.acidAccent * 1.7f
-        val drv = 1f + st.acidDrive * 5f
-        val res = st.acidRes * 3.95f
-        val vol = st.acidVolNow() * 0.9f
+        // Filter-Hüllkurve: normal 200 ms … 2 s, Accent-Noten fest kurz (~200 ms) – typisch 303
+        val decNorm = exp(-1.0 / ((0.2 + st.acidDec * 1.8) * sr)).toFloat()
+        val decAcc = exp(-1.0 / (0.2 * sr)).toFloat()
+        val ampDec = exp(-1.0 / (1.2 * sr)).toFloat()
+        val accDec = exp(-1.0 / (0.15 * sr)).toFloat()
+        val accRcA = (1.0 - exp(-1.0 / (0.012 * sr))).toFloat()
+        // Slide: feste Gleitzeit (~60 ms), Regler verlängert bis ~250 ms
+        val glide = 1.0 - exp(-1.0 / ((0.02 + st.acidGlide * 0.22) * sr))
+        val accAmt = st.acidAccent
+        val envMod = st.acidEnv
+        val r = st.acidRes.toDouble().coerceIn(0.0, 1.0)
+        val rs = (1.0 - exp(-3.0 * r)) / (1.0 - exp(-3.0))   // Resonanz wie beim Original „schief“
+        val drv = 1f + st.acidDrive * 4f
+        val vol = st.acidVolNow() * 1.1f
         val square = st.acidSquare
+        // Grund-Cutoff 314 Hz … 2,4 kHz (Original-Bereich), Touchpad dazu
+        val baseCut = 314.0 * (2394.0 / 314.0).pow(st.acidCutNow().toDouble().coerceIn(0.0, 1.0)) * 2.0.pow(st.acidCutMod * 2.0)
+        val aPre = exp(-2 * PI * 44.0 / sr)
+        val aPost = exp(-2 * PI * 24.0 / sr)
+        val aFb = exp(-2 * PI * 150.0 / sr)
         for (i in 0 until n) {
-            while (ei < evs.size && (evs[ei].frame < 0 || evs[ei].frame <= w + i)) {
-                apply(evs[ei]); ei++
-            }
-            if (!gate && amp < 1e-5f && fenv < 1e-4f) continue
-            freq += (target - freq) * glide
-            val dt = freq / sr
+            while (ei < evs.size && (evs[ei].frame < 0 || evs[ei].frame <= w + i)) { apply(evs[ei]); ei++ }
+            if (!gate && amp < 1e-5f && abs(y4) < 1e-7) continue
+            pitch += (pitchTarget - pitch) * glide
+            val f = 440.0 * 2.0.pow((pitch - 69.0) / 12.0)
+            val dt = f / sr
             phase += dt
             if (phase >= 1.0) phase -= 1.0
-            var osc = if (!square) 2.0 * phase - 1.0 - blep(phase, dt)
-            else {
+            var osc = if (!square) 2.0 * phase - 1.0 - blep(phase, dt) else {
                 var sq = if (phase < 0.5) 1.0 else -1.0
                 sq += blep(phase, dt)
                 sq -= blep((phase + 0.5) % 1.0, dt)
-                sq
+                sq * 0.8
             }
-            osc *= 0.9
+            // leichter Hochpass vor dem Filter
+            val hp = aPre * (preHp + osc - preX); preX = osc; preHp = hp; osc = hp
             // Hüllkurven
-            val ampTarget = if (gate) 1f else 0f
-            amp += (ampTarget - amp) * (if (gate) 0.02f else 0.006f)
-            fenv *= fDec
-            accEnv *= accDec
-            val accBoost = if (accNow) accEnv * (0.3f + st.acidEnv) * 2.5f * accAmt / 1.02f else 0f
-            val oct = st.acidCutNow() * 7f + (st.acidEnv * 5f) * fenv + accBoost * 2f + st.acidCutMod * 3f
-            val fc = min(0.45f * sr, 70f * 2f.pow(oct))
-            val g = (1.0 - exp(-2.0 * PI * fc / sr)).toFloat()
-            val x = tanh(osc.toFloat() - res * y4)
-            y1 += g * (x - y1)
-            y2 += g * (y1 - y2)
-            y3 += g * (y2 - y3)
-            y4 += g * (y3 - y4)
-            val a = amp * velNow * (if (accNow) 1f + 0.6f * accAmt * accEnv else 1f)
-            out[i] += tanh(y4 * (1f + st.acidRes * 1.5f) * 1.4f * drv) / (0.75f + 0.25f * drv) * a * vol
+            meg *= if (accNow) decAcc else decNorm
+            accPulse *= accDec
+            accRc += (accPulse - accRc) * accRcA          // Accent-„Wow“: geglätteter Buckel
+            ampEnv *= ampDec
+            val ampTarget = if (gate) ampEnv else 0f
+            amp += (ampTarget - amp) * (if (gate) 0.25f else 0.004f)   // schneller Anstieg, ~5 ms Release
+            // Cutoff: Grund · Hüllkurve (bis +4 Oktaven) · Accent (bis +2 Oktaven)
+            val oct = envMod * 4.0 * meg + (if (accNow) accAmt * 2.0 * accRc else 0.0)
+            val fc = (baseCut * 2.0.pow(oct)).coerceIn(30.0, sr * 0.42)
+            cutSm += (fc - cutSm) * 0.2
+            // Diodenleiter (TB-303-Näherung): Koeffizienten aus dem Cutoff, Resonanz als Rückkopplung
+            val wc = 2 * PI * cutSm / sr
+            val fx = wc * 0.7071067811865476 / (2 * PI)
+            val b0 = (0.00045522346 + 6.1922189 * fx) / (1.0 + 12.358354 * fx + 4.4156345 * fx * fx)
+            var k = fx * (fx * (fx * (fx * (fx * (fx + 7198.6997) - 5837.7917) - 476.47308) + 614.95611) + 213.87126) + 16.998792
+            var g = k / 17.0
+            g = (g - 1.0) * rs + 1.0
+            g *= (1.0 + rs)
+            k *= rs
+            // Hochpass in der Rückkopplung (das Original hält so den Bass bei hoher Resonanz)
+            val fbIn = k * y4
+            fbHp = aFb * fbHp + (1 - aFb) * fbIn
+            val y0 = tanh(osc - (fbIn - fbHp))
+            y1 += 2 * b0 * (y0 - y1 + y2)
+            y2 += b0 * (y1 - 2 * y2 + y3)
+            y3 += b0 * (y2 - 2 * y3 + y4)
+            y4 += b0 * (y3 - 2 * y4)
+            var s = 2 * g * y4
+            if (s.isNaN() || abs(s) > 50.0) { y1 = 0.0; y2 = 0.0; y3 = 0.0; y4 = 0.0; s = 0.0 }
+            // Nach-Hochpass, Lautstärke, Accent
+            val ph = aPost * (postHp + s - postX); postX = s; postHp = ph
+            val a = amp * velNow * (if (accNow) 1f + 0.7f * accAmt * accRc else 1f)
+            out[i] += (tanh(ph * 1.6 * drv) / (0.8 + 0.2 * drv)).toFloat() * a * vol
         }
-        // spätere Ereignisse zurücklegen
         if (ei < evs.size) synchronized(lock) { queue.addAll(evs.subList(ei, evs.size)) }
     }
 }
 
-/** 909-artiger Drumcomputer: alle Klänge synthetisiert. */
+/**
+ * Drumcomputer im Stil von TR-909/808, analog nachgebildet:
+ * Kick mit Tonhöhen-Hüllkurve und Klick, Snare aus zwei Oszillatoren + gefiltertem Rauschen („Snappy“),
+ * Hi-Hats/Becken aus sechs Rechteck-Oszillatoren durch Bandpässe (wie beim 808/909), Clap mit Mehrfach-Anschlag,
+ * Toms mit Tonhöhen-Abfall, Rimshot aus Resonatoren. Gefiltert mit Zustandsvariablen-Filtern (kein Rauschbrei).
+ */
 class DrumMachine(private val sr: Int) {
+    /** Zustandsvariablen-Filter (TPT), liefert Tief-, Band- und Hochpass. */
+    private class Svf {
+        var ic1 = 0.0; var ic2 = 0.0
+        var lp = 0.0; var bp = 0.0; var hp = 0.0
+        fun run(x: Double, g: Double, k: Double) {
+            val a1 = 1.0 / (1.0 + g * (g + k))
+            val v3 = x - ic2
+            val v1 = a1 * ic1 + g * a1 * v3
+            val v2 = ic2 + g * v1
+            ic1 = 2 * v1 - ic1
+            ic2 = 2 * v2 - ic2
+            lp = v2; bp = v1; hp = x - k * v1 - v2
+        }
+        fun reset() { ic1 = 0.0; ic2 = 0.0 }
+    }
+
     private class Voice {
         var active = false
         var delay = 0
         var t = 0
         var acc = 1f
-        var ph = DoubleArray(6)
+        val ph = DoubleArray(6)
         var p1 = 0.0
-        var lp = 0f
-        var hp = 0f
-        var bp1 = 0f
-        var bp2 = 0f
+        var p2 = 0.0
+        val f1 = Svf(); val f2 = Svf(); val f3 = Svf()
+        var fade = 1f   // weiches Abwürgen bei Neuanschlag
+        var last = 0f
     }
 
     private val voices = Array(InstState.DV) { Voice() }
     private val lock = Any()
     private var seed = 0x1234567
     private val metal = doubleArrayOf(205.3, 304.4, 369.6, 522.7, 540.0, 800.0)
+    private fun g(fc: Double) = tan(PI * min(fc, sr * 0.45) / sr)
+    // feste Filter-Koeffizienten (tan() nicht pro Sample rechnen)
+    private val g3500 = g(3500.0); private val g1800 = g(1800.0); private val g9000 = g(9000.0)
+    private val g2500 = g(2500.0); private val g1150 = g(1150.0); private val g700 = g(700.0)
+    private val g10k = g(10000.0); private val g7000 = g(7000.0); private val g4500 = g(4500.0)
+    private val g8500 = g(8500.0); private val g5000 = g(5000.0)
 
-    private fun noise(): Float {
+    private fun noise(): Double {
         seed = seed xor (seed shl 13); seed = seed xor (seed ushr 17); seed = seed xor (seed shl 5)
-        return (seed and 0xFFFF) / 32768f - 1f
+        return ((seed and 0xFFFF) / 32768.0) - 1.0
     }
 
     fun trigger(v: Int, delay: Int, accent: Boolean, vel: Float = 1f) {
@@ -724,108 +791,132 @@ class DrumMachine(private val sr: Int) {
             vc.active = true
             vc.delay = max(0, delay)
             vc.t = 0
-            vc.acc = (if (accent) 1.45f else 1f) * vel.coerceIn(0.02f, 1f)
-            vc.p1 = 0.0
-            for (k in vc.ph.indices) vc.ph[k] = 0.0
-            // Closed Hat würgt Open Hat ab
-            if (v == 7) voices[8].active = false
+            vc.acc = (if (accent) 1.35f else 1f) * vel.coerceIn(0.02f, 1f)
+            vc.p1 = 0.0; vc.p2 = 0.0
+            for (k in vc.ph.indices) vc.ph[k] = (noise() + 1.0) * 0.5
+            vc.f1.reset(); vc.f2.reset(); vc.f3.reset()
+            // Closed Hat würgt Open Hat ab (weich, kein Knacks)
+            if (v == 7) voices[8].fade = 0.999f
         }
     }
 
-    private fun metallic(vc: Voice, tuneMul: Double): Float {
-        var s = 0f
+    /** Sechs Rechtecke (808/909-Metall) – leicht geglättet gegen Aliasing. */
+    private fun metallic(vc: Voice, mul: Double): Double {
+        var s = 0.0
         for (k in 0 until 6) {
-            vc.ph[k] += metal[k] * tuneMul / sr
+            val dt = metal[k] * mul / sr
+            vc.ph[k] += dt
             if (vc.ph[k] >= 1.0) vc.ph[k] -= 1.0
-            s += if (vc.ph[k] < 0.5) 1f else -1f
+            val p = vc.ph[k]
+            var sq = if (p < 0.5) 1.0 else -1.0
+            // PolyBLEP an beiden Flanken
+            sq += blep(p, dt); sq -= blep((p + 0.5) % 1.0, dt)
+            s += sq
         }
-        return s / 6f
+        return s / 6.0
+    }
+
+    private fun blep(t: Double, dt: Double): Double = when {
+        t < dt -> { val x = t / dt; x + x - x * x - 1.0 }
+        t > 1.0 - dt -> { val x = (t - 1.0) / dt; x * x + x + x + 1.0 }
+        else -> 0.0
     }
 
     fun render(out: FloatArray, n: Int) {
         val st = InstState
-        val drive = 1f + st.drumDrive * 6f
-        val norm = 1f / tanh(drive)
+        val drive = 1f + st.drumDrive * 3f
+        val norm = 1.0 / tanh(drive.toDouble())
         synchronized(lock) {
             for (v in 0 until InstState.DV) {
                 val vc = voices[v]
                 if (!vc.active) continue
                 if (st.drumMute[v]) { vc.active = false; continue }
-                val tune = st.drumTune[v]
-                val dec = st.drumDecay[v]
+                val tune = st.drumTune[v].toDouble()
+                val dec = st.drumDecay[v].toDouble()
                 val lvl = st.drumLevel[v] * st.drumVolNow() * vc.acc
+                val gTom = if (v in 2..4) g(when (v) { 2 -> 95.0; 3 -> 140.0; else -> 200.0 } * 2.0.pow(tune - 0.5) * 6) else 0.0
                 for (i in 0 until n) {
                     if (vc.delay > 0) { vc.delay--; continue }
-                    val t = vc.t.toFloat() / sr
-                    var s: Float
-                    var env: Float
+                    val t = vc.t.toDouble() / sr
+                    var s: Double
+                    var env: Double
                     when (v) {
-                        0 -> { // Bass Drum
-                            val base = 42.0 * 2.0.pow((tune - 0.5) * 1.2)
-                            val f = base * (1.0 + 3.2 * exp(-t / 0.028))
+                        0 -> { // Bass Drum (909): schneller Tonhöhen-Abfall + Klick
+                            val base = 50.0 * 2.0.pow((tune - 0.5) * 1.2)
+                            val f = base * (1.0 + 3.6 * exp(-t / 0.012) + 0.6 * exp(-t / 0.06))
                             vc.p1 += f / sr
-                            env = exp(-t / (0.12f + dec * 0.9f))
-                            s = sin(2 * PI * vc.p1).toFloat() + noise() * exp(-t / 0.0015f) * 0.35f
-                            s = tanh(s * 1.6f)
+                            env = exp(-t / (0.18 + dec * 0.8))
+                            val body = sin(2 * PI * vc.p1)
+                            vc.f1.run(noise(), g3500, 1.2)
+                            val click = vc.f1.bp * exp(-t / 0.0025) * 0.9 + (if (vc.t < sr / 1000) 0.6 else 0.0)
+                            s = tanh(body * 1.25) + click
                         }
-                        1 -> { // Snare
-                            val f = 175.0 * 2.0.pow((tune - 0.5))
-                            vc.p1 += f * (1 + 0.4 * exp(-t / 0.02)) / sr
-                            val tone = (sin(2 * PI * vc.p1) + 0.5 * sin(2 * PI * vc.p1 * 1.87)).toFloat() * exp(-t / 0.06f)
-                            val nz = noise()
-                            vc.hp += (nz - vc.hp) * 0.25f
-                            env = 1f
-                            s = tone * 0.7f + (nz - vc.hp) * exp(-t / (0.07f + dec * 0.25f)) * 0.9f
+                        1 -> { // Snare (909): zwei Oszillatoren + Rauschen durch Hoch- und Tiefpass
+                            val ft = 2.0.pow(tune - 0.5)
+                            vc.p1 += 180.0 * ft * (1 + 0.5 * exp(-t / 0.015)) / sr
+                            vc.p2 += 330.0 * ft * (1 + 0.5 * exp(-t / 0.015)) / sr
+                            val tone = (sin(2 * PI * vc.p1) * 0.65 + sin(2 * PI * vc.p2) * 0.4) * exp(-t / 0.045)
+                            vc.f1.run(noise(), g1800, 1.0)
+                            vc.f2.run(vc.f1.hp, g9000, 0.9)
+                            val snappy = vc.f2.lp * exp(-t / (0.06 + dec * 0.22)) * 1.3
+                            env = 1.0
+                            s = tone + snappy
+                            if (t > 0.05 + dec * 0.4 && abs(snappy) < 1e-4) env = 0.0
                         }
-                        2, 3, 4 -> { // Toms
-                            val baseF = when (v) { 2 -> 90.0; 3 -> 130.0; else -> 185.0 } * 2.0.pow(tune - 0.5)
-                            vc.p1 += baseF * (1 + 0.6 * exp(-t / 0.05)) / sr
-                            env = exp(-t / (0.12f + dec * 0.6f))
-                            s = sin(2 * PI * vc.p1).toFloat() + noise() * exp(-t / 0.004f) * 0.15f
+                        2, 3, 4 -> { // Toms: Sinus mit Tonhöhen-Abfall + gefilterter Anschlag
+                            val baseF = when (v) { 2 -> 95.0; 3 -> 140.0; else -> 200.0 } * 2.0.pow(tune - 0.5)
+                            vc.p1 += baseF * (1 + 0.45 * exp(-t / 0.04)) / sr
+                            env = exp(-t / (0.15 + dec * 0.6))
+                            vc.f1.run(noise(), gTom, 1.5)
+                            s = sin(2 * PI * vc.p1) + vc.f1.bp * exp(-t / 0.006) * 0.4
                         }
-                        5 -> { // Rimshot
+                        5 -> { // Rimshot: zwei Resonatoren, sehr kurz
                             vc.p1 += 1700.0 * 2.0.pow(tune - 0.5) / sr
-                            env = exp(-t / (0.01f + dec * 0.02f))
-                            s = (sin(2 * PI * vc.p1) + 0.6 * sin(2 * PI * vc.p1 * 0.3)).toFloat()
+                            vc.p2 += 480.0 * 2.0.pow(tune - 0.5) / sr
+                            env = exp(-t / (0.008 + dec * 0.02))
+                            vc.f1.run(noise() * exp(-t / 0.001), g2500, 0.6)
+                            s = sin(2 * PI * vc.p1) * 0.6 + sin(2 * PI * vc.p2) * 0.5 + vc.f1.bp * 0.8
                         }
-                        6 -> { // Clap
-                            val nz = noise()
-                            vc.bp1 += (nz - vc.bp1) * 0.35f
-                            vc.hp += (vc.bp1 - vc.hp) * 0.06f
-                            val band = vc.bp1 - vc.hp
-                            var e = 0f
-                            for (d in 0..3) { val td = t - d * 0.011f; if (td >= 0f) e += exp(-td / 0.006f) }
-                            if (t > 0.034f) e += exp(-(t - 0.034f) / (0.1f + dec * 0.4f)) * 0.8f
-                            env = 1f
-                            s = band * e * 2.2f
+                        6 -> { // Clap: Rauschen durch Bandpass, drei schnelle Anschläge + Hall-Fahne
+                            vc.f1.run(noise(), g1150, 0.55)
+                            vc.f2.run(vc.f1.bp, g700, 1.2)
+                            val band = vc.f2.hp
+                            var e = 0.0
+                            for (d in 0..2) { val td = t - d * 0.0105; if (td >= 0) e += exp(-td / 0.0045) }
+                            if (t > 0.03) e += exp(-(t - 0.03) / (0.09 + dec * 0.35)) * 0.75
+                            env = 1.0
+                            s = band * e * 2.4
+                            if (t > 0.12 + dec * 1.2) env = 0.0
                         }
-                        7, 8 -> { // Hi-Hats
-                            val m = metallic(vc, 1.6 * 2.0.pow(tune - 0.5)) + noise() * 0.25f
-                            vc.hp += (m - vc.hp) * 0.55f
-                            env = if (v == 7) exp(-t / (0.02f + dec * 0.08f)) else exp(-t / (0.12f + dec * 0.7f))
-                            s = (m - vc.hp) * 1.8f
+                        7, 8 -> { // Hi-Hats: Metall-Rechtecke → Bandpass ~10 kHz → Hochpass
+                            val m = metallic(vc, 1.0 * 2.0.pow((tune - 0.5) * 0.8)) * 0.9 + noise() * 0.12
+                            vc.f1.run(m, g10k, 0.9)
+                            vc.f2.run(vc.f1.bp, g7000, 1.0)
+                            env = if (v == 7) exp(-t / (0.025 + dec * 0.07)) else exp(-t / (0.16 + dec * 0.6))
+                            s = vc.f2.hp * 3.4
                         }
-                        9 -> { // Crash
-                            val m = metallic(vc, 2.4 * 2.0.pow(tune - 0.5)) * 0.6f + noise() * 0.6f
-                            vc.hp += (m - vc.hp) * 0.45f
-                            env = exp(-t / (0.6f + dec * 2.2f))
-                            s = (m - vc.hp) * 1.4f
+                        9 -> { // Crash: Metall + Rauschen, breiter Bandpass, lang
+                            val m = metallic(vc, 1.45 * 2.0.pow(tune - 0.5)) * 0.6 + noise() * 0.5
+                            vc.f1.run(m, g7000, 0.7)
+                            vc.f2.run(vc.f1.bp, g4500, 1.0)
+                            env = exp(-t / (0.7 + dec * 2.0)) * (1 - exp(-t / 0.002))
+                            s = vc.f2.hp * 1.8
                         }
-                        else -> { // Ride
-                            val m = metallic(vc, 3.3 * 2.0.pow(tune - 0.5)) * 0.8f + noise() * 0.15f
-                            vc.hp += (m - vc.hp) * 0.5f
-                            vc.p1 += 3100.0 / sr
-                            env = exp(-t / (0.8f + dec * 2.2f))
-                            s = (m - vc.hp) * 1.1f + sin(2 * PI * vc.p1).toFloat() * 0.25f * exp(-t / 0.4f)
+                        else -> { // Ride: Metall mit Glocke
+                            val m = metallic(vc, 1.9 * 2.0.pow(tune - 0.5)) * 0.85 + noise() * 0.1
+                            vc.f1.run(m, g8500, 0.8)
+                            vc.f2.run(vc.f1.bp, g5000, 1.0)
+                            vc.p1 += 3200.0 / sr
+                            env = exp(-t / (0.9 + dec * 2.0))
+                            s = vc.f2.hp * 1.8 + sin(2 * PI * vc.p1) * 0.18 * exp(-t / 0.35)
                         }
                     }
-                    out[i] += tanh(s * env * lvl * drive) * norm * 0.8f
+                    if (vc.fade < 1f) { vc.fade *= 0.997f; if (vc.fade < 0.001f) { vc.active = false; break } }
+                    out[i] += (tanh(s * env * lvl * drive) * norm * 0.8 * vc.fade).toFloat()
                     vc.t++
-                    if (vc.t > sr * 4 || (env < 1e-4f && vc.t > sr / 20)) {
-                        vc.active = false
-                        break
-                    }
+                    if (vc.t > sr * 4 || ((env < 1e-4) && vc.t > sr / 20)) { vc.active = false; vc.fade = 1f; break }
                 }
+                if (!vc.active) vc.fade = 1f
             }
         }
     }
