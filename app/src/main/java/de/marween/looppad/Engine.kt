@@ -2503,9 +2503,15 @@ object Engine {
         if (take.oneShot) {
             loop.oneShot = true
         } else if (masterLen == 0L) {
-            masterStart = loop.start
-            masterLen = len.toLong()
-            if (!seqPlaying) startTransportAt(loop.start)
+            if (take.gridBar > 0L) {
+                // Sequenzer-Raster wird zum Master-Tempo, Instrumente laufen ohne Sprung weiter
+                masterStart = seqOrigin
+                masterLen = take.gridBar
+            } else {
+                masterStart = loop.start
+                masterLen = len.toLong()
+                if (!seqPlaying) startTransportAt(loop.start)
+            }
         }
         padSemi[p] = 0
         setWarpSource(loop)
@@ -2575,7 +2581,8 @@ object Engine {
                 return
             }
             val rawTo = max(take.fromIn, inClock.frameAt(upNanos, sampleRate))
-            val m = masterLen
+            // laufen nur Instrumente/Sequenzer (noch kein Master-Loop), gilt deren Raster – sonst springen sie
+            val m = if (masterLen > 0L) masterLen else if (seqPlaying && !take.oneShot && !take.overdub) seqBar().also { take.gridBar = it } else 0L
             val sh = micShift()
             if (take.overdub) {
                 take.toIn = rawTo + max(0L, sh)
@@ -2584,9 +2591,9 @@ object Engine {
                 take.fromQ = max(0L, take.fromIn + sh)
                 take.toIn = rawTo + sh
             } else {
-                val len = quantizeBars(rawTo - take.fromIn)
+                val len = quantizeBars(rawTo - take.fromIn, m)
                 val unit = min(len, m)
-                val ms = masterStart
+                val ms = seqStart()
                 val pressOut = outClock.frameAt(take.downNanos, sampleRate)
                 val qOut = ms + Math.floorDiv(pressOut - ms + unit / 2, unit) * unit
                 // Mikro-Versatz: was auf der Eins gesungen wurde, liegt so viel später im Mikro-Puffer
@@ -5200,7 +5207,13 @@ object Engine {
         }
         pushPadUndo("Laden Pad ${p + 1}", p)
         var bpmNote = ""
-        if (masterLen <= 0L) {
+        if (masterLen <= 0L && seqPlaying) {
+            // Instrumente/Sequenzer laufen schon: deren Raster bleibt (Tempo und Eins) – der Song wird darauf gewarpt
+            masterLen = seqBar()
+            masterStart = seqOrigin
+            val cur = currentBpm()
+            if (abs(cur - info.bpm) > 0.05f) bpmNote = String.format(java.util.Locale.GERMANY, " → gewarpt auf %.0f BPM", cur)
+        } else if (masterLen <= 0L) {
             // erster Loop: sein Tempo wird das Master-Tempo
             masterLen = (sampleRate * 240.0 / info.bpm).toLong()
             masterStart = written
