@@ -2085,8 +2085,9 @@ object Engine {
         if (android.os.Build.VERSION.SDK_INT < 31) return null
         val m = hintMgr as? android.os.PerformanceHintManager ?: return null
         return try {
-            // Ziel: 70 % der Blockdauer – Reserve für Spitzen
-            val target = (block * 1_000_000_000L / max(1, sampleRate)) * 7 / 10
+            // Ziel: ein Drittel der Blockdauer – das System hält den Takt lieber etwas höher (bei 70 % senkte es ihn
+            // so weit, dass Lastspitzen beim Laden oder Zeichnen zu Knacksern führen konnten)
+            val target = (block * 1_000_000_000L / max(1, sampleRate)) / 3
             m.createHintSession(intArrayOf(Process.myTid()), max(500_000L, target))
         } catch (e: Throwable) { null }
     }
@@ -4136,6 +4137,25 @@ object Engine {
         return true
     }
 
+    /**
+     * Loop-Naht glätten: springt das Signal vom letzten zum ersten Sample, wird das Ende in ~2 ms sanft
+     * auf den Anfang zugeführt – sonst knackt es bei jeder Wiederholung (Klang bleibt sonst unverändert).
+     */
+    private fun seamFix(d: FloatArray) {
+        val n = d.size
+        if (n < 512) return
+        val jump = d[0] - d[n - 1]
+        // erwarteter Schritt: Steigung kurz vor dem Ende fortgesetzt
+        val slope = d[n - 1] - d[n - 2]
+        val err = jump - slope
+        if (abs(err) < 0.004f) return
+        val m = min(n / 8, max(32, sampleRate / 500))
+        for (i in 0 until m) {
+            val g = (i + 1).toFloat() / (m + 1)
+            d[n - m + i] += err * g * g
+        }
+    }
+
     /** Ab dieser Länge (≈ 20 s) wird das Original ausgelagert. */
     private val SPILL_MIN: Int get() = max(1, sampleRate) * 20
 
@@ -5126,6 +5146,7 @@ object Engine {
         padLoadText[p] = "ins Raster"
         LoadProgress.stage(0.7f, 1f)
         val data = Warp.stretchBeatsLong(body, target, sampleRate, info.bars, pre)
+        seamFix(data)
         val loop = Loop(data)
         // Original fürs spätere Neu-Dehnen: bei Songs auf den Handy-Speicher (16 Bit), nicht in den Arbeitsspeicher
         loop.srcRef = when {
@@ -5165,6 +5186,7 @@ object Engine {
                 val target = max(64L, (l.warpBars * m).toLong()).toInt()
                 if (target == l.data.size) continue
                 val data = Warp.stretchBeatsLong(src, target, sampleRate, l.warpBars, l.srcPre)
+                seamFix(data)
                 if (gen != warpGen) return@Thread
                 val nl = cloneLoop(l, data)
                 nl.muted = l.muted

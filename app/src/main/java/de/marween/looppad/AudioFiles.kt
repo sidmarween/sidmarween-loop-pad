@@ -9,6 +9,8 @@ import android.net.Uri
 import java.io.OutputStream
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import kotlin.math.abs
+import kotlin.math.max
 import kotlin.math.min
 
 /** Import (WAV/MP3/…) und Export (WAV) von Loops. Alles mono, auf die Engine-Samplerate umgerechnet. */
@@ -152,11 +154,24 @@ object AudioFiles {
             val est = if (durUs > 0) (durUs * targetRate / 1_000_000L + targetRate / 4).coerceAtMost(targetRate.toLong() * maxSeconds + targetRate) else targetRate * 4L
             val list = FloatList(est.toInt().coerceAtLeast(targetRate))
             // lineare Umrechnung beim Sammeln: nächste Ausgabe liegt bei Quell-Position [nextOut]
+            // MP3/AAC: Encoder-Verzögerung (Stille am Anfang) und Auffüllung am Ende entfernen –
+            // sonst hat jeder Loop vorne eine kleine Lücke und knackt/holpert bei jeder Wiederholung
+            fun key(k: String): Int = try { if (fmt.containsKey(k)) fmt.getInteger(k) else -1 } catch (e: Exception) { -1 }
+            val encDelay = key("encoder-delay")
+            val encPad = key("encoder-padding")
+            var skip = if (encDelay > 0) encDelay.toLong() else 0L
+            var trimLead = encDelay < 0 // ohne Angabe: digitale Stille am Anfang (max. 50 ms) entfernen
             var step = -1.0
             var nextOut = 0.0
             var srcIdx = 0L
             var prev = 0f
+            var leadSkipped = 0
             fun push(v: Float) {
+                if (skip > 0) { skip--; return }
+                if (trimLead) {
+                    if (abs(v) < 0.0005f && srcIdx == 0L && leadSkipped < rate / 20) { leadSkipped++; return }
+                    trimLead = false
+                }
                 if (step < 0) step = rate.toDouble() / targetRate
                 if (step == 1.0) { list.add(v); srcIdx++; return }
                 while (nextOut <= srcIdx) {
@@ -234,6 +249,10 @@ object AudioFiles {
                 }
             }
             if (list.size == 0) throw IllegalStateException("Datei enthält kein Audio")
+            if (encPad > 0) {
+                val cut = (encPad.toLong() * targetRate / max(1, rate)).toInt()
+                if (cut in 1 until list.size / 2) list.size -= cut
+            }
             if (list.size == list.data.size) return list.data
             // Songs: bis zu ½ s Stille am Ende stehen lassen statt alles nochmal zu kopieren (spart den doppelten Speicher)
             if (list.size > targetRate * 60 && list.data.size - list.size <= targetRate / 2) return list.data
