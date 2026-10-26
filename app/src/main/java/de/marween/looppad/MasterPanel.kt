@@ -240,7 +240,8 @@ class MasterPanel(private val host: View) {
                     tabDown = t
                     return
                 }
-                for (k in sliders.indices) {
+                // nur die Regler, die das gewählte Modul wirklich hat (alte Positionen anderer Module ignorieren)
+                for (k in 0 until min(sliders.size, MasterBus.par[mod].size)) {
                     val r = sliders[k]
                     if (x >= r.left - dp(8f) && x <= r.right + dp(8f) && y >= r.top - dp(4f) && y <= r.bottom + dp(8f)) {
                         ptr = e.getPointerId(i)
@@ -275,6 +276,7 @@ class MasterPanel(private val host: View) {
 
     private fun setSlider(x: Float) {
         val r = sliders.getOrNull(dragSlider) ?: return
+        if (dragSlider >= MasterBus.par[mod].size) return
         MasterBus.par[mod][dragSlider] = ((x - r.left) / r.width()).coerceIn(0f, 1f)
         MasterBus.dirty = true
         // Regler bewegt → Modul einschalten

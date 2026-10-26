@@ -331,6 +331,8 @@ class GhostPanel(private val host: View) {
     }
 
     private fun applyCard(lane: Int, i: Int) {
+        // Karte muss zur Spur gehören (nach einem Reiterwechsel können alte Positionen noch gelten)
+        if (i !in cards(lane).indices) return
         if (lane == 3) { loadLoopCard(i); return }
         Engine.pushPatternUndo("Ghost")
         when (lane) {
@@ -396,7 +398,7 @@ class GhostPanel(private val host: View) {
             bFilter.contains(x, y) -> { Ghost.drumFilter = (Ghost.drumFilter + 1) % Ghost.FILTERS.size; onHint?.invoke("Neue Drum-Karten: " + Ghost.FILTERS[Ghost.drumFilter] + " – „nur Hats“ legt sich über die Kick des Tracks, ohne doppelte Bassdrum") }
             else -> {
                 for (i in 0 until L) {
-                    if (tabs[i].contains(x, y)) { tab = i; scroll = 0f; if (i == 3) refreshLoops(); return }
+                    if (tabs[i].contains(x, y)) { tab = i; scroll = 0f; cardRects.clear(); if (i == 3) refreshLoops(); return }
                     if (laneMute[i].contains(x, y)) {
                         when (i) { 0 -> st.drumOn = !st.drumOn; 1 -> st.acidOn = !st.acidOn; 2 -> st.synTracks[0].on = !st.synTracks[0].on; else -> GhostLoop.on = !GhostLoop.on }
                         haptic(); return
