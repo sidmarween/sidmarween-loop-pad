@@ -68,7 +68,6 @@ class UiSmokeTest {
 
     @Test
     fun padView() {
-        Engine.sampleRate = 48000
         val w = 1080; val h = 2340
         val pv = PadView(ctx)
         sized(pv, w, h)
@@ -97,7 +96,6 @@ class UiSmokeTest {
 
     @Test
     fun djView() {
-        Engine.sampleRate = 48000
         for ((w, h) in listOf(1080 to 2340, 2340 to 1080)) {
             val dv = DjView(ctx)
             sized(dv, w, h)
