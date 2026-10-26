@@ -57,6 +57,7 @@ object Projects {
         j.put("instruments", InstState.toJson())
         j.put("scenes", Engine.scenesToJson())
         j.put("arrangement", Engine.arrToJson())
+        j.put("slicer", Slicer.toJson())
         j.put("padFx", Engine.padFxToJson())
         val kn = JSONArray()
         for (v in Engine.knobs) kn.put(v.toDouble())
@@ -190,6 +191,7 @@ object Projects {
         for (p in 0 until Engine.PADS) {
             Engine.padFx[p] = if (p < pa.length()) pa.getJSONObject(p).optBoolean("fx", oldTarget < 0 || oldTarget == p) else true
         }
+        Slicer.fromJson(j.optJSONObject("slicer"))
         Engine.markSaved()
     }
 

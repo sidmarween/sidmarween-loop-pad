@@ -175,6 +175,11 @@ class MainActivity : Activity() {
         pads.onInstScale = { showScaleMenu() }
         pads.onInstChords = { showChordProgression() }
         pads.onSidechain = { showSidechain() }
+        pads.onSlicerSource = { pickSlicerSource() }
+        pads.onSlicerToPads = {
+            val n = Engine.slicerToPads(PadView.VISIBLE_PADS)
+            hint(if (n > 0) "✂ $n Slices als ⚡ One-Shots auf freie Pads gelegt" else "Keine freien Pads – erst Pads leeren")
+        }
         pads.onLaunchQuantChanged = {
             prefs.edit().putInt("launchIdx", Engine.launchIdx).apply()
             hint(if (Engine.LAUNCH_Q[Engine.launchIdx] <= 0f) "Start-Raster SOFORT: Loops starten/stoppen beim Antippen"
@@ -1122,6 +1127,10 @@ class MainActivity : Activity() {
         labels.add("Audio importieren (WAV / MP3)")
         actions.add { pickImport() }
         if (has) {
+            if (!shot) {
+                labels.add("✂ Slicer: an den Schlägen in 16 Stücke auf 16 Pads zerlegen")
+                actions.add { openSlicerFor(p) }
+            }
             labels.add("〰 Wave-Editor (schneiden, Slices)")
             actions.add { pads.openEditor(p) }
             labels.add("🎹 Tastatur")
@@ -2315,6 +2324,7 @@ class MainActivity : Activity() {
             "💾 Projekt & Dateien" to { showMenuGroup(0) },
             "💿 Musik-Sammlung: Ordner laden → automatisch katalogisiert & analysiert" to { showMusicLibrary() },
             "📤 Song exportieren: WAV, Stems, MIDI" to { showSongExport() },
+            "✂ Slicer: Song-Abschnitt auf 16 Pads zerlegen und neu spielen" to { if (Slicer.data == null) pickSlicerSource() else pads.openSlicer() },
             ((if (Engine.scOn) "〽 Sidechain-Pumpen: AN" else "〽 Sidechain-Pumpen (Kick drückt Bass & Flächen)")) to { showSidechain() },
             "🎙 Aufnahme & Wiedergabe" to { showMenuGroup(1) },
             "🎨 Aussehen: Designs, Schriften, Ansicht" to { showMenuGroup(2) },
@@ -3024,6 +3034,7 @@ class MainActivity : Activity() {
 
     @Deprecated("Zurück-Taste")
     override fun onBackPressed() {
+        if (pads.slicerOpen) { pads.closeSlicer(); return }
         if (remoteView != null) { leaveRemote(); return }
         if (Dj.gigMode) {
             confirm("Gig läuft", "Wirklich zurück? Die Musik spielt weiter, solange ein Deck läuft.") {
@@ -3034,6 +3045,34 @@ class MainActivity : Activity() {
         }
         @Suppress("DEPRECATION")
         super.onBackPressed()
+    }
+
+    // ================================================================ Slicer
+
+    private fun openSlicerFor(p: Int) {
+        if (Slicer.srcPad != p || Slicer.data == null) {
+            Slicer.srcPad = p
+            Slicer.startBar = 0
+            Slicer.bars = if (Engine.padDataLen(p) >= Engine.masterFrames() * 2 && Engine.masterFrames() > 0) 2 else 1
+            Slicer.clearPattern()
+        }
+        if (!Slicer.rebuild()) { toast("Pad ${p + 1} ist leer"); return }
+        if (djMode) switchMode(false)
+        pads.openSlicer()
+        hint("✂ Pad ${p + 1} in 16 Slices – Pads unten links = 1 · ◀ ▶ wählt den Abschnitt · ● REC + ▶ nimmt ein Pattern auf")
+    }
+
+    private fun pickSlicerSource() {
+        val list = (0 until PadView.VISIBLE_PADS).filter { Engine.hasLoop(it) && !Engine.isOneShot(it) }
+        if (list.isEmpty()) { toast("Erst einen Loop oder Song auf ein Pad laden"); return }
+        val labels = list.map { p ->
+            val bars = if (Engine.masterFrames() > 0) (Engine.padDataLen(p) / Engine.masterFrames()).toInt() else 1
+            "Pad ${p + 1}" + (Engine.padName(p)?.let { " · $it" } ?: "") + " · $bars Takt" + if (bars != 1) "e" else ""
+        }.toTypedArray()
+        ui().setTitle("✂ Slicer · Quelle wählen")
+            .setItems(labels) { _, w -> Slicer.clearPattern(); Slicer.srcPad = -1; openSlicerFor(list[w]) }
+            .setNegativeButton("Abbrechen", null)
+            .show()
     }
 
     // ================================================================ Song-Export

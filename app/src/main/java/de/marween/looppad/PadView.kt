@@ -865,6 +865,7 @@ class PadView(context: Context) : View(context) {
         if (kbPad >= 0) drawKeyboard(canvas)
         if (edPad >= 0) drawEditor(canvas, dt)
         if (instEd.isOpen) instEd.draw(canvas, RectF(dp(6f), insetTop + dp(6f), width - dp(6f), height - insetBottom - dp(6f)), overlayColors())
+        if (slicer.isOpen) slicer.draw(canvas, RectF(dp(6f), insetTop + dp(6f), width - dp(6f), height - insetBottom - dp(6f)), overlayColors()[2])
         if (!masterPanel.isOpen) drawMasterButton(canvas)
         if (masterPanel.isOpen) masterPanel.draw(canvas, RectF(dp(6f), insetTop + dp(6f), width - dp(6f), height - insetBottom - dp(6f)), overlayColors()[2])
         drawInfo(canvas)
@@ -1023,7 +1024,7 @@ class PadView(context: Context) : View(context) {
     /** MASTER-Knopf oben: leuchtet, wenn die Kette aktiv ist; Balken zeigt die Limiter-Reduktion. */
     private fun drawMasterButton(canvas: Canvas) {
         val r = masterBtn
-        if (r.width() <= 0f || kbPad >= 0 || edPad >= 0 || instEd.isOpen) return
+        if (r.width() <= 0f || kbPad >= 0 || edPad >= 0 || instEd.isOpen || slicer.isOpen) return
         val cols = overlayColors()
         val active = MasterBus.anyOn()
         val rr = dp(8f)
@@ -1387,7 +1388,7 @@ class PadView(context: Context) : View(context) {
         strokePaint.strokeCap = Paint.Cap.BUTT
     }
 
-    private fun focusBlocked(): Boolean = kbPad >= 0 || edPad >= 0 || instEd.isOpen || masterPanel.isOpen
+    private fun focusBlocked(): Boolean = kbPad >= 0 || edPad >= 0 || instEd.isOpen || masterPanel.isOpen || slicer.isOpen
 
     private fun sectionRect(sec: Int, out: RectF) {
         when (sec) {
@@ -4099,6 +4100,11 @@ class PadView(context: Context) : View(context) {
         }
         if (masterPanel.isOpen) {
             masterPanel.touch(e)
+            return true
+        }
+        if (slicer.isOpen) {
+            slicer.touch(e)
+            invalidate()
             return true
         }
         if (instEd.isOpen) {
@@ -8547,6 +8553,19 @@ class PadView(context: Context) : View(context) {
         ed.onChords = { onInstChords?.invoke() }
         ed.onSidechain = { onSidechain?.invoke() }
     }
+    /** Slicer: 16 Stücke auf 16 Pads. */
+    private val slicer = SlicerPanel(this).also { sp ->
+        sp.onHint = { hint(it) }
+        sp.onRec = { recPressed() }
+        sp.onSource = { onSlicerSource?.invoke() }
+        sp.onToPads = { onSlicerToPads?.invoke() }
+    }
+    var onSlicerSource: (() -> Unit)? = null
+    var onSlicerToPads: (() -> Unit)? = null
+    fun openSlicer() { closeFocus(); slicer.open(); invalidate() }
+    val slicerOpen: Boolean get() = slicer.isOpen
+    fun closeSlicer() { slicer.close(); invalidate() }
+
     /** Tonleiter für die Piano-Roll wählen. */
     var onInstScale: (() -> Unit)? = null
     /** Akkordfolge für die Synth-Spur erzeugen. */

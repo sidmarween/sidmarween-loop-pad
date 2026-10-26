@@ -232,6 +232,24 @@ object Engine {
                 }
             }
         }
+        // Slicer-Pattern (Groove wie die Drums)
+        if (Slicer.on && Slicer.data != null) {
+            val k = Math.floorMod(n, Slicer.len.toLong()).toInt()
+            for (sIdx in 0 until Slicer.N) {
+                val v = Slicer.steps[sIdx][k]
+                if (v > 0f) Slicer.queue(base + grooveOff(1, n, stepLen, 20 + sIdx), sIdx, grooveVel(1, n, v, 20 + sIdx))
+            }
+        }
+    }
+
+    /** Slicer-Pad angeschlagen (live): spielt sofort, bei Pattern-Aufnahme wird es gerastert eingetragen. */
+    fun slicerHit(s: Int, vel: Float) {
+        if (recLive()) {
+            val (step, ahead) = liveStep(Slicer.len)
+            Slicer.steps[s][step] = vel.coerceIn(0.05f, 1f)
+            if (ahead) return
+        }
+        Slicer.queue(-1, s, vel)
     }
 
     private val ARP_ONE = intArrayOf(0)
@@ -1472,6 +1490,26 @@ object Engine {
         return if (k in b.indices) k else -1
     }
 
+    /** Die 16 Slicer-Stücke als ⚡ One-Shots auf freie Pads legen. */
+    fun slicerToPads(maxPad: Int): Int {
+        val d = Slicer.data ?: return 0
+        pushPadUndo("Slicer → Pads", *IntArray(maxPad.coerceAtMost(PADS)) { it })
+        var q = 0
+        var count = 0
+        for (k in 0 until Slicer.N) {
+            while (q < maxPad && loops.get(q) != null) q++
+            if (q >= maxPad) break
+            val a = Slicer.bounds[k]
+            val b = Slicer.bounds[k + 1]
+            if (b - a < 8) continue
+            padOneShot[q] = true
+            importLoopRaw(q, d.copyOfRange(a, b))
+            count++
+            q++
+        }
+        return count
+    }
+
     /** Verteilt die Slices eines Ausschnitts als ONE SHOTS auf freie Pads. Gibt die Anzahl zurück. */
     fun distributeSlices(p: Int, start: Int, end: Int, n: Int, maxPad: Int): Int {
         val l = loops.get(p) ?: return 0
@@ -2516,26 +2554,28 @@ object Engine {
             val soloed = soloAny
             if (soloed) java.util.Arrays.fill(instScratch, 0f)
             val ci = captureInst
-            for (kk in 0 until 2 + InstState.SYN_TRACKS) {
+            for (kk in 0 until 3 + InstState.SYN_TRACKS) {
                 val kind = min(kk, 2)
                 val dst = if (soloed) instScratch else if (fxOnlyPad >= 0) out else when (kk) {
                     0 -> if (InstState.acidFx) bus else out
                     1 -> if (InstState.drumFx) bus else out
-                    else -> if (InstState.synTracks[kk - 2].fx) bus else out
+                    in 2 until 2 + InstState.SYN_TRACKS -> if (InstState.synTracks[kk - 2].fx) bus else out
+                    else -> if (Slicer.fx) bus else out
                 }
                 val cap = (ci shr kind) and 1 != 0
                 val tgt = if (cap) instTmp else dst
                 if (cap) java.util.Arrays.fill(instTmp, 0f)
                 // Sidechain: Spur getrennt rendern und im Takt der Kick wegducken
-                val duck = scNow && ((kk == 0 && scAcid) || (kk >= 2 && scSyn[kk - 2]))
+                val duck = scNow && ((kk == 0 && scAcid) || (kk in 2 until 2 + InstState.SYN_TRACKS && scSyn[kk - 2]) || (kk == 2 + InstState.SYN_TRACKS && scPads))
                 val rt = if (duck || stemNow) scTmp.also { java.util.Arrays.fill(it, 0f) } else tgt
                 when (kk) {
                     0 -> acid?.render(rt, block, w)
                     1 -> drum?.render(rt, block)
-                    else -> synths?.getOrNull(kk - 2)?.render(rt, block, w)
+                    in 2 until 2 + InstState.SYN_TRACKS -> synths?.getOrNull(kk - 2)?.render(rt, block, w)
+                    else -> Slicer.render(rt, block, w)
                 }
                 if (duck || stemNow) {
-                    val sb = if (stemNow && !soloed) stemBufs[kk] else null
+                    val sb = if (stemNow && !soloed) stemBufs[min(kk, StemRecorder.COUNT - 1)] else null
                     for (i in 0 until block) {
                         val v = if (duck) scTmp[i] * scEnv[i] else scTmp[i]
                         tgt[i] += v
