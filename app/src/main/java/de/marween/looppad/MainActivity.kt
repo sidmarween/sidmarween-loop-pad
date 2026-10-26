@@ -226,6 +226,8 @@ class MainActivity : Activity() {
         dj.onHint = { hint(it) }
         dj.onAiStems = { k -> showAiStems(k) }
         AiStems.auto = prefs.getBoolean("aiAuto", true)
+        Engine.autoTuneSpeed = prefs.getFloat("atSpeed", 0.25f)
+        Engine.autoTuneMix = prefs.getFloat("atMix", 1f)
         Dj.onDeckLoaded = { d -> if (AiStems.auto) AiStems.request(applicationContext, d) }
         dj.onSkinMenu = { showDesigns() }
         dj.onSamplerLoad = { p -> showSamplerLoad(p) }
@@ -2336,7 +2338,9 @@ class MainActivity : Activity() {
             (if (djLand) "📱 DJ im Querformat (wie ein Controller) – antippen = hochkant" else "📱 DJ hochkant – antippen = Querformat wie ein Controller") to {
                 getSharedPreferences("marvpad", MODE_PRIVATE).edit().putBoolean("djLand", !djLand).apply()
                 applyDjOrientation()
-            }) else emptyList()) + listOf(
+            },
+            (if (Dj.mashArmed) "🎭 Mashup wartet auf die Eins … (antippen = abbrechen)" else "🎭 Mashup-Assistent: Gesang von einem Deck über den Beat des anderen") to { showMashup() }) else emptyList()) + listOf(
+            "🎤 Mikro-Werkzeuge: Summen → Melodie, Beatbox → Drums, Auto-Tune, Folge dem Song" to { showMicTools() },
             "💾 Projekt & Dateien" to { showMenuGroup(0) },
             "💿 Musik-Sammlung: Ordner laden → automatisch katalogisiert & analysiert" to { showMusicLibrary() },
             "📤 Song exportieren: WAV, Stems, MIDI" to { showSongExport() },
@@ -2387,6 +2391,8 @@ class MainActivity : Activity() {
                 items.add(Triple("🎙 Meine Aufnahmen", { showRecordings() }, false))
                 items.add(Triple("🔴 Meine Set-Aufnahmen (${SetRecorder.list(this).size})", { showSets() }, false))
                 items.add(Triple("📚 Bibliothek importieren / exportieren", { showLibraryIo() }, false))
+                items.add(Triple("☁ Backup in Dropbox / Google Drive sichern", { showBackup() }, false))
+                items.add(Triple("☁ Backup wiederherstellen", { pickRestore() }, false))
                 items.add(Triple("🌐 Weitere freie Samples im Netz", { showFreeSampleLinks() }, false))
             }
             1 -> {
@@ -4176,6 +4182,348 @@ class MainActivity : Activity() {
         }.show()
     }
 
+    // ================================================================ Mikro-Werkzeuge
+
+    private fun showMicTools() {
+        val items = arrayOf(
+            "🎤 Summen → Melodie: Melodie summen oder singen, landet als Noten in einer Synth-Spur",
+            "🥁 Beatbox → Drums: „Bum-Tss-Ka“ ins Mikro, wird zum Drum-Pattern",
+            (if (Engine.autoTuneOn) "🎚 Live-Auto-Tune: AN" else "🎚 Live-Auto-Tune fürs Mikro") + " …",
+            "🎯 Folge dem Song: Tonart & Akkorde aus einem Pad oder Deck übernehmen"
+        )
+        ui().setTitle("🎤 Mikro-Werkzeuge").setItems(items) { _, w ->
+            when (w) {
+                0 -> askMicCapture(0)
+                1 -> askMicCapture(1)
+                2 -> showAutoTune()
+                else -> showFollowSong()
+            }
+        }.setNegativeButton("Schließen", null).show()
+    }
+
+    /** Takte und Ziel wählen, dann aufnehmen. [kind] 0 = Summen, 1 = Beatbox. */
+    private fun askMicCapture(kind: Int) {
+        if (!hasMic()) { toast("Bitte erst das Mikrofon erlauben"); return }
+        val barsOpt = intArrayOf(1, 2, 4)
+        val labels = barsOpt.map { "$it Takt" + (if (it > 1) "e" else "") }.toTypedArray()
+        ui().setTitle(if (kind == 0) "🎤 Summen → Melodie: Länge" else "🥁 Beatbox → Drums: Länge").setItems(labels) { _, w ->
+            val bars = barsOpt[w]
+            if (kind == 0) {
+                val names = Array(InstState.SYN_TRACKS) { "SYNTH ${it + 1} · ${InstState.synSoundNames.getOrElse(it) { "" }}" + if (InstState.synTracks[it].hasNotes()) " (wird ersetzt)" else "" }
+                ui().setTitle("In welche Spur?").setItems(names) { _, t -> micCapture(0, bars, t) }.show()
+            } else micCapture(1, bars, 0)
+        }.setNegativeButton("Abbrechen", null).show()
+    }
+
+    /** Aufnahme im Takt: startet auf der nächsten Eins, dauert [bars] Takte, danach Erkennung. */
+    private fun micCapture(kind: Int, bars: Int, track: Int) {
+        if (!Engine.seqPlaying) Engine.seqPlay()
+        val metroWas = Engine.metronome
+        Engine.metronome = true
+        val pad = (18 * resources.displayMetrics.density).toInt()
+        val tv = TextView(this).apply { textSize = 20f; setTextColor(Color.WHITE); gravity = Gravity.CENTER; setPadding(pad, pad, pad, pad) }
+        val sub = TextView(this).apply {
+            textSize = 12f; setTextColor(Color.rgb(190, 190, 190)); gravity = Gravity.CENTER; setPadding(pad, 0, pad, pad / 2)
+            text = if (kind == 0) "Summe oder singe die Melodie im Takt (gern „da-da-da“ – klare Töne werden am besten erkannt)." else "Beatbox im Takt: „Bum“ = Kick, „Ka“/„Psch“ = Snare, „Ts“ = Hi-Hat."
+        }
+        val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; addView(tv); addView(sub) }
+        var cancelled = false
+        val dlg = ui().setTitle(if (kind == 0) "🎤 Summen → Melodie" else "🥁 Beatbox → Drums").setView(box).setCancelable(false)
+            .setNegativeButton("Abbrechen") { _, _ -> cancelled = true }.create()
+        dlg.show()
+        val h = android.os.Handler(mainLooper)
+        var startStep = Double.NaN
+        var startFrame = -1L
+        val total = bars * InstState.STEPS
+        h.post(object : Runnable {
+            override fun run() {
+                if (cancelled) { Engine.metronome = metroWas; return }
+                val now = Engine.micNow()
+                val st = Engine.micStep(now)
+                if (st.isNaN()) { tv.text = "Warte auf den Takt …"; h.postDelayed(this, 40); return }
+                if (startStep.isNaN()) {
+                    var s0 = Math.ceil(st / 16.0) * 16.0
+                    if (s0 - st < 3.0) s0 += 16.0
+                    startStep = s0
+                    startFrame = now
+                }
+                val rel = st - startStep
+                when {
+                    rel < 0 -> tv.text = "Gleich … ${(-rel / 4.0).let { Math.ceil(it).toInt() }}"
+                    rel < total -> tv.text = "● Takt ${(rel / 16).toInt() + 1} / $bars   ·   ${(rel % 16 / 4).toInt() + 1}"
+                    rel < total + 1.5 -> tv.text = "● …"
+                    else -> {
+                        Engine.metronome = metroWas
+                        tv.text = "Erkenne …"
+                        val n = (now - startFrame).toInt()
+                        val audio = Engine.micCopy(startFrame, n)
+                        if (audio == null) { dlg.dismiss(); toast("Mikrofon-Audio nicht verfügbar"); return }
+                        Thread {
+                            val msg = try {
+                                if (kind == 0) applyHum(audio, startFrame, startStep, bars, track) else applyBeatbox(audio, startFrame, startStep, bars)
+                            } catch (e: Throwable) { "Fehler: ${e.message ?: e}" }
+                            runOnUiThread { dlg.dismiss(); hint(msg); pads.invalidate() }
+                        }.start()
+                        return
+                    }
+                }
+                h.postDelayed(this, 40)
+            }
+        })
+    }
+
+    /** Gesummtes in Noten der Synth-Spur [track]. */
+    private fun applyHum(audio: FloatArray, f0: Long, startStep: Double, bars: Int, track: Int): String {
+        val sr = Engine.sampleRate
+        // halbe Rate reicht für Gesang (schneller)
+        val half = FloatArray(audio.size / 2) { (audio[2 * it] + audio[2 * it + 1]) * 0.5f }
+        val st = InstState
+        val notes = MicTools.hum(half, sr / 2)
+        if (notes.isEmpty()) return "Keine Töne erkannt – lauter und deutlicher summen"
+        val t = st.synTracks[track]
+        // Oktave automatisch in die Lage der Spur bringen
+        val med = notes.map { it.midi }.sorted()[notes.size / 2]
+        val octShift = Math.round((62 + 12 * t.oct - med) / 12.0).toInt() * 12
+        Engine.pushPatternUndo("Summen → Melodie")
+        t.clear()
+        val len = (bars * InstState.STEPS).coerceIn(16, InstState.MAX)
+        t.len = len
+        var placed = 0
+        for (nt in notes) {
+            val a = Engine.micStep(f0 + nt.start.toLong() * 2) - startStep
+            val b = Engine.micStep(f0 + nt.end.toLong() * 2) - startStep
+            val s0 = Math.floor(a + 0.5).toInt()
+            if (s0 < 0 || s0 >= len) continue
+            val l = max(1, Math.floor(b + 0.5).toInt() - s0)
+            var semi = nt.midi + octShift - 60 - 12 * t.oct
+            if (st.scaleType != 0 && !st.inScale(semi)) {
+                for (d in 1..6) { if (st.inScale(semi - d)) { semi -= d; break }; if (st.inScale(semi + d)) { semi += d; break } }
+            }
+            for (k in s0 until min(len, s0 + l)) { t.gate[k] = true; t.tie[k] = k != s0; t.semi[k] = semi; t.vel[k] = nt.vel; t.chd[k] = 1 }
+            placed++
+        }
+        t.on = true
+        st.synCur = track
+        return if (placed == 0) "Töne erkannt, aber außerhalb des Takts – nochmal versuchen" else "🎤 $placed Noten in SYNTH ${track + 1}" + (if (octShift != 0) " (Oktave angepasst)" else "") + " · ↶ UNDO macht es rückgängig"
+    }
+
+    /** Beatbox in die Drum-Machine (BD, SD, CH). */
+    private fun applyBeatbox(audio: FloatArray, f0: Long, startStep: Double, bars: Int): String {
+        val hits = MicTools.beatbox(audio, Engine.sampleRate)
+        if (hits.isEmpty()) return "Keine Schläge erkannt – näher ans Mikro"
+        val st = InstState
+        val len = (bars * InstState.STEPS).coerceIn(16, InstState.MAX)
+        Engine.pushPatternUndo("Beatbox → Drums")
+        val rows = intArrayOf(0, 1, 7)
+        for (r in rows) java.util.Arrays.fill(st.drumSteps[r], 0)
+        st.drumLen = len
+        val cnt = IntArray(3)
+        for (h in hits) {
+            val s = Math.floor(Engine.micStep(f0 + h.at) - startStep + 0.5).toInt()
+            if (s < 0 || s >= len) continue
+            val r = rows[h.kind]
+            st.drumSteps[r][s] = if (h.vel > 0.85f) 2 else 1
+            st.drumVel[r][s] = h.vel
+            cnt[h.kind]++
+        }
+        // kürzeres Pattern über alle 4 Takte wiederholen
+        for (r in rows) for (k in len until InstState.MAX) { st.drumSteps[r][k] = st.drumSteps[r][k % len]; st.drumVel[r][k] = st.drumVel[r][k % len] }
+        st.drumOn = true
+        return "🥁 Kick ${cnt[0]} · Snare ${cnt[1]} · Hi-Hat ${cnt[2]} in der Drum-Machine · ↶ UNDO macht es rückgängig"
+    }
+
+    private fun showAutoTune() {
+        val prefs = getSharedPreferences("marvpad", MODE_PRIVATE)
+        val (box, scroll) = dialogBox()
+        if (!headphonesOut()) note(box, "⚠ Ohne Kopfhörer pfeift es über den Lautsprecher (Rückkopplung).", Color.rgb(255, 150, 60))
+        check(box, "🎚 Auto-Tune auf dem Live-Mikro", Engine.autoTuneOn) {
+            Engine.autoTuneOn = it
+            if (it && !Engine.monitorOn) { Engine.monitorOn = true; hint("Mikrofon live hören ist jetzt an") }
+            prefs.edit().putBoolean("autoTune", it).apply()
+        }
+        val keyTxt = if (InstState.scaleType != 0) "Tonleiter: ${InstState.scaleLabel()}" else if (Engine.autoTuneKey >= 0) "Tonart: ${Keys.name(Engine.autoTuneKey)} (${Keys.camelot(Engine.autoTuneKey)})" else "Chromatisch (alle Halbtöne) – über „Folge dem Song“ oder 🎼 Tonleiter eine Tonart setzen"
+        note(box, keyTxt, Color.WHITE)
+        fun slider(label: String, v: Float, set: (Float) -> Unit) {
+            val lab = note(box, "", Color.WHITE)
+            fun show(x: Float) { lab.text = label + ": " + (x * 100).toInt() + " %" }
+            show(v)
+            box.addView(SeekBar(this).apply {
+                max = 100; progress = (v * 100).toInt()
+                setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                    override fun onProgressChanged(sb: SeekBar?, pr: Int, fromUser: Boolean) { if (fromUser) { set(pr / 100f); show(pr / 100f) } }
+                    override fun onStartTrackingTouch(sb: SeekBar?) {}
+                    override fun onStopTrackingTouch(sb: SeekBar?) {
+                        prefs.edit().putFloat("atSpeed", Engine.autoTuneSpeed).putFloat("atMix", Engine.autoTuneMix).apply()
+                    }
+                })
+            })
+        }
+        slider("Weichheit (0 = harter Roboter-Effekt, 100 = natürlich)", Engine.autoTuneSpeed) { Engine.autoTuneSpeed = it }
+        slider("Stärke", Engine.autoTuneMix) { Engine.autoTuneMix = it }
+        val live = note(box, "", Color.rgb(180, 220, 255))
+        val hh = android.os.Handler(mainLooper)
+        val names = arrayOf("C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "H")
+        fun nm(m: Double) = if (m.isNaN()) "–" else names[Math.floorMod(Math.round(m).toInt(), 12)] + (Math.round(m).toInt() / 12 - 1)
+        val tick = object : Runnable {
+            override fun run() {
+                val a = Engine.autoTuneHeard(); val b = Engine.autoTuneTarget()
+                live.text = if (!Engine.autoTuneOn) "" else if (a.isNaN()) "🎙 (singen …)" else String.format(Locale.GERMANY, "🎙 gesungen %s (%+.0f Cent) → %s", nm(a), (a - Math.round(a)) * 100, nm(b))
+                if (live.isAttachedToWindow) hh.postDelayed(this, 80)
+            }
+        }
+        note(box, "Mit Effekten aufnehmen: Pad-Eingang auf WAVE – dann landet die gestimmte Stimme im Pad.")
+        ui().setTitle("🎚 Live-Auto-Tune").setView(scroll).setPositiveButton("Fertig", null).show()
+        hh.postDelayed(tick, 200)
+    }
+
+    /** Folge dem Song: Tonart (und Akkorde) aus einem Pad oder Deck in die Instrumente übernehmen. */
+    private fun showFollowSong() {
+        val src = ArrayList<Pair<String, Int>>() // Kennung: Pad ≥ 0, Deck = -1 - k
+        for (p in 0 until PadView.VISIBLE_PADS) if (Engine.hasLoop(p) && !Engine.isOneShot(p)) src.add(("▦ Pad ${p + 1}" + (Engine.padName(p)?.let { " · $it" } ?: "")) to p)
+        for (k in 0..1) if (Dj.decks[k].loaded()) src.add(("🎧 Deck ${"AB"[k]} · ${Dj.decks[k].title}" + if (Dj.decks[k].key >= 0) " (${Keys.camelot(Dj.decks[k].effKey())})" else "") to (-1 - k))
+        if (src.isEmpty()) { toast("Erst einen Song auf ein Pad oder in ein Deck laden"); return }
+        ui().setTitle("🎯 Folge dem Song – Quelle").setItems(src.map { it.first }.toTypedArray()) { _, w ->
+            val id = src[w].second
+            val modes = arrayOf("Nur Tonart (Tonleiter, Auto-Tune, Einrasten)", "Tonart + Akkorde als Fläche (SYNTH 2)", "Tonart + Bass-Linie (SYNTH 3)", "Tonart + Fläche + Bass")
+            ui().setTitle("Was übernehmen?").setItems(modes) { _, m -> followSong(id, m) }.show()
+        }.setNegativeButton("Abbrechen", null).show()
+    }
+
+    private fun followSong(id: Int, mode: Int) {
+        hint("🎯 Höre in den Song …")
+        Thread {
+            try {
+                // Mono ~11 kHz, Takte, Tonart
+                val sr11: Double
+                val x: FloatArray
+                val barLen: Int
+                val bars: Int
+                var key: Int
+                var shift = 0
+                if (id >= 0) {
+                    val d = Engine.loopData(id) ?: throw IllegalStateException("Pad leer")
+                    val f = max(1, Math.round(Engine.sampleRate / 11025.0).toInt())
+                    sr11 = Engine.sampleRate.toDouble() / f
+                    x = FloatArray(d.size / f) { i -> var s = 0f; for (j in 0 until f) s += d[i * f + j]; s / f }
+                    val mf = Engine.masterFrames()
+                    bars = if (mf > 0) Math.round(d.size.toDouble() / mf).toInt().coerceIn(1, 4) else 4
+                    barLen = x.size / max(1, if (mf > 0) Math.round(d.size.toDouble() / mf).toInt() else 4)
+                    key = Keys.detectMono(x, sr11).first
+                } else {
+                    val dd = Dj.decks[-1 - id]
+                    val data = dd.data ?: throw IllegalStateException("Deck leer")
+                    val f = max(1, Math.round(dd.srcRate / 11025.0).toInt())
+                    sr11 = dd.srcRate.toDouble() / f
+                    // 4 Takte ab dem aktuellen Takt
+                    val barF = dd.beatFrames() * 4
+                    val from = (dd.grid + (Math.floor(Dj.barAt(dd, dd.pos)) * 4 + dd.barOffset) * dd.beatFrames()).coerceAtLeast(0.0)
+                    bars = 4
+                    val n = min(((dd.len - from) / f).toInt(), (barF * 4 / f).toInt()).coerceAtLeast(0)
+                    x = FloatArray(n) { i -> var s = 0f; for (j in 0 until f) { val fr = (from + i * f + j).toInt().coerceIn(0, dd.len - 1); s += if (dd.ch == 2) (data[2 * fr] + data[2 * fr + 1]) * 0.5f else data[fr].toFloat() }; s / (f * 32768f) }
+                    barLen = (barF / f).toInt()
+                    key = if (dd.key >= 0) dd.key else Keys.detectMono(x, sr11).first
+                    val ek = if (dd.key >= 0) dd.effKey() else key
+                    shift = if (key >= 0 && ek >= 0) Math.floorMod(Keys.root(ek) - Keys.root(key), 12) else 0
+                }
+                if (key < 0) throw IllegalStateException("Tonart nicht erkannt – zu kurz oder nur Schlagzeug?")
+                val starts = IntArray(bars) { it * barLen }
+                val ends = IntArray(bars) { (it + 1) * barLen }
+                val chords = if (mode > 0) MicTools.chords(x, sr11, starts, ends, key).map { if (it >= 0) Keys.shift(it, shift) else -1 }.toIntArray() else IntArray(0)
+                val k2 = Keys.shift(key, shift)
+                runOnUiThread {
+                    Engine.pushPatternUndo("Folge dem Song")
+                    InstState.scaleRoot = Keys.root(k2)
+                    InstState.scaleType = if (Keys.isMinor(k2)) 2 else 1
+                    Engine.autoTuneKey = k2
+                    if (mode == 1 || mode == 3) InstState.writeChords(1, chords, false)
+                    if (mode == 2 || mode == 3) InstState.writeChords(2, chords, true)
+                    pads.invalidate()
+                    val cn = if (chords.isNotEmpty()) " · Akkorde: " + chords.joinToString(" – ") { Keys.name(it) } else ""
+                    hint("🎯 Tonart ${Keys.name(k2)} (${Keys.camelot(k2)}) übernommen$cn · ↶ UNDO macht es rückgängig")
+                }
+            } catch (e: Throwable) {
+                runOnUiThread { toast("Folge dem Song: ${e.message ?: e}") }
+            }
+        }.start()
+    }
+
+    // ================================================================ Mashup-Assistent
+
+    private fun showMashup() {
+        if (Dj.mashArmed) { Dj.mashCancel(); hint("Mashup abgebrochen"); return }
+        val a = Dj.decks[0]; val b = Dj.decks[1]
+        fun kd(d: Dj.Deck) = if (d.key >= 0) " (${Keys.camelot(d.effKey())})" else ""
+        val items = arrayOf(
+            "🎤 Gesang von A${kd(a)}  →  über den Beat von B${kd(b)}",
+            "🎤 Gesang von B${kd(b)}  →  über den Beat von A${kd(a)}",
+            "↩ Mashup beenden: alle Stems wieder an",
+            "ℹ So funktioniert's"
+        )
+        ui().setTitle("🎭 Mashup-Assistent").setItems(items) { _, w ->
+            when (w) {
+                0, 1 -> {
+                    val vi = w
+                    val bi = 1 - w
+                    val vd = Dj.decks[vi]
+                    if (vd.loaded() && vd.stemMask == null) { toast("Stems von Deck ${"AB"[vi]} werden noch berechnet – gleich nochmal"); return@setItems }
+                    hint(Dj.mashup(vi, bi))
+                }
+                2 -> { for (d in Dj.decks) for (s in 0..3) d.stemGain[s] = 1f; Dj.mashCancel(); hint("Alle Stems wieder an") }
+                else -> ui().setTitle("🎭 Mashup-Assistent").setMessage(
+                    "1. Beat-Track in ein Deck laden und starten.\n2. Track mit Gesang ins andere Deck laden (Stems werden berechnet – mit 🧠 KI am saubersten).\n" +
+                    "3. Hier „Gesang von … über den Beat von …“ wählen.\n\n" +
+                    "Der Assistent sucht den stärksten Gesangsteil, gleicht die Tonart an (Key-Shift mit Keylock), koppelt das Tempo und startet den Gesang genau auf der nächsten 4-Takt-Grenze. " +
+                    "Dabei wird das Gesangs-Deck zum Acapella und das Beat-Deck zum Instrumental. Danach kannst du mit den STEMS-Pads und dem Crossfader frei weiterspielen."
+                ).setPositiveButton("OK", null).show()
+            }
+        }.setNegativeButton("Schließen", null).show()
+    }
+
+    // ================================================================ Cloud-Backup
+
+    private var backupSongs = false
+
+    private fun showBackup() {
+        val songs = CloudImport.dir(this).walkTopDown().filter { it.isFile }.sumOf { it.length() } / 1048576
+        ui().setTitle("☁ Backup sichern (aktuelles Projekt vorher speichern)").setItems(arrayOf(
+            "💾 Projekte, Aufnahmen, Bibliothek, Sammlung & Einstellungen",
+            "💾 … dazu die Cloud-Songs ($songs MB)"
+        )) { _, w ->
+            backupSongs = w == 1
+            val name = "MarvPAD-Backup-" + java.text.SimpleDateFormat("yyyy-MM-dd_HHmm", Locale.GERMANY).format(java.util.Date()) + ".zip"
+            val i = Intent(Intent.ACTION_CREATE_DOCUMENT).apply { addCategory(Intent.CATEGORY_OPENABLE); type = "application/zip"; putExtra(Intent.EXTRA_TITLE, name) }
+            hint("Speicherort wählen: oben links ☰ → Dropbox oder Google Drive")
+            try { startActivityForResult(i, REQ_BACKUP) } catch (e: Exception) { toast("Keine Dateiauswahl gefunden") }
+        }.setNegativeButton("Abbrechen", null).show()
+    }
+
+    private fun pickRestore() {
+        val i = Intent(Intent.ACTION_OPEN_DOCUMENT).apply { addCategory(Intent.CATEGORY_OPENABLE); type = "*/*"; putExtra(Intent.EXTRA_MIME_TYPES, arrayOf("application/zip", "application/x-zip-compressed", "application/octet-stream")) }
+        hint("Backup wählen: oben links ☰ → Dropbox oder Google Drive")
+        try { startActivityForResult(i, REQ_RESTORE) } catch (e: Exception) { toast("Keine Dateiauswahl gefunden") }
+    }
+
+    private fun writeBackup(u: Uri) {
+        val withSongs = backupSongs
+        progressJob("☁ Backup sichern", { cancel, prog ->
+            Backup.write(this, u, withSongs, cancel, prog)
+        }) { toast("☁ Backup gesichert") }
+    }
+
+    private fun confirmRestore(u: Uri) {
+        confirm("Backup wiederherstellen?", "Projekte, Aufnahmen, Bibliothek, Sammlung und Einstellungen werden durch das Backup ersetzt. Danach startet die App neu.") {
+            progressJob("☁ Backup wiederherstellen", { cancel, prog -> Backup.restore(this, u, cancel, prog) }) {
+                ui().setTitle("☁ Wiederhergestellt").setMessage("Die App startet jetzt neu.").setCancelable(false).setPositiveButton("OK") { _, _ ->
+                    Engine.stop()
+                    val i = packageManager.getLaunchIntentForPackage(packageName)?.apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK) }
+                    if (i != null) startActivity(i)
+                    finishAffinity()
+                    android.os.Process.killProcess(android.os.Process.myPid())
+                }.show()
+            }
+        }
+    }
+
     // ================================================================ KI-Stems
 
     private fun showAiStems(k: Int) {
@@ -5152,6 +5500,12 @@ class MainActivity : Activity() {
             if (exportKind == 2) writeSongMidi(tree) else startBounce(tree, exportKind == 1)
             return
         }
+        if (requestCode == REQ_BACKUP || requestCode == REQ_RESTORE) {
+            val u = data?.data
+            if (resultCode != RESULT_OK || u == null) return
+            if (requestCode == REQ_BACKUP) writeBackup(u) else confirmRestore(u)
+            return
+        }
         if (requestCode == REQ_CLOUD_FILES) {
             if (resultCode != RESULT_OK || data == null) return
             val list = ArrayList<Uri>()
@@ -5549,6 +5903,8 @@ class MainActivity : Activity() {
         private const val REQ_EXPORT_DIR = 25
         private const val REQ_GHOST_LOOP = 26
         private const val REQ_CLOUD_FILES = 27
+        private const val REQ_BACKUP = 28
+        private const val REQ_RESTORE = 29
         /** Ziel eines Cloud-Imports: Pad 0..n, die Sammlung oder ein Deck (CLOUD_DECK + 0/1). */
         private const val CLOUD_COLLECTION = -1
         private const val CLOUD_DECK = 1000

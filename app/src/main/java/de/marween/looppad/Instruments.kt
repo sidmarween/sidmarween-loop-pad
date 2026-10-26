@@ -333,6 +333,35 @@ object InstState {
         if (scaleType == 0) scaleType = if (pr.minor) 2 else 1
     }
 
+    /**
+     * Erkannte Akkorde (je Takt, [Keys]-Zahlen: 0..11 Dur, 12..23 Moll, -1 = Takt auslassen) in Spur [track] schreiben.
+     * [asBass]: nur Grundtöne eine Oktave tiefer im Offbeat-Rhythmus, sonst gehaltene Akkorde (Fläche).
+     */
+    fun writeChords(track: Int, chords: IntArray, asBass: Boolean) {
+        val t = synTracks[track.coerceIn(0, SYN_TRACKS - 1)]
+        t.clear()
+        val bars = chords.size.coerceIn(1, MAX / STEPS)
+        t.len = bars * STEPS
+        var prevRoot = Int.MIN_VALUE
+        for (b in 0 until bars) {
+            val c = chords[b]
+            if (c < 0) continue
+            var r = c % 12
+            if (r > 6) r -= 12
+            if (prevRoot != Int.MIN_VALUE && abs(r - prevRoot) > 7) r += if (r < prevRoot) 12 else -12
+            prevRoot = r
+            val q = if (c < 12) 1 else 2
+            val s0 = b * STEPS
+            fun note(at: Int, len: Int, semi: Int, chd: Int, v: Float) {
+                for (k in at until min(MAX, at + max(1, len))) { t.gate[k] = true; t.tie[k] = k != at; t.semi[k] = semi; t.chd[k] = chd; t.vel[k] = v }
+            }
+            if (asBass) {
+                var k = 2
+                while (k < STEPS) { note(s0 + k, 2, r, 1, 0.9f); k += 4 }
+            } else note(s0, STEPS, r, q + 1, 0.85f)
+        }
+    }
+
     fun synClear() = syn.clear()
 
     fun synHasNotes() = syn.hasNotes()

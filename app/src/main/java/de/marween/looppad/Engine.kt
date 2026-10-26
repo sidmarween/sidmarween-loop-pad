@@ -1876,6 +1876,60 @@ object Engine {
     private var monCursor = -1L
 
     /** Liefert die neuesten Mikrofon-Samples mit so wenig Verzögerung wie möglich. */
+    // ---------------------------------------------------------------- Mikro-Werkzeuge (Summen, Beatbox, Auto-Tune)
+
+    /** Aufnahme-Zähler des Mikrofons (Frames). */
+    fun micNow(): Long = captured
+
+    /** Mikrofon-Audio [from, from+n) aus dem Ringpuffer (null, wenn nicht mehr/noch nicht vorhanden). */
+    fun micCopy(from: Long, n: Int): FloatArray? {
+        val c = captured
+        if (from < 0 || n <= 0 || from + n > c || c - from > ringSize - sampleRate) return null
+        val out = FloatArray(n)
+        var idx = (from % ringSize).toInt()
+        for (i in 0 until n) {
+            out[i] = ring[idx]
+            idx++
+            if (idx == ringSize) idx = 0
+        }
+        return out
+    }
+
+    /**
+     * Mikrofon-Frame → Sequenzer-Schritt (16 je Takt, mit Bruchteil): der Moment, in dem der Ton am Mikro ankam,
+     * auf den gerade gehörten Ausgabe-Frame abgebildet. NaN, wenn nichts läuft.
+     */
+    fun micStep(frame: Long): Double {
+        if (!seqPlaying) return Double.NaN
+        val bar = seqBar()
+        if (bar <= 0L) return Double.NaN
+        val heard = outClock.frameAt(inClock.nanosAt(frame, sampleRate), sampleRate)
+        return (heard - seqStart()).toDouble() * STEPS / bar
+    }
+
+    /** Live-Auto-Tune fürs Mikrofon (Monitor): an/aus, Geschwindigkeit (0 = Roboter … 1 = natürlich), Stärke. */
+    @Volatile var autoTuneOn = false
+    @Volatile var autoTuneSpeed = 0.25f
+    @Volatile var autoTuneMix = 1f
+    /** Tonart fürs Auto-Tune, wenn keine Tonleiter eingestellt ist (Keys-Zahl, -1 = chromatisch). */
+    @Volatile var autoTuneKey = -1
+    private var autoTune: MicTools.AutoTune? = null
+    private val tuneAllowed: (Int) -> Boolean = { pc ->
+        val st = InstState
+        if (st.scaleType != 0) st.inScale(pc)
+        else {
+            val k = autoTuneKey
+            if (k < 0) true else {
+                val r = k % 12
+                val iv = if (k < 12) intArrayOf(0, 2, 4, 5, 7, 9, 11) else intArrayOf(0, 2, 3, 5, 7, 8, 10)
+                iv.contains(Math.floorMod(pc - r, 12))
+            }
+        }
+    }
+    /** Für die Anzeige: gehörte / korrigierte Tonhöhe (MIDI, NaN = nichts). */
+    fun autoTuneHeard(): Double = autoTune?.heardMidi ?: Double.NaN
+    fun autoTuneTarget(): Double = autoTune?.targetMidi ?: Double.NaN
+
     private fun fillMonitor(dst: FloatArray, n: Int): Boolean {
         val c = captured
         // Abstand zum Schreibzeiger: zwei Blöcke Reserve gegen Ruckler zwischen Aufnahme- und Ausgabe-Thread
@@ -2561,6 +2615,10 @@ object Engine {
                 if (fillMonitor(monBuf, block)) {
                     val g = monitorGain
                     for (i in 0 until block) monBuf[i] *= g
+                    if (autoTuneOn) {
+                        val at = autoTune ?: MicTools.AutoTune(sampleRate).also { autoTune = it }
+                        at.process(monBuf, block, tuneAllowed, autoTuneSpeed, autoTuneMix)
+                    }
                     if (padChainActive(MIC_CHAIN)) {
                         for (sl in 0 until 3) {
                             val ty = pfxType[MIC_CHAIN][sl]

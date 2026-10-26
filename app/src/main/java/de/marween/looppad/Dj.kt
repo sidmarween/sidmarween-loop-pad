@@ -267,6 +267,7 @@ object Dj {
             }
             val bl = d.bufL
             val br = d.bufR
+            mashCheck(d)
             val p0 = d.pos
             renderDeck(d, bl, br, n, w, sr)
             // Stems live (immer im Signalweg: gleiche Verzögerung für beide Decks)
@@ -1232,6 +1233,127 @@ object Dj {
             stemsAsync(d)
             onDeckLoaded?.invoke(d)
         }
+    }
+
+    // ---------------------------------------------------------------- Mashup-Assistent
+
+    /** Vocals von Deck [mashVoc] starten, sobald das Beat-Deck [mashBeat] Position [mashAt] erreicht. */
+    @Volatile var mashArmed = false
+    @Volatile private var mashVoc = 0
+    @Volatile private var mashBeat = 1
+    @Volatile private var mashAt = 0.0
+    @Volatile private var mashFrom = 0.0
+
+    /** Gesangs-Anteil je Takt eines Decks (aus der Stem-Karte und dem Pegel), oder null. */
+    fun vocalBars(d: Deck): FloatArray? {
+        val m = d.stemMask ?: return null
+        if (d.bpm <= 0f || d.len <= 0) return null
+        val barF = d.beatFrames() * 4
+        val first = d.grid + d.barOffset * d.beatFrames()
+        val bars = ((d.len - first) / barF).toInt()
+        if (bars < 4) return null
+        val b0 = m.band(250.0)
+        val b1 = m.band(3500.0)
+        val pk = d.peaks
+        val out = FloatArray(bars)
+        for (b in 0 until bars) {
+            val p0 = first + b * barF
+            val p1 = p0 + barF
+            var sum = 0.0
+            var cnt = 0
+            var p = p0
+            val step = max(m.hop, barF / 64)
+            while (p < p1) {
+                val fi = (p / m.hop + m.off).toInt().coerceIn(0, m.frames - 1)
+                var v = 0
+                for (bb in b0..b1) v += m.data[(fi * m.nb + bb) * 3 + 2].toInt() and 255
+                val lvl = if (pk.isNotEmpty()) (pk[(p / BIN).toInt().coerceIn(0, pk.size - 1)].toInt() and 255) / 255.0 else 1.0
+                sum += v / (255.0 * (b1 - b0 + 1)) * lvl
+                cnt++
+                p += step
+            }
+            out[b] = (sum / max(1, cnt)).toFloat()
+        }
+        return out
+    }
+
+    /** Kleinste Tonart-Verschiebung (−6..+6), mit der [voc] zu [beat] passt (gleiche Tonart bevorzugt). */
+    fun mashShift(voc: Int, beat: Int): Int? {
+        if (voc < 0 || beat < 0) return null
+        for (want in 0..1) {
+            var best: Int? = null
+            for (s in intArrayOf(0, 1, -1, 2, -2, 3, -3, 4, -4, 5, -5, 6)) {
+                if (Keys.compat(beat, Keys.shift(voc, s)) == want) { best = s; break }
+            }
+            if (best != null) return best
+        }
+        return null
+    }
+
+    /**
+     * Mashup vorbereiten: Gesang aus Deck [vi] über den Beat von Deck [bi]. Tonart angleichen, Tempo koppeln,
+     * den stärksten Gesangsteil suchen und ihn auf der nächsten 4-Takt-Grenze des Beat-Decks starten
+     * (Vocal-Deck = Acapella, Beat-Deck = Instrumental). Liefert eine Meldung für die Anzeige.
+     */
+    fun mashup(vi: Int, bi: Int): String {
+        val vd = decks[vi]
+        val bd = decks[bi]
+        if (!vd.loaded() || !bd.loaded()) return "Beide Decks brauchen einen Track"
+        if (vd.bpm <= 0f || bd.bpm <= 0f) return "Tempo unbekannt – erst Raster setzen"
+        if (!bd.playing) return "Das Beat-Deck ${"AB"[bi]} muss laufen"
+        val vb = vocalBars(vd) ?: return "Stems von Deck ${"AB"[vi]} sind noch nicht fertig – kurz warten"
+        // stärkster Gesangsteil: erster 4-Takt-Block (Phrasenraster), der fast so stark ist wie der beste
+        val blocks = ArrayList<Pair<Int, Float>>()
+        var b = Math.floorMod(vd.phraseOff, 4)
+        while (b + 4 <= vb.size) { blocks.add(b to (vb[b] + vb[b + 1] + vb[b + 2] + vb[b + 3]) / 4f); b += 4 }
+        if (blocks.isEmpty()) return "Track zu kurz"
+        val best = blocks.maxOf { it.second }
+        if (best < 0.04f) return "In Deck ${"AB"[vi]} ist kaum Gesang zu finden"
+        val pick = blocks.first { it.second >= best * 0.75f }.first
+        val vStart = vd.grid + (vd.barOffset + pick * 4) * vd.beatFrames()
+        // Tonart
+        var keyMsg = ""
+        val bk = bd.effKey()
+        val sh = mashShift(vd.key, bk)
+        if (sh != null) {
+            vd.keyShift = sh
+            vd.keylock = true
+            keyMsg = " · Tonart " + Keys.camelot(Keys.shift(vd.key, sh)) + (if (sh != 0) " (${if (sh > 0) "+" else ""}$sh)" else "") + " zu " + Keys.camelot(bk)
+        } else if (vd.key < 0 || bk < 0) keyMsg = " · Tonart unbekannt"
+        // Einstieg: nächste 4-Takt-Grenze des Beat-Decks (mind. 1 Schlag Vorlauf)
+        val bar = barAt(bd, bd.pos)
+        var nb = (floor(bar / 4.0) + 1) * 4.0
+        if ((nb - bar) * 4 < 1.0) nb += 4.0
+        mashAt = bd.grid + (nb * 4 + bd.barOffset) * bd.beatFrames()
+        mashFrom = vStart
+        mashVoc = vi
+        mashBeat = bi
+        vd.playing = false
+        vd.seekTo = vStart
+        vd.fader = max(vd.fader, 0.9f)
+        bd.fader = max(bd.fader, 0.9f)
+        xfade = 0.5f
+        bd.sync = true
+        mashArmed = true
+        val wait = (nb - bar) * 4 * 60.0 / max(1f, bd.effBpm())
+        return String.format(java.util.Locale.GERMANY, "🎭 Gesang ab Takt %d von %s startet in %.1f s auf der Eins%s", pick + 1, "AB"[vi], wait, keyMsg)
+    }
+
+    fun mashCancel() { mashArmed = false }
+
+    /** Mischer-Thread: Einsatz zünden, sobald das Beat-Deck die Stelle erreicht. */
+    private fun mashCheck(d: Deck) {
+        if (!mashArmed || d.idx != mashBeat) return
+        if (!d.playing || d.pos < mashAt) return
+        mashArmed = false
+        val vd = decks[mashVoc]
+        val over = (d.pos - mashAt) / max(1e-6, d.beatFrames()) * vd.beatFrames()
+        vd.seekTo = mashFrom + over
+        vd.playing = true
+        vd.syncReq = true
+        // Vocal-Deck = Acapella, Beat-Deck = Instrumental
+        vd.stemGain[0] = 1f; vd.stemGain[1] = 0f; vd.stemGain[2] = 0f; vd.stemGain[3] = 0f
+        d.stemGain[0] = 0f; d.stemGain[1] = 1f; d.stemGain[2] = 1f; d.stemGain[3] = 1f
     }
 
     /** Neuer Track im Deck (z. B. für die KI-Trennung). */
