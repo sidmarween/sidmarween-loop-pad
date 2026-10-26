@@ -184,6 +184,24 @@ object Engine {
         return (v * (1f + grooveRand(n, inst * 57 + 13 + salt) * 0.3f * hv)).coerceIn(0.05f, 1f)
     }
 
+    /** Zufall 0..1, für Schritt [n] und [salt] immer gleich. */
+    private fun rnd01(n: Long, salt: Int): Float = grooveRand(n, salt) * 0.5f + 0.5f
+
+    /** Hat die Drum-Spur [v] überhaupt Schläge? (Ghost-Notes nur dort, wo es die Spur gibt) */
+    private fun rowUsed(v: Int): Boolean {
+        val row = InstState.drumSteps[v]
+        for (k in 0 until InstState.drumLen.coerceIn(1, InstState.MAX)) if (row[k] > 0) return true
+        return false
+    }
+
+    /** Nächster Ton der Tonleiter (oder ±2 Halbtöne ohne Tonleiter). */
+    private fun scaleNeighbor(semi: Int, dir: Int): Int {
+        if (InstState.scaleType == 0) return semi + 2 * dir
+        var s = semi
+        repeat(12) { s += dir; if (InstState.inScale(s)) return s }
+        return semi
+    }
+
     private fun instStep(n: Long, base: Long, w: Long, stepLen: Long) {
         val st = InstState
         if (scOn && scSource == 1 && Math.floorMod(n, 4L) == 0L) scKick(base)
@@ -197,7 +215,15 @@ object Engine {
             val tied = st.acidTie[step] && st.acidGate[prev]
             if (!tied) {
                 val slideIn = st.acidSlide[prev] && st.acidGate[prev]
-                a.queue(f, true, st.acidSemi[step], st.acidAcc[step], slideIn, grooveVel(0, n, st.acidVel[step]))
+                var semi = st.acidSemi[step]
+                var acc = st.acidAcc[step]
+                val la = st.liveAmt
+                if (la > 0f && Math.floorMod(n, 4L) != 0L) {
+                    // Lebendig: ab und zu Oktave hoch oder Akzent wechseln (nie auf dem Schlag)
+                    if (rnd01(n, 701) < la * 0.08f) semi += 12
+                    if (rnd01(n, 702) < la * 0.12f) acc = !acc
+                }
+                a.queue(f, true, semi, acc, slideIn, grooveVel(0, n, st.acidVel[step]))
             }
             // Ton endet nach halbem Schritt – außer Slide oder der nächste Schritt hält ihn (Tie)
             val holds = st.acidGate[next] && (st.acidSlide[step] || st.acidTie[next])
@@ -220,19 +246,67 @@ object Engine {
                 var len = 1
                 while (len < sl && t.gate[(k + len) % sl] && t.tie[(k + len) % sl]) len++
                 val tag = 1000 + k
-                sy.queue(f, true, t.semi[k], grooveVel(2 + ti, n, t.vel[k]), tag, InstState.chordOf(t, k))
+                var semi = t.semi[k]
+                val la = st.liveAmt
+                var skip = false
+                if (la > 0f && Math.floorMod(n, 4L) != 0L && InstState.chordOf(t, k).size == 1) {
+                    // Lebendig: Nachbarton der Tonleiter, Oktavsprung oder ausgelassene Note – zweite Phrasenhälfte öfter
+                    val late = Math.floorMod(Math.floorDiv(n, 16L), 8L) >= 4
+                    val r = rnd01(n, 800 + ti)
+                    val pv = la * (if (late) 0.16f else 0.08f)
+                    if (r < pv * 0.5f) semi = scaleNeighbor(semi, if (rnd01(n, 810 + ti) < 0.5f) 1 else -1)
+                    else if (r < pv * 0.8f) semi += 12
+                    else if (r < pv) skip = true
+                }
+                if (skip) continue
+                sy.queue(f, true, semi, grooveVel(2 + ti, n, t.vel[k]), tag, InstState.chordOf(t, k))
                 sy.queue(f + stepLen * len - stepLen / 8, false, 0, 0f, tag)
             }
         }
         val d = drum
         if (d != null && st.drumOn) {
             val ds = Math.floorMod(n, st.drumLen.coerceIn(1, InstState.MAX).toLong()).toInt()
+            val la = st.liveAmt
+            val bar = Math.floorDiv(n, 16L)
+            val inBar = Math.floorMod(n, 16L).toInt()
+            val ph = max(1, st.livePhrase).toLong()
+            // Fill: letzter Schlag (bei „wild“ letzte zwei) vor einer neuen Phrase
+            val fillFrom = if (la > 0.7f) 8 else 12
+            val inFill = la > 0f && st.liveFills && Math.floorMod(bar, ph) == ph - 1 && inBar >= fillFrom
+            val crash = la > 0f && st.liveFills && bar > 0 && Math.floorMod(bar, ph) == 0L && inBar == 0
             for (v in 0 until InstState.DV) {
-                val x = st.drumSteps[v][ds]
+                var x = st.drumSteps[v][ds]
+                var vel = st.drumVel[v][ds]
+                if (la > 0f) {
+                    if (inFill) {
+                        val k = inBar - fillFrom
+                        val span = 16 - fillFrom
+                        when (v) {
+                            1 -> { // Snare-Wirbel, lauter werdend
+                                val on = inBar >= 14 || Math.floorMod(inBar, 2) == 0 || rnd01(n, 900) < la
+                                x = if (on) 1 else 0
+                                vel = 0.45f + 0.55f * (k + 1f) / span
+                            }
+                            2, 3, 4 -> { // Toms von hoch nach tief
+                                val slot = when (v) { 4 -> 13; 3 -> 14; else -> 15 }
+                                x = if (inBar == slot && rnd01(n, 910 + v) < 0.4f + la * 0.6f) 1 else 0
+                                vel = 0.9f
+                            }
+                            7, 8, 9, 10 -> x = 0 // Becken pausieren im Fill
+                            0 -> if (inBar > 12) x = 0
+                        }
+                    } else {
+                        // Ghost-Notes auf der Hi-Hat, gelegentlich ausgelassene Schläge, lebendige Lautstärke
+                        if (x == 0 && v == 7 && rowUsed(7) && rnd01(n, 920) < la * 0.2f) { x = 1; vel = 0.3f + 0.2f * rnd01(n, 921) }
+                        if (x > 0 && v != 0 && v != 1 && inBar % 4 != 0 && rnd01(n, 930 + v) < la * 0.07f) x = 0
+                        if (x > 0) vel = (vel * (1f + (rnd01(n, 940 + v) - 0.5f) * 0.35f * la)).coerceIn(0.1f, 1f)
+                    }
+                    if (crash && v == 9 && rnd01(n, 950) < 0.4f + la * 0.6f) { x = 2; vel = 0.9f }
+                }
                 if (x > 0 && !st.drumMute[v]) {
                     val fd = base + grooveOff(1, n, stepLen, v)
                     if (v == 0 && scSource == 0) scKick(fd)
-                    d.trigger(v, (fd - w).toInt(), x == 2, grooveVel(1, n, st.drumVel[v][ds], v))
+                    d.trigger(v, (fd - w).toInt(), x == 2, grooveVel(1, n, vel, v))
                 }
             }
         }

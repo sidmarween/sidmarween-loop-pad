@@ -637,7 +637,193 @@ class DjView(context: Context) : View(context) {
             text.color = s.accent
             c.drawText("🎧 SPLIT-CUE", xfader.centerX(), xfader.top - dp(2f), text)
         }
+        if (lesson >= 0) drawLesson(c)
         postInvalidateOnAnimation()
+    }
+
+    // ================================================================ DJ-Lektion (geführt, zum Mitmachen)
+
+    private class LStep(val title: String, val text: String, val target: () -> RectF? = { null },
+                        val done: (() -> Boolean)? = null, val setup: (() -> Unit)? = null, val action: Pair<String, String>? = null)
+
+    /** Aktionen für die Activity (z. B. Mashup-Dialog). */
+    var onLessonAction: ((String) -> Unit)? = null
+    var onLessonDone: (() -> Unit)? = null
+    private var lesson = -1
+    private var lSteps: List<LStep> = emptyList()
+    private var lDoneAt = 0L
+    private var lEnter = 0L
+    private val lCard = RectF(); private val lNext = RectF(); private val lPrev = RectF(); private val lEnd = RectF(); private val lAct = RectF()
+    private class Spark(var x: Float, var y: Float, val vx: Float, var vy: Float, var life: Float, val col: Int)
+    private val sparks = ArrayList<Spark>()
+
+    private val djLesson: List<LStep> by lazy { listOf(
+        LStep("🎧 DJ-Grundlagen", "In dieser Lektion mixt du zwei Tracks ineinander: laden, starten, synchronisieren, mit EQ und Crossfader überblenden – und am Ende Stems, ⏭ DROP und Mashup. Der Rahmen zeigt dir, wo es weitergeht."),
+        LStep("1 · Track in Deck A", "Tippe auf die Wellenform von Deck A (oder ▶) und lade einen Song – am besten aus der Musik-Sammlung.", { lanes[0] },
+            done = { Dj.decks[0].loaded() }, action = "Deck A laden" to "loadA"),
+        LStep("▶ 2 · Starten", "Drück ▶ bei Deck A. Das ist dein laufender Track – das Publikum hört ihn.", { side[0][0] },
+            done = { Dj.decks[0].playing }),
+        LStep("3 · Nächster Track in Deck B", "Lade den nächsten Song in Deck B. Tipp: In der Sammlung zeigt ✨ Vorschläge Tracks mit passendem Tempo und grüner (harmonischer) Tonart.", { lanes[1] },
+            done = { Dj.decks[1].loaded() }, action = "Deck B laden" to "loadB"),
+        LStep("🔗 4 · SYNC", "Tippe SYNC bei Deck B: Tempo und Takt werden automatisch angeglichen – die Beats laufen gleich.", { side[1][2] },
+            done = { Dj.decks[1].sync }),
+        LStep("🎚 5 · Crossfader nach links", "Bevor B startet: Crossfader ganz nach links (nur A ist zu hören). So kannst du B vorbereiten, ohne dass es jemand hört.", { xfader },
+            done = { Dj.xfade < 0.15f }),
+        LStep("▶ 6 · B starten", "Starte Deck B – am besten auf der Eins. Dank SYNC läuft es im Takt mit A. Mit 🎧 könntest du es im Kopfhörer vorhören.", { side[1][0] },
+            done = { Dj.decks[1].playing }),
+        LStep("〰 7 · Bass raus bei B", "Zwei Bässe gleichzeitig klingen matschig. Wähle oben DECK B (Umschalter) und dreh LOW ganz runter (Regler nach unten ziehen).", { knobs[2] },
+            done = { Dj.decks[1].lo < 0.15f }),
+        LStep("↔ 8 · Überblenden", "Schieb den Crossfader langsam zur Mitte und dann nach rechts – über 8 bis 16 Takte. B wird lauter, A leiser.", { xfader },
+            done = { Dj.xfade > 0.85f }),
+        LStep("〰 9 · Bass tauschen", "Profi-Trick: auf einer Eins LOW von B wieder hoch (Mitte) – jetzt trägt B den Bass. Dann kannst du A stoppen. Fertig ist der Übergang!", { knobs[2] },
+            done = { Dj.decks[1].lo > 0.42f }),
+        LStep("🎛 10 · Stems", "Tippe unten auf den Reiter STEMS. Damit nimmst du Vocals, Melodie, Bass oder Drums einzelner Tracks heraus – live.", { tabModeR[5] },
+            done = { padMode == 5 }),
+        LStep("🎤 11 · Acapella", "Tippe bei einem Deck ACAPELLA: nur noch der Gesang. Nochmal tippen = alles wieder an. (Mit 🧠 KI-Stems trennt es am saubersten.)", { union(pads, padCount) },
+            done = { Dj.decks.any { d -> d.stemGain[0] > 0.9f && d.stemGain[1] < 0.05f && d.stemGain[2] < 0.05f && d.stemGain[3] < 0.05f } }),
+        LStep("⏭ 12 · Zum Drop", "Über der Übersicht siehst du die Song-Teile (Intro, Build-up, DROP …). Tippe ⏭ DROP in der Wellenform – der Track springt im Takt zum nächsten Drop.", { if (!dropHit[1].isEmpty) dropHit[1] else if (!dropHit[0].isEmpty) dropHit[0] else lanes[1] }),
+        LStep("🎭 13 · Mashup", "Zum Schluss: Der Mashup-Assistent legt den Gesang eines Decks über den Beat des anderen – Tonart, Tempo und Einsatz macht er selbst.", action = "Mashup-Assistent öffnen" to "mashup"),
+        LStep("🎉 Geschafft!", "Du kannst jetzt mixen: laden, SYNC, EQ-Übergang, Crossfader, Stems, Drops und Mashups. Für den Auftritt: Menü → DJ → GIG-MODUS.")
+    ) }
+
+    private fun union(rs: Array<RectF>, n: Int): RectF? {
+        val u = RectF(); var any = false
+        for (i in 0 until n) { val r = rs[i]; if (r.width() > 0f) { if (!any) u.set(r) else u.union(r); any = true } }
+        return if (any) u else null
+    }
+
+    fun startLesson() {
+        lesson = 0
+        lSteps = djLesson
+        enter(0)
+        invalidate()
+    }
+
+    private fun enter(i: Int) {
+        lesson = i.coerceIn(0, lSteps.size - 1)
+        lDoneAt = 0L
+        lEnter = SystemClock.uptimeMillis()
+        try { lSteps[lesson].setup?.invoke() } catch (ignored: Throwable) {}
+    }
+
+    private fun drawLesson(c: Canvas) {
+        val st = lSteps.getOrNull(lesson) ?: return
+        val now = SystemClock.uptimeMillis()
+        val acc = skin.accent
+        val ok = Color.rgb(80, 220, 120)
+        val w = width.toFloat(); val h = height.toFloat()
+        val tgt = try { st.target()?.let { if (it.width() > 0f) RectF(it).apply { inset(-dp(5f), -dp(5f)) } else null } } catch (e: Throwable) { null }
+        val d = st.done
+        if (d != null && lDoneAt == 0L && (try { d() } catch (e: Throwable) { false })) {
+            lDoneAt = now
+            haptic()
+            val cx = tgt?.centerX() ?: w / 2; val cy = tgt?.centerY() ?: h / 2
+            val rnd = java.util.Random()
+            repeat(50) { val a = rnd.nextFloat() * 6.283f; val v = dp(80f + rnd.nextFloat() * 220f); sparks.add(Spark(cx, cy, kotlin.math.cos(a) * v, kotlin.math.sin(a) * v, 0.6f + rnd.nextFloat() * 0.6f, if (rnd.nextBoolean()) ok else acc)) }
+        }
+        if (lDoneAt > 0L && now - lDoneAt > 1100L) {
+            if (lesson < lSteps.size - 1) enter(lesson + 1)
+            return
+        }
+        fill.shader = null
+        fill.color = Color.argb(110, 0, 0, 0)
+        if (tgt == null) c.drawRect(0f, 0f, w, h, fill) else {
+            c.drawRect(0f, 0f, w, tgt.top, fill); c.drawRect(0f, tgt.bottom, w, h, fill)
+            c.drawRect(0f, tgt.top, tgt.left, tgt.bottom, fill); c.drawRect(tgt.right, tgt.top, w, tgt.bottom, fill)
+            val pulse = 0.5f + 0.5f * kotlin.math.sin(now / 160f)
+            stroke.strokeWidth = dp(2.5f + 2f * pulse)
+            stroke.color = if (lDoneAt > 0L) ok else acc
+            c.drawRoundRect(tgt, dp(10f), dp(10f), stroke)
+            if (lDoneAt == 0L && d != null) {
+                // tippender Finger
+                val ph = (now % 900L) / 900f
+                stroke.strokeWidth = dp(2f); stroke.color = alpha(Color.WHITE, (1f - ph) * 0.8f)
+                c.drawCircle(tgt.centerX(), tgt.centerY(), dp(8f) + ph * dp(22f), stroke)
+                text.textAlign = Paint.Align.CENTER; text.textSize = dp(26f); text.color = Color.WHITE
+                c.drawText("☝", tgt.centerX() + dp(7f), tgt.centerY() + dp(28f) + (if (ph < 0.25f) dp(4f) * ph / 0.25f else dp(4f) * (1f - (ph - 0.25f) / 0.75f)), text)
+            }
+        }
+        // Funken
+        val iter = sparks.iterator()
+        while (iter.hasNext()) {
+            val p = iter.next()
+            p.life -= 0.016f
+            if (p.life <= 0f) { iter.remove(); continue }
+            p.x += p.vx * 0.016f; p.y += p.vy * 0.016f; p.vy += dp(300f) * 0.016f
+            fill.color = alpha(p.col, p.life.coerceIn(0f, 1f))
+            c.drawCircle(p.x, p.y, dp(3f), fill)
+        }
+        // Karte
+        val m = dp(12f)
+        text.textAlign = Paint.Align.LEFT
+        text.textSize = dp(13f)
+        val maxW = w - 2 * m - dp(28f)
+        val lines = ArrayList<String>()
+        var line = ""
+        for (wd in st.text.split(' ')) { val t = if (line.isEmpty()) wd else "$line $wd"; if (text.measureText(t) > maxW && line.isNotEmpty()) { lines.add(line); line = wd } else line = t }
+        lines.add(line)
+        val cardH = dp(60f) + lines.size * dp(18f) + dp(54f) + (if (st.action != null) dp(46f) else 0f)
+        val top = if (tgt == null) (h - cardH) / 2f else if (tgt.centerY() > h * 0.5f) insetTop + m else h - insetBottom - m - cardH
+        lCard.set(m, top, w - m, top + cardH)
+        fill.color = Color.rgb(22, 23, 30)
+        c.drawRoundRect(lCard, dp(16f), dp(16f), fill)
+        stroke.strokeWidth = dp(1.5f); stroke.color = if (lDoneAt > 0L) ok else acc
+        c.drawRoundRect(lCard, dp(16f), dp(16f), stroke)
+        val pw = lCard.width() - dp(32f)
+        fill.color = Color.argb(50, 255, 255, 255)
+        c.drawRect(lCard.left + dp(16f), lCard.top + dp(10f), lCard.left + dp(16f) + pw, lCard.top + dp(13f), fill)
+        fill.color = acc
+        c.drawRect(lCard.left + dp(16f), lCard.top + dp(10f), lCard.left + dp(16f) + pw * (lesson + (if (lDoneAt > 0L) 1 else 0)) / max(1, lSteps.size - 1).toFloat(), lCard.top + dp(13f), fill)
+        text.textSize = dp(16f); text.color = if (lDoneAt > 0L) ok else Color.WHITE
+        c.drawText((if (lDoneAt > 0L) "✓ " else "") + st.title, lCard.left + dp(16f), lCard.top + dp(36f), text)
+        lEnd.set(lCard.right - dp(38f), lCard.top + dp(16f), lCard.right - dp(10f), lCard.top + dp(44f))
+        text.textAlign = Paint.Align.CENTER; text.textSize = dp(16f); text.color = alpha(Color.WHITE, 0.7f)
+        c.drawText("✕", lEnd.centerX(), lEnd.centerY() + dp(6f), text)
+        text.textAlign = Paint.Align.LEFT; text.textSize = dp(13f); text.color = alpha(Color.WHITE, 0.9f)
+        var y = lCard.top + dp(58f)
+        for (ln in lines) { c.drawText(ln, lCard.left + dp(16f), y, text); y += dp(18f) }
+        lAct.setEmpty()
+        st.action?.let { (label, _) ->
+            lAct.set(lCard.left + dp(16f), y, lCard.right - dp(16f), y + dp(38f))
+            fill.color = alpha(acc, 0.22f); c.drawRoundRect(lAct, dp(10f), dp(10f), fill)
+            stroke.strokeWidth = dp(1.2f); stroke.color = acc; c.drawRoundRect(lAct, dp(10f), dp(10f), stroke)
+            text.textAlign = Paint.Align.CENTER; text.color = Color.WHITE; text.textSize = dp(14f)
+            c.drawText("▶ $label", lAct.centerX(), lAct.centerY() + dp(5f), text)
+        }
+        val bh = dp(40f); val by = lCard.bottom - bh - dp(12f); val bw = (lCard.width() - dp(40f)) / 2f
+        lPrev.set(lCard.left + dp(16f), by, lCard.left + dp(16f) + bw, by + bh)
+        lNext.set(lPrev.right + dp(8f), by, lCard.right - dp(16f), by + bh)
+        val last = lesson == lSteps.size - 1
+        val waiting = d != null && lDoneAt == 0L
+        for ((r, lab, on) in arrayOf(Triple(lPrev, "◀ Zurück", false), Triple(lNext, if (last) "Fertig ✓" else if (waiting) "Überspringen ▷" else "Weiter ▶", !waiting))) {
+            if (r === lPrev && lesson == 0) continue
+            fill.color = if (on) acc else Color.rgb(44, 46, 56)
+            c.drawRoundRect(r, dp(10f), dp(10f), fill)
+            text.textAlign = Paint.Align.CENTER; text.textSize = dp(14f); text.color = if (on) Color.BLACK else Color.WHITE
+            c.drawText(lab, r.centerX(), r.centerY() + dp(5f), text)
+        }
+        text.textAlign = Paint.Align.CENTER
+    }
+
+    /** true = Berührung gehörte zur Lektions-Karte. */
+    private fun lessonTouch(e: MotionEvent): Boolean {
+        val i = e.actionIndex
+        val x = e.getX(i); val y = e.getY(i)
+        if (!lCard.contains(x, y)) return false
+        val down = e.actionMasked == MotionEvent.ACTION_DOWN || e.actionMasked == MotionEvent.ACTION_POINTER_DOWN
+        if (!down) return true
+        haptic()
+        val st = lSteps.getOrNull(lesson)
+        when {
+            lEnd.contains(x, y) -> lesson = -1
+            !lAct.isEmpty && lAct.contains(x, y) -> st?.action?.second?.let { id ->
+                when (id) { "loadA" -> onLoad?.invoke(0); "loadB" -> onLoad?.invoke(1); else -> onLessonAction?.invoke(id) }
+            }
+            lNext.contains(x, y) -> if (lesson >= lSteps.size - 1) { lesson = -1; onLessonDone?.invoke() } else enter(lesson + 1)
+            lPrev.contains(x, y) && lesson > 0 -> enter(lesson - 1)
+        }
+        invalidate()
+        return true
     }
 
     private fun drawBody(c: Canvas) {
@@ -2149,6 +2335,7 @@ class DjView(context: Context) : View(context) {
             editorTouch(e)
             return true
         }
+        if (lesson >= 0 && lessonTouch(e)) return true
         when (e.actionMasked) {
             MotionEvent.ACTION_DOWN, MotionEvent.ACTION_POINTER_DOWN -> {
                 val i = e.actionIndex

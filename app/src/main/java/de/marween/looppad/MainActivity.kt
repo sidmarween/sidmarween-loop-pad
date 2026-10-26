@@ -243,9 +243,14 @@ class MainActivity : Activity() {
         dj.onPadsMode = { switchMode(false) }
         dj.onHint = { hint(it) }
         dj.onAiStems = { k -> showAiStems(k) }
+        dj.onLessonAction = { id -> if (id == "mashup") showMashup() }
+        dj.onLessonDone = { getSharedPreferences("marvpad", MODE_PRIVATE).edit().putBoolean("lessonDone${pads.lessonList().size}", true).apply(); hint("🎓 DJ-Lektion geschafft!") }
         AiStems.auto = prefs.getBoolean("aiAuto", true)
         Engine.autoTuneSpeed = prefs.getFloat("atSpeed", 0.25f)
         Engine.micOffsetMs = prefs.getFloat("micOffset", 0f)
+        InstState.liveAmt = prefs.getFloat("liveAmt", 0f)
+        InstState.liveFills = prefs.getBoolean("liveFills", true)
+        InstState.livePhrase = prefs.getInt("livePhrase", 8)
         Engine.autoTuneMix = prefs.getFloat("atMix", 1f)
         Dj.onDeckLoaded = { d -> if (AiStems.auto) AiStems.request(applicationContext, d) }
         dj.onSkinMenu = { showDesigns() }
@@ -1167,6 +1172,8 @@ class MainActivity : Activity() {
                 actions.add { splitStems(p) }
                 labels.add("🪄 Ein-Tipp-Remix: aus dem Song ein neues Arrangement bauen")
                 actions.add { oneTapRemix(p) }
+                labels.add("🔍 Besten Loop finden: die Stelle, die sich am saubersten wiederholt")
+                actions.add { findBestLoop(p) }
                 labels.add("✂ Slicer: an den Schlägen in 16 Stücke auf 16 Pads zerlegen")
                 actions.add { openSlicerFor(p) }
             }
@@ -2389,6 +2396,15 @@ class MainActivity : Activity() {
                 add("👻 Ghost-Producer: Genre-Patterns als Live-Remix") { openGhost() }
                 add("🪄 Ein-Tipp-Remix: aus einem Song ein neues Arrangement") { if (djMode) switchMode(false); pickRemixPad() }
                 add(if (Engine.scOn) "〽 Sidechain-Pumpen: AN" else "〽 Sidechain-Pumpen (Kick drückt Bass & Flächen)") { showSidechain() }
+                add((if (InstState.liveAmt > 0f) "🌱 Lebendige Patterns: " + LIVE_NAMES[liveIdx()] else "🌱 Lebendige Patterns (Variationen & Fills)") + " …") { showLivePatterns() }
+                add("🔍 Besten Loop finden (Song auf einem Pad)") {
+                    val list = (0 until PadView.VISIBLE_PADS).filter { Engine.hasLoop(it) && !Engine.isOneShot(it) }
+                    when {
+                        list.isEmpty() -> toast("Erst einen Song auf ein Pad laden")
+                        list.size == 1 -> findBestLoop(list[0])
+                        else -> ui().setTitle("🔍 In welchem Pad suchen?").setItems(list.map { "Pad ${it + 1}" + (Engine.padName(it)?.let { n -> " · $n" } ?: "") }.toTypedArray()) { _, w -> findBestLoop(list[w]) }.show()
+                    }
+                }
                 sec("Aufnahme & Wiedergabe")
                 group(1)
             }
@@ -2512,11 +2528,19 @@ class MainActivity : Activity() {
 
     /** Lektionen auswählen. */
     private fun showTutorials() {
-        if (djMode) switchMode(false)
         val prefs = getSharedPreferences("marvpad", MODE_PRIVATE)
-        val ls = pads.lessonList()
+        val ls = pads.lessonList() + listOf("🎧 DJ-Grundlagen" to "Zwei Tracks mixen: SYNC, EQ-Übergang, Crossfader, Stems, ⏭ DROP, Mashup")
         val labels = ls.mapIndexed { i, (n, d) -> (if (prefs.getBoolean("lessonDone$i", false)) "✅ " else "") + n + "\n   " + d }.toTypedArray()
-        ui().setTitle("🎓 Lektionen").setItems(labels) { _, w -> pads.startLesson(w) }
+        val djIdx = ls.size - 1
+        ui().setTitle("🎓 Lektionen").setItems(labels) { _, w ->
+            if (w == djIdx) {
+                if (!djMode) switchMode(true)
+                dj.post { dj.startLesson() }
+            } else {
+                if (djMode) switchMode(false)
+                pads.post { pads.startLesson(w) }
+            }
+        }
             .setNeutralButton("Kurze Tour (1 min)") { _, _ -> pads.startTour() }
             .setNegativeButton("Schließen", null).show()
     }
@@ -4761,6 +4785,83 @@ class MainActivity : Activity() {
         if (beat && !Engine.seqPlaying) Engine.seqPlay()
         pads.invalidate()
         hint("✋ ${list.size} Klänge auf den Pads" + if (beat) " · Grundbeat läuft im Sequenzer" else "")
+    }
+
+    // ================================================================ Lebendige Patterns
+
+    private val LIVE_NAMES = arrayOf("Aus", "Dezent", "Mittel", "Wild")
+    private val LIVE_AMT = floatArrayOf(0f, 0.3f, 0.6f, 1f)
+    private fun liveIdx(): Int = LIVE_AMT.indices.minByOrNull { abs(LIVE_AMT[it] - InstState.liveAmt) } ?: 0
+
+    private fun showLivePatterns() {
+        val prefs = getSharedPreferences("marvpad", MODE_PRIVATE)
+        val (box, scroll) = dialogBox()
+        note(box, "Beim Abspielen verändern sich Drums, Bass und Synths leicht: Ghost-Notes auf der Hi-Hat, lebendige Lautstärke, ab und zu ein Nachbarton oder Oktavsprung. Deine Patterns selbst bleiben unverändert.")
+        val rg = android.widget.RadioGroup(this)
+        LIVE_NAMES.forEachIndexed { i, n -> rg.addView(android.widget.RadioButton(this).apply { id = 7600 + i; text = n; setTextColor(Color.WHITE) }) }
+        rg.check(7600 + liveIdx())
+        rg.setOnCheckedChangeListener { _, id -> InstState.liveAmt = LIVE_AMT[id - 7600]; prefs.edit().putFloat("liveAmt", InstState.liveAmt).apply() }
+        box.addView(rg)
+        check(box, "🥁 Fills vor jeder Phrase (Snare-Wirbel, Toms) und Crash auf der Eins danach", InstState.liveFills) {
+            InstState.liveFills = it; prefs.edit().putBoolean("liveFills", it).apply()
+        }
+        note(box, "Phrase (alle wie viele Takte ein Fill):", Color.WHITE)
+        val pg = android.widget.RadioGroup(this).apply { orientation = android.widget.RadioGroup.HORIZONTAL }
+        for ((i, b) in intArrayOf(4, 8, 16).withIndex()) pg.addView(android.widget.RadioButton(this).apply { id = 7700 + i; text = "$b Takte"; setTextColor(Color.WHITE) })
+        pg.check(7700 + intArrayOf(4, 8, 16).indexOf(InstState.livePhrase).coerceAtLeast(1))
+        pg.setOnCheckedChangeListener { _, id -> InstState.livePhrase = intArrayOf(4, 8, 16)[id - 7700]; prefs.edit().putInt("livePhrase", InstState.livePhrase).apply() }
+        box.addView(pg)
+        ui().setTitle("🌱 Lebendige Patterns").setView(scroll).setPositiveButton("Fertig", null).show()
+    }
+
+    // ================================================================ Bester-Loop-Finder
+
+    private fun findBestLoop(p: Int) {
+        val bar = Engine.masterFrames().toInt()
+        val len = Engine.padDataLen(p)
+        if (bar <= 0) { toast("Erst ein Tempo festlegen (Song mit Auto-Beatmatch laden)"); return }
+        if (len < bar * 3) { toast("Zu kurz – mindestens 3 Takte"); return }
+        val opts = intArrayOf(1, 2, 4, 8).filter { len >= bar * (it + 1) }
+        ui().setTitle("🔍 Besten Loop finden – Länge").setItems(opts.map { "$it Takt" + (if (it > 1) "e" else "") }.toTypedArray()) { _, w ->
+            val bars = opts[w]
+            hint("🔍 Suche …")
+            Thread {
+                val data = Engine.loopData(p) ?: return@Thread
+                val res = LoopFinder.find(data, Engine.sampleRate, bar, bars, 6)
+                runOnUiThread {
+                    if (res.isEmpty()) { toast("Nichts gefunden"); return@runOnUiThread }
+                    val labels = res.mapIndexed { i, c ->
+                        String.format(Locale.GERMANY, "%s Takt %d–%d · %d %%   (Wiederholung %d · Naht %d · Fülle %d)",
+                            if (i == 0) "⭐" else "  ", c.startBar + 1, c.startBar + bars, (min(1f, c.score) * 100).toInt(), (c.rep * 100).toInt(), (c.seam * 100).toInt(), (c.fill * 100).toInt())
+                    }.toTypedArray()
+                    var prev = -1
+                    ui().setTitle("🔍 Beste $bars-Takt-Loops in Pad ${p + 1}").setItems(labels) { _, k ->
+                        val c = res[k]
+                        val seg = data.copyOfRange(c.startBar * bar, min(data.size, (c.startBar + bars) * bar))
+                        ui().setTitle("Takt ${c.startBar + 1}–${c.startBar + bars}").setItems(arrayOf("▶ Vorhören", "▦ Auf ein freies Pad legen", "↺ Pad ${p + 1} durch diesen Loop ersetzen")) { _, a ->
+                            when (a) {
+                                0 -> { if (prev >= 0) Engine.noteOff(prev); prev = Engine.preview(seg) }
+                                1 -> {
+                                    val q = (0 until PadView.VISIBLE_PADS).firstOrNull { !Engine.hasLoop(it) }
+                                    if (q == null) toast("Kein freies Pad") else {
+                                        Engine.padOneShot[q] = false
+                                        Engine.importLoop(q, seg)
+                                        Engine.setPadName(q, "🔁 T${c.startBar + 1}–${c.startBar + bars}")
+                                        hint("🔁 Loop auf Pad ${q + 1} – antippen startet ihn im Takt")
+                                    }
+                                }
+                                else -> {
+                                    val name = Engine.padName(p)
+                                    Engine.importLoop(p, seg)
+                                    Engine.setPadName(p, "🔁 " + (name?.take(10) ?: "T${c.startBar + 1}"))
+                                    hint("Pad ${p + 1}: jetzt der $bars-Takt-Loop · ↶ UNDO holt den Song zurück")
+                                }
+                            }
+                        }.setOnDismissListener { if (prev >= 0) { Engine.noteOff(prev); prev = -1 } }.show()
+                    }.setNegativeButton("Schließen", null).show()
+                }
+            }.start()
+        }.show()
     }
 
     // ================================================================ Ein-Tipp-Remix

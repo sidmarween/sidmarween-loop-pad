@@ -66,6 +66,14 @@ object InstState {
 
     fun acidHasNotes() = (0 until acidLen).any { acidGate[it] }
 
+    // ---------------------------------------------------------------- Lebendige Patterns
+    /** 0 = aus … 1 = wild: kleine Variationen beim Abspielen (Ghost-Notes, Lautstärke, Töne), Pattern bleibt unverändert. */
+    @Volatile var liveAmt = 0f
+    /** Fill im letzten Schlag vor jeder 8-Takt-Phrase und Crash auf der Eins danach. */
+    @Volatile var liveFills = true
+    /** Phrasenlänge in Takten für Fills. */
+    @Volatile var livePhrase = 8
+
     // ---------------------------------------------------------------- DRUM (909-artig)
     const val DV = 11
     val drumNames = arrayOf("BD", "SD", "LT", "MT", "HT", "RS", "CP", "CH", "OH", "CR", "RD")
