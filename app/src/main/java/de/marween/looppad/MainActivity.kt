@@ -176,7 +176,7 @@ class MainActivity : Activity() {
         pads.onRollIo = { p -> showRollIo(p) }
         pads.onInstMidi = { k -> showInstMidi(k) }
         pads.onInstPresets = { k -> showInstPresets(k) }
-        pads.onInstKits = { k -> if (k == 1) showAcidSounds() else showDrumKits() }
+        pads.onInstKits = { k -> if (k == 1) showAcidSounds() else showSoundKits() }
         pads.onInstScale = { showScaleMenu() }
         pads.onInstChords = { showChordProgression() }
         pads.onSidechain = { showSidechain() }
@@ -1881,7 +1881,7 @@ class MainActivity : Activity() {
                         hint("🎲 Neues Zufalls-Pattern – nochmal für ein anderes")
                     }
                     w == items.size - 1 -> showInstMidi(k)
-                    w == items.size - 2 -> if (isAcid) showAcidSounds() else showDrumKits()
+                    w == items.size - 2 -> if (isAcid) showAcidSounds() else showSoundKits()
                     else -> {
                         val g = genres[w - 1]
                         if (isAcid) {
@@ -1917,7 +1917,7 @@ class MainActivity : Activity() {
     }
 
     /** Klang-Kits für den Drumcomputer (Pattern bleibt). */
-    private fun showDrumKits() {
+    private fun showSoundKits() {
         val kits = InstPresets.KITS
         val labels = kits.map { "${it.genre} · ${it.name}" + (if (it.voices.isEmpty()) "" else "  (" + it.voices.values.map { v -> v.model }.distinct().take(4).joinToString(", ") + ")") }
         ui().setTitle("🎛 Klang-Kits – Pattern bleibt")
