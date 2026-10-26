@@ -1,0 +1,59 @@
+package de.marween.looppad
+
+import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.view.View
+import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
+import org.robolectric.annotation.GraphicsMode
+import java.io.File
+
+/** Bildschirmfotos aller Designs (für die Sichtprüfung auf überlappende Schrift). Ablage: build/shots. */
+@RunWith(RobolectricTestRunner::class)
+@GraphicsMode(GraphicsMode.Mode.NATIVE)
+@Config(sdk = [34])
+class ShotTest {
+    private val ctx: android.content.Context get() = org.robolectric.RuntimeEnvironment.getApplication()
+    private val dir = File("build/shots").apply { mkdirs() }
+
+    private fun shot(v: View, w: Int, h: Int, name: String, cropH: Int = h) {
+        v.measure(View.MeasureSpec.makeMeasureSpec(w, View.MeasureSpec.EXACTLY), View.MeasureSpec.makeMeasureSpec(h, View.MeasureSpec.EXACTLY))
+        v.layout(0, 0, w, h)
+        val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+        try { v.draw(Canvas(bmp)) } catch (t: Throwable) { println("FEHLER $name: $t") }
+        val out = Bitmap.createBitmap(bmp, 0, 0, w, cropH)
+        File(dir, "$name.png").outputStream().use { out.compress(Bitmap.CompressFormat.PNG, 100, it) }
+    }
+
+    private fun pads(tag: String) {
+        val dm = ctx.resources.displayMetrics
+        val w = dm.widthPixels; val h = dm.heightPixels
+        Engine.setBpm(128f)
+        val pv = PadView(ctx)
+        for (th in PadView.DESIGN_NAMES.indices) { pv.theme = th; shot(pv, w, h, "pad_${tag}_%02d".format(th), h / 3) }
+        Engine.metronome = true
+        pv.theme = 0; shot(pv, w, h, "pad_${tag}_metro", h / 3)
+        Engine.metronome = false
+        shot(pv, h, w, "pad_${tag}_quer", w / 2)
+    }
+
+    private fun dj(tag: String) {
+        val dm = ctx.resources.displayMetrics
+        val w = dm.widthPixels; val h = dm.heightPixels
+        val rate = 44100; val len = rate * 30
+        val data = ShortArray(len * 2) { ((Math.sin(it * 0.01) * 8000) * (if ((it / 2) % (rate / 2) < 3000) 3 else 1)).toInt().coerceIn(-32000, 32000).toShort() }
+        for (k in 0..1) {
+            val d = Dj.decks[k]
+            Dj.load(d, Dj.Track(data, 2, len, rate), if (k == 0) "Ein ziemlich langer Songtitel – Extended Club Mix" else "Track B", if (k == 0) 128f else 174.5f)
+            d.key = 7
+        }
+        val dv = DjView(ctx)
+        for (s in DjView.SKINS.indices) { dv.skinIdx = s; shot(dv, w, h, "dj_${tag}_%02d".format(s), h / 2) }
+        dv.skinIdx = 15; shot(dv, h, w, "dj_${tag}_quer")
+    }
+
+    @Test @Config(qualifiers = "w360dp-h800dp-xxhdpi") fun normal() { pads("n"); dj("n") }
+    @Test @Config(qualifiers = "w320dp-h640dp-xhdpi") fun schmal() { pads("s"); dj("s") }
+}

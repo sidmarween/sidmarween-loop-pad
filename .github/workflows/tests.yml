@@ -40,3 +40,4 @@ jobs:
           PY
           gh release view ai-ci-log >/dev/null 2>&1 || gh release create ai-ci-log --title "Prüfprotokolle" --notes "Automatische Prüfungen" --prerelease
           gh release upload ai-ci-log tests.txt --clobber
+          if [ -d app/build/shots ]; then (cd app/build/shots && zip -q -r ../../../shots.zip .); gh release upload ai-ci-log shots.zip --clobber; fi
