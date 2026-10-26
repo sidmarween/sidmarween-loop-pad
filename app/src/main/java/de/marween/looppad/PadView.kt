@@ -878,6 +878,7 @@ class PadView(context: Context) : View(context) {
         drawInfo(canvas)
         message?.let { drawMessage(canvas, it) }
         if (tourStep >= 0) drawTour(canvas)
+        if (lesson != null) drawLesson(canvas, dt)
 
         postInvalidateOnAnimation()
     }
@@ -4103,6 +4104,7 @@ class PadView(context: Context) : View(context) {
 
     private fun touchInner(e: MotionEvent): Boolean {
         if (tourStep >= 0) { tourTouch(e); return true }
+        if (lesson != null && lessonTouch(e)) return true
         if (infoMode && message == null && (e.actionMasked == MotionEvent.ACTION_DOWN || e.actionMasked == MotionEvent.ACTION_POINTER_DOWN)) {
             val ix = e.getX(e.actionIndex)
             val iy = e.getY(e.actionIndex)
@@ -8762,6 +8764,314 @@ class PadView(context: Context) : View(context) {
         invalidate()
     }
 
+    // ================================================================ Lektionen (geführtes Lernen mit Beispielen)
+
+    /** Ein Schritt: Text, markierter Bereich, Fingeranimation, Bedingung (geschafft?), Vorbereitung, Zusatzknopf. */
+    private class LStep(
+        val title: String,
+        val text: String,
+        val target: () -> RectF? = { null },
+        val gesture: Int = G_NONE,
+        val done: (() -> Boolean)? = null,
+        val setup: (() -> Unit)? = null,
+        val action: Pair<String, String>? = null
+    )
+
+    private class Lesson(val name: String, val desc: String, val steps: () -> List<LStep>)
+
+    /** Lektionen-Aktionen, die die Activity ausführt (Drumkit laden, Dialoge öffnen …). */
+    var onLessonAction: ((String) -> Unit)? = null
+    var onLessonDone: ((Int) -> Unit)? = null
+    private var lesson: Lesson? = null
+    private var lessonIdx = -1
+    private var lSteps: List<LStep> = emptyList()
+    private var lStep = 0
+    private var lDoneAt = 0f
+    private var lEnter = 0f
+    private var lBase = 0
+    private val lCard = RectF()
+    private val lNext = RectF()
+    private val lPrev = RectF()
+    private val lEnd = RectF()
+    private val lAct = RectF()
+
+    private fun firstEmptyPad(): Int = (0 until VISIBLE_PADS).firstOrNull { !Engine.hasLoop(it) } ?: 0
+    private fun loopCount(): Int = (0 until VISIBLE_PADS).count { Engine.hasLoop(it) }
+
+    private val lessons: List<Lesson> by lazy { listOf(
+        Lesson("🎵 Dein erster Song", "Beat, Bass, Akkorde, Melodie, eigene Aufnahme, Effekte, Ablauf – Schritt für Schritt (ca. 10 min)") { listOf(
+            LStep("🎵 Dein erster Song", "In etwa 10 Minuten baust du einen kompletten Song: Beat → Bass → Akkorde → Melodie → eigene Aufnahme → Effekte → Ablauf → Aufnahme. Der Finger ☝ zeigt dir, wo du tippen musst. Ein grüner Haken heißt: geschafft – dann geht es von selbst weiter."),
+            LStep("⏱ 1 · Das Tempo", "Jeder Song hat ein Tempo. Ich stelle 122 BPM ein – typisch für House. Später änderst du es rechts im Display (Tap-Tempo, Metronom).", { displayRect }, G_TAP,
+                setup = { Engine.setBpm(122f) }),
+            LStep("🎹 2 · Zu den Instrumenten", "Tippe auf den Reiter 🎹 INSTRUMENTE (rechts neben den Effekten).", { modeRects[1] }, G_TAP, done = { xyMode != 0 }),
+            LStep("🥁 3 · Der Beat", "Ich lege einen House-Beat in den Drumcomputer (909): Kick auf jedem Viertel, Clap auf 2 und 4, offene Hi-Hat dazwischen. Drück jetzt ▶ zum Abspielen!", { playBtn }, G_TAP,
+                done = { Engine.seqPlaying },
+                setup = { InstState.drumApplyPreset(0); InstState.drumOn = true; InstState.drumLen = 16 }),
+            LStep("🎸 4 · Der Bass", "Hörst du ihn? Ein Acid-Bass (303) auf den Offbeats – das typische Pumpen zwischen den Kicks. Im Reiter 303 kannst du Töne, Filter und Akzente ändern.", { modeRects[1] }, G_NONE,
+                setup = {
+                    val st = InstState
+                    st.acidClear()
+                    for (k in 0 until InstState.MAX) { val b = k % 16; if (b == 2 || b == 6 || b == 10 || b == 14) { st.acidGate[k] = true; st.acidSemi[k] = if (b == 10 && k % 32 >= 16) 7 else 9; st.acidAcc[k] = b == 2 } }
+                    st.acidLen = 16; st.acidOn = true
+                }),
+            LStep("🎼 5 · Akkorde", "Jetzt Harmonie: Am – G – F – G als warme Fläche (SYNTH 2), je ein Takt. Die Tonart A-Moll ist jetzt eingestellt – alles, was du gleich spielst, passt dazu. Mehr Akkordfolgen: großer Editor → „Akkorde“.", { modeRects[1] }, G_NONE,
+                setup = {
+                    InstState.synCur = 1
+                    InstState.writeProgression(InstState.progressions[6], 9, 16, 0)
+                    InstState.synTracks[1].on = true
+                    InstState.scaleSnap = true
+                }),
+            LStep("✏ 6 · Deine Melodie", "Jetzt du! Wähle im Reiter 🎹 das Instrument SYNTH und tippe ein paar Noten in die Piano-Roll (⤢ öffnet den großen Editor). Dank Tonleiter klingt jeder Ton passend. Tipp: Menü → Mikro → „Summen → Melodie“ geht auch mit der Stimme.", { modeRects[1] }, G_TAP,
+                done = { InstState.synTracks[0].hasNotes() },
+                setup = { InstState.synCur = 0; InstState.synTracks[0].on = true }),
+            LStep("🎙 7 · Eigene Aufnahme", "Jetzt wird es persönlich: HALTE ein leeres Pad gedrückt und klatsche, singe oder klopfe etwas – beim Loslassen läuft es als Loop im Takt mit.", { padRects[firstEmptyPad()] }, G_HOLD,
+                done = { loopCount() > lBase },
+                setup = { lBase = loopCount() }),
+            LStep("✨ 8 · Effekte", "Tippe auf den Reiter ✨ EFFEKTE und lege dann den Finger auf die Effekt-Fläche. Bewege ihn – oben/unten und links/rechts steuern den Effekt. Ideal für einen Filter-Sweep vor dem Drop!", { if (xyMode == 0) xyRect else modeRects[0] }, G_DRAG,
+                done = { xyMode == 0 && xyPointer >= 0 }),
+            LStep("🎬 9 · Der Ablauf", "Ein Song lebt von Abwechslung: Intro (nur Drums) → Aufbau → Drop (alles) → Break. Mit SZENE speicherst du solche Kombinationen und wechselst sie im Takt. Einen festen Ablauf baust du in der Song-Matrix (Menü → Studio). Probier: Pads stumm schalten und wieder starten – genau so entsteht Spannung.", { union(funcRects) }, G_TAP),
+            LStep("⏺ 10 · Aufnehmen", "Tippe REC (oben): Alles, was du jetzt spielst, wird als Set aufgenommen. Nochmal tippen = Stopp. Danach kannst du es unter Menü → Projekt exportieren oder teilen.", { setRecBtn }, G_TAP,
+                done = { SetRecorder.recording }),
+            LStep("🎉 Geschafft!", "Das ist dein erster eigener Song – mit Beat, Bass, Akkorden, Melodie, eigener Aufnahme und Effekten. Speichere ihn im Menü (Projekt → speichern). Weiter geht es mit den anderen Lektionen!")
+        ) },
+        Lesson("🔁 Die Loop Station", "4 Spuren, ein großer Knopf: aufnehmen, Overdub, Strophe & Refrain – nur mit dem Mikro") { listOf(
+            LStep("🔁 Die Loop Station", "Sie funktioniert wie ein Looper-Pedal: 4 Spuren, jede mit einem großen Knopf. Du baust einen Song Schicht für Schicht – nur mit Stimme, Klatschen oder Instrument. Tipp: Kopfhörer auf!"),
+            LStep("1 · Das Fenster", "Ich öffne die Loop Station. Jede Farbe ist eine Spur. Darunter: großer Knopf (Aufnahme/Overdub), ▶/■, Löschen und ein Fader für die Lautstärke.", { if (station.isOpen) station.boxRect() else null }, G_NONE,
+                setup = { if (!station.isOpen) openStation() }),
+            LStep("● 2 · Erste Spur aufnehmen", "Tippe den großen Knopf von Spur 1 und klatsche einen einfachen Rhythmus – zum Beispiel: Klatsch · · Klatsch · Klatsch · ·", { station.bigRect(0) }, G_TAP,
+                done = { Engine.state(LoopStationPanel.FIRST) == Engine.PadState.RECORDING }),
+            LStep("⟳ 3 · Loop schließen", "Wenn dein Rhythmus fertig ist: nochmal tippen. Der Loop schließt sich (auf ganze Takte gerundet) und läuft ab sofort im Kreis.", { station.bigRect(0) }, G_TAP,
+                done = { Engine.state(LoopStationPanel.FIRST) == Engine.PadState.PLAYING }),
+            LStep("➕ 4 · Overdub", "Tippe noch einmal: OVERDUB. Alles, was du jetzt machst, kommt dazu – z. B. Fingerschnipsen auf die 2 und 4.", { station.bigRect(0) }, G_TAP,
+                done = { Engine.state(LoopStationPanel.FIRST) == Engine.PadState.OVERDUB }),
+            LStep("✓ 5 · Overdub beenden", "Fertig? Tippen beendet den Overdub. Gefällt es nicht: ↶ UNDO oben holt den Stand vorher zurück.", { station.bigRect(0) }, G_TAP,
+                done = { Engine.state(LoopStationPanel.FIRST) == Engine.PadState.PLAYING }),
+            LStep("🎤 6 · Zweite Spur", "Spur 2: sing eine Basslinie dazu – z. B. „dum · dum dum · “ – gleiche Technik: tippen, singen, tippen.", { station.bigRect(1) }, G_TAP,
+                done = { Engine.state(LoopStationPanel.FIRST + 1) == Engine.PadState.PLAYING }),
+            LStep("🎚 7 · Strophe & Refrain", "Jetzt arrangierst du: ■/▶ unter einer Spur stoppt/startet sie im Takt. Strophe = Spur 1 + 2, Refrain = alle Spuren. Der Fader regelt die Lautstärke, Löschen (lange halten) leert eine Spur.", { if (station.isOpen) station.boxRect() else null }, G_NONE),
+            LStep("🎉 Geschafft!", "Du kannst jetzt live loopen. Profi-Tipp: Spuren 3 und 4 für Melodie und Effekt-Geräusche – und mit REC oben das ganze Set aufnehmen.")
+        ) },
+        Lesson("🥁 Beat mit Pads & Sequenzer", "Drumkit laden, Pads spielen, Schritte setzen") { listOf(
+            LStep("🥁 Beat mit Pads", "Pads können nicht nur Loops, sondern auch einzelne Klänge (⚡ One-Shots) spielen. Daraus baust du mit dem Sequenzer einen Beat."),
+            LStep("1 · Drumkit laden", "Ich lege ein Drumkit auf die freien Pads (oder tippe den Knopf unten).", { union(padRects.copyOfRange(0, VISIBLE_PADS)) }, G_NONE,
+                done = { loopCount() >= 3 }, action = "Drumkit laden" to "kit",
+                setup = { if (loopCount() < 3) onLessonAction?.invoke("kit") }),
+            LStep("👆 2 · Spielen", "Tippe die Pads – jedes ist ein Klang (Kick, Snare, Hi-Hat …). Fest tippen = laut.", { padRects[0] }, G_TAP),
+            LStep("▦ 3 · Der Sequenzer", "Die Leiste unten ist der Sequenzer: 16 Schritte = 1 Takt. Ich setze die Kick auf 1 · 5 · 9 · 13 (jedes Viertel). Wähle ein Pad und tippe weitere Schritte an.", { seqRect }, G_TAP,
+                setup = { for (k in intArrayOf(0, 4, 8, 12)) Engine.setSeqVel(0, k, 1f) }),
+            LStep("▶ 4 · Abspielen", "Drück ▶ – der Beat läuft. Ergänze Snare (5 und 13) und Hi-Hats (jeder zweite Schritt).", { playBtn }, G_TAP, done = { Engine.seqPlaying }),
+            LStep("🎉 Geschafft!", "So entstehen Beats. Tipp: Im Menü → Mikro → „Beatbox → Drums“ beatboxt du einen Beat einfach ein.")
+        ) },
+        Lesson("🎤 Mit der Stimme produzieren", "Summen → Melodie, Beatbox → Drums, Auto-Tune, Harmonizer") { listOf(
+            LStep("🎤 Mit der Stimme", "Dein Mikro ist ein Instrument: summen wird Melodie, beatboxen wird Beat, Auto-Tune und Harmonizer machen aus deiner Stimme einen Chor. Kopfhörer auf!"),
+            LStep("🎯 1 · Einmessen", "Damit alles im Takt landet: einmal 8× zum Klick klatschen.", action = "Jetzt einmessen" to "calib"),
+            LStep("🥁 2 · Beatbox → Drums", "„Bum“ = Kick, „Ka“/„Psch“ = Snare, „Ts“ = Hi-Hat. 1 Takt reicht für den Anfang.", action = "Beatbox starten" to "beatbox"),
+            LStep("🎵 3 · Summen → Melodie", "Summe eine kurze Melodie („da da da“) – sie landet als Noten in einer Synth-Spur.", action = "Summen starten" to "hum"),
+            LStep("🎚 4 · Auto-Tune & Harmonizer", "Live auf deine Stimme: Auto-Tune zieht dich in die Tonart, der Harmonizer singt Terz und Quinte dazu.", action = "Auto-Tune öffnen" to "autotune"),
+            LStep("🎉 Geschafft!", "Alle Mikro-Werkzeuge findest du im Menü unter „🎤 Mikro“.")
+        ) }
+    ) }
+
+    /** Namen und Beschreibungen der Lektionen (für die Auswahl). */
+    fun lessonList(): List<Pair<String, String>> = lessons.map { it.name to it.desc }
+
+    fun startLesson(i: Int) {
+        val l = lessons.getOrNull(i) ?: return
+        closeFocus()
+        tourStep = -1
+        lesson = l
+        lessonIdx = i
+        lSteps = l.steps()
+        enterStep(0)
+        invalidate()
+    }
+
+    fun endLesson() {
+        lesson = null
+        invalidate()
+    }
+
+    private fun enterStep(i: Int) {
+        lStep = i.coerceIn(0, lSteps.size - 1)
+        lDoneAt = 0f
+        lEnter = time
+        try { lSteps[lStep].setup?.invoke() } catch (ignored: Throwable) {}
+    }
+
+    private fun drawLesson(canvas: Canvas, dt: Float) {
+        val st = lSteps.getOrNull(lStep) ?: return
+        val cols = overlayColors()
+        val acc = cols[2]
+        val ok = Color.rgb(80, 220, 120)
+        val w = width.toFloat()
+        val h = height.toFloat()
+        val tgt = try { st.target()?.let { if (it.width() > 0f) RectF(it).apply { inset(-dp(6f), -dp(6f)) } else null } } catch (e: Throwable) { null }
+        // geschafft?
+        val d = st.done
+        if (d != null && lDoneAt == 0f && (try { d() } catch (e: Throwable) { false })) {
+            lDoneAt = time
+            val cx = tgt?.centerX() ?: (w / 2); val cy = tgt?.centerY() ?: (h / 2)
+            burst(cx, cy, ok, 40, 260f)
+            burst(cx, cy, acc, 25, 180f)
+            performHapticFeedback(HapticFeedbackConstants.CONFIRM)
+        }
+        if (lDoneAt > 0f && time - lDoneAt > 1.1f) {
+            if (lStep < lSteps.size - 1) enterStep(lStep + 1)
+            invalidate()
+            return
+        }
+        // leicht abdunkeln, Ziel freilassen und pulsierend umrahmen
+        fillPaint.shader = null
+        fillPaint.color = Color.argb(120, 0, 0, 0)
+        if (tgt == null) canvas.drawRect(0f, 0f, w, h, fillPaint) else {
+            canvas.drawRect(0f, 0f, w, tgt.top, fillPaint)
+            canvas.drawRect(0f, tgt.bottom, w, h, fillPaint)
+            canvas.drawRect(0f, tgt.top, tgt.left, tgt.bottom, fillPaint)
+            canvas.drawRect(tgt.right, tgt.top, w, tgt.bottom, fillPaint)
+            val pulse = 0.5f + 0.5f * sin(time * 4f)
+            strokePaint.strokeWidth = dp(2.5f + pulse * 2f)
+            strokePaint.color = if (lDoneAt > 0f) ok else acc
+            canvas.drawRoundRect(tgt, dp(12f), dp(12f), strokePaint)
+            if (lDoneAt <= 0f) drawFinger(canvas, tgt, st.gesture, acc)
+        }
+        // Karte gegenüber vom Ziel
+        val m = dp(12f)
+        textPaint.textSize = dp(13.5f)
+        textPaint.textAlign = Paint.Align.LEFT
+        val maxW = w - 2 * m - dp(28f)
+        val lines = wrap(st.text, maxW)
+        val cardH = dp(64f) + lines.size * dp(19f) + dp(54f) + (if (st.action != null) dp(48f) else 0f)
+        val top = if (tgt == null) (h - cardH) / 2f else if (tgt.centerY() > h * 0.5f) insetTop + m else h - insetBottom - m - cardH
+        // sanftes Hereingleiten
+        val k = ((time - lEnter) / 0.25f).coerceIn(0f, 1f)
+        val slide = (1f - k) * dp(24f) * (if (top < h / 2) -1f else 1f)
+        lCard.set(m, top + slide, w - m, top + slide + cardH)
+        fillPaint.color = Color.rgb(22, 23, 30)
+        canvas.drawRoundRect(lCard, dp(16f), dp(16f), fillPaint)
+        strokePaint.strokeWidth = dp(1.5f); strokePaint.color = if (lDoneAt > 0f) ok else acc
+        canvas.drawRoundRect(lCard, dp(16f), dp(16f), strokePaint)
+        // Fortschritt
+        val pw = lCard.width() - dp(32f)
+        fillPaint.color = Color.argb(50, 255, 255, 255)
+        canvas.drawRoundRect(lCard.left + dp(16f), lCard.top + dp(10f), lCard.left + dp(16f) + pw, lCard.top + dp(13f), dp(2f), dp(2f), fillPaint)
+        fillPaint.color = acc
+        canvas.drawRoundRect(lCard.left + dp(16f), lCard.top + dp(10f), lCard.left + dp(16f) + pw * (lStep + if (lDoneAt > 0f) 1f else 0f) / max(1, lSteps.size - 1).toFloat().coerceAtLeast(1f), lCard.top + dp(13f), dp(2f), dp(2f), fillPaint)
+        textPaint.textSize = dp(16.5f); textPaint.color = if (lDoneAt > 0f) ok else Color.WHITE
+        canvas.drawText((if (lDoneAt > 0f) "✓ " else "") + st.title, lCard.left + dp(16f), lCard.top + dp(38f), textPaint)
+        textPaint.textSize = dp(10f); textPaint.color = alpha(Color.WHITE, 0.5f); textPaint.textAlign = Paint.Align.RIGHT
+        canvas.drawText("${lStep + 1}/${lSteps.size}", lCard.right - dp(44f), lCard.top + dp(36f), textPaint)
+        // ✕
+        lEnd.set(lCard.right - dp(38f), lCard.top + dp(18f), lCard.right - dp(10f), lCard.top + dp(46f))
+        textPaint.textAlign = Paint.Align.CENTER; textPaint.textSize = dp(16f); textPaint.color = alpha(Color.WHITE, 0.7f)
+        canvas.drawText("✕", lEnd.centerX(), lEnd.centerY() + dp(6f), textPaint)
+        textPaint.textAlign = Paint.Align.LEFT
+        textPaint.textSize = dp(13.5f); textPaint.color = alpha(Color.WHITE, 0.9f)
+        var y = lCard.top + dp(62f)
+        for (ln in lines) { canvas.drawText(ln, lCard.left + dp(16f), y, textPaint); y += dp(19f) }
+        // Aktion
+        lAct.setEmpty()
+        st.action?.let { (label, _) ->
+            lAct.set(lCard.left + dp(16f), y, lCard.right - dp(16f), y + dp(38f))
+            fillPaint.color = alpha(acc, 0.22f)
+            canvas.drawRoundRect(lAct, dp(10f), dp(10f), fillPaint)
+            strokePaint.strokeWidth = dp(1.2f); strokePaint.color = acc
+            canvas.drawRoundRect(lAct, dp(10f), dp(10f), strokePaint)
+            textPaint.textAlign = Paint.Align.CENTER; textPaint.color = Color.WHITE; textPaint.textSize = dp(14f)
+            canvas.drawText("▶ $label", lAct.centerX(), lAct.centerY() + dp(5f), textPaint)
+        }
+        // Knöpfe
+        val bh = dp(40f)
+        val by = lCard.bottom - bh - dp(12f)
+        val bw = (lCard.width() - dp(40f)) / 2f
+        lPrev.set(lCard.left + dp(16f), by, lCard.left + dp(16f) + bw, by + bh)
+        lNext.set(lPrev.right + dp(8f), by, lCard.right - dp(16f), by + bh)
+        val last = lStep == lSteps.size - 1
+        val waiting = d != null && lDoneAt == 0f
+        val nextLabel = if (last) "Fertig ✓" else if (waiting) "Überspringen ▷" else "Weiter ▶"
+        for ((r, lab, on) in arrayOf(Triple(lPrev, "◀ Zurück", false), Triple(lNext, nextLabel, !waiting))) {
+            if (r === lPrev && lStep == 0) continue
+            fillPaint.color = if (on) acc else Color.rgb(44, 46, 56)
+            canvas.drawRoundRect(r, dp(10f), dp(10f), fillPaint)
+            textPaint.textAlign = Paint.Align.CENTER; textPaint.textSize = dp(14f)
+            textPaint.color = if (on) Color.BLACK else Color.WHITE
+            canvas.drawText(lab, r.centerX(), r.centerY() + dp(5f), textPaint)
+        }
+        if (waiting) {
+            // „Warte auf dich“-Punkte
+            val dots = ((time * 2.5f).toInt() % 4)
+            textPaint.textAlign = Paint.Align.LEFT; textPaint.textSize = dp(11f); textPaint.color = alpha(acc, 0.9f)
+            canvas.drawText("Du bist dran" + ".".repeat(dots), lCard.left + dp(16f), lPrev.top - dp(8f), textPaint)
+        }
+        textPaint.textAlign = Paint.Align.CENTER
+    }
+
+    /** Animierter Finger: Tippen (pulsierend), Halten (Ring füllt sich), Ziehen (Bewegung). */
+    private fun drawFinger(canvas: Canvas, r: RectF, g: Int, acc: Int) {
+        if (g == G_NONE) return
+        var cx = r.centerX()
+        var cy = r.centerY()
+        val t = time
+        when (g) {
+            G_TAP -> {
+                val ph = (t * 1.4f) % 1f
+                strokePaint.strokeWidth = dp(2f)
+                strokePaint.color = alpha(Color.WHITE, (1f - ph) * 0.8f)
+                canvas.drawCircle(cx, cy, dp(10f) + ph * dp(26f), strokePaint)
+                cy += if (ph < 0.25f) dp(4f) * (ph / 0.25f) else dp(4f) * (1f - (ph - 0.25f) / 0.75f)
+            }
+            G_HOLD -> {
+                val ph = (t * 0.6f) % 1f
+                strokePaint.strokeWidth = dp(4f)
+                strokePaint.color = alpha(acc, 0.9f)
+                tmpRect.set(cx - dp(24f), cy - dp(24f), cx + dp(24f), cy + dp(24f))
+                canvas.drawArc(tmpRect, -90f, 360f * ph, false, strokePaint)
+            }
+            G_DRAG -> {
+                val a = t * 2.2f
+                cx += sin(a) * r.width() * 0.3f
+                cy += sin(a * 2f) * r.height() * 0.22f
+                fillPaint.color = alpha(acc, 0.25f)
+                canvas.drawCircle(cx, cy, dp(18f), fillPaint)
+            }
+        }
+        textPaint.textAlign = Paint.Align.CENTER
+        textPaint.textSize = dp(30f)
+        textPaint.color = Color.WHITE
+        canvas.drawText("☝", cx + dp(8f), cy + dp(30f), textPaint)
+    }
+
+    private fun wrap(text: String, maxW: Float): List<String> {
+        val out = ArrayList<String>()
+        for (para in text.split("\n")) {
+            var line = ""
+            for (wd in para.split(' ')) {
+                val t = if (line.isEmpty()) wd else "$line $wd"
+                if (textPaint.measureText(t) > maxW && line.isNotEmpty()) { out.add(line); line = wd } else line = t
+            }
+            out.add(line)
+        }
+        return out
+    }
+
+    /** Berührung während einer Lektion: Karte bedienen; alles andere geht an die App (zum Mitmachen). */
+    private fun lessonTouch(e: MotionEvent): Boolean {
+        val down = e.actionMasked == MotionEvent.ACTION_DOWN || e.actionMasked == MotionEvent.ACTION_POINTER_DOWN
+        val x = e.getX(e.actionIndex)
+        val y = e.getY(e.actionIndex)
+        if (!lCard.contains(x, y)) return false
+        if (!down) return true
+        performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+        val st = lSteps.getOrNull(lStep)
+        when {
+            lEnd.contains(x, y) -> endLesson()
+            !lAct.isEmpty && lAct.contains(x, y) -> st?.action?.second?.let { onLessonAction?.invoke(it) }
+            lNext.contains(x, y) -> if (lStep >= lSteps.size - 1) { val i = lessonIdx; endLesson(); onLessonDone?.invoke(i) } else enterStep(lStep + 1)
+            lPrev.contains(x, y) && lStep > 0 -> enterStep(lStep - 1)
+        }
+        invalidate()
+        return true
+    }
+
     /** Slicer: 16 Stücke auf 16 Pads. */
     private val slicer = SlicerPanel(this).also { sp ->
         sp.onHint = { hint(it) }
@@ -9452,6 +9762,11 @@ class PadView(context: Context) : View(context) {
     }
 
     companion object {
+        /** Fingeranimationen der Lektionen. */
+        private const val G_NONE = 0
+        private const val G_TAP = 1
+        private const val G_HOLD = 2
+        private const val G_DRAG = 3
         private val BRAND_ORANGE = Color.rgb(255, 95, 0)
 
         const val VISIBLE_PADS = 12

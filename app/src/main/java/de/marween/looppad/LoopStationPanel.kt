@@ -44,6 +44,9 @@ class LoopStationPanel(private val host: View) {
     private var clrTrack = -1
 
     fun open() { isOpen = true }
+    /** Für die Lektionen: Lage des großen Knopfs einer Spur bzw. des ganzen Fensters. */
+    fun bigRect(t: Int): RectF = big[t.coerceIn(0, TRACKS - 1)]
+    fun boxRect(): RectF = box
     fun close() { isOpen = false; faderPtr = -1 }
 
     private fun layout(area: RectF) {

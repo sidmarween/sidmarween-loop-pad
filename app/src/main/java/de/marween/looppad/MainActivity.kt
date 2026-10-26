@@ -179,7 +179,23 @@ class MainActivity : Activity() {
         pads.onInstChords = { showChordProgression() }
         pads.onSidechain = { showSidechain() }
         pads.onSlicerSource = { pickSlicerSource() }
-        pads.onTourDone = { getSharedPreferences("marvpad", MODE_PRIVATE).edit().putBoolean("tourDone", true).apply() }
+        pads.onTourDone = {
+            val pr = getSharedPreferences("marvpad", MODE_PRIVATE)
+            pr.edit().putBoolean("tourDone", true).apply()
+            if (!pr.getBoolean("lessonDone0", false)) ui().setTitle("🎓 Jetzt deinen ersten Song bauen?")
+                .setMessage("In der Lektion „Dein erster Song“ führe ich dich Schritt für Schritt durch Beat, Bass, Akkorde, Melodie, eigene Aufnahme und Effekte. Alle Lektionen findest du im Menü unter ❓ Hilfe.")
+                .setPositiveButton("Los geht's") { _, _ -> pads.startLesson(0) }.setNegativeButton("Später", null).show()
+        }
+        pads.onLessonDone = { i -> getSharedPreferences("marvpad", MODE_PRIVATE).edit().putBoolean("lessonDone$i", true).apply(); hint("🎓 Lektion geschafft!") }
+        pads.onLessonAction = { id ->
+            when (id) {
+                "kit" -> SampleLibrary.KITS.firstOrNull()?.let { kit -> val empty = (0 until min(12, kit.files.size)).filter { !Engine.hasLoop(it) }; if (empty.isNotEmpty()) loadKit(kit, empty) }
+                "calib" -> calibrateMic()
+                "beatbox" -> askMicCapture(1)
+                "hum" -> askMicCapture(0)
+                "autotune" -> showAutoTune()
+            }
+        }
         if (!prefs.getBoolean("tourDone", false)) pads.postDelayed({ if (!djMode && pads.parent != null) pads.startTour() }, 2500L)
         pads.onSlicerToPads = {
             val n = Engine.slicerToPads(PadView.VISIBLE_PADS)
@@ -2337,48 +2353,187 @@ class MainActivity : Activity() {
     // ---------------------------------------------------------------- Menü & Projekte
 
     /** Hauptmenü in Gruppen: Projekt · Aufnahme & Wiedergabe · Aussehen · Audio & MIDI · Hilfe. */
+    /** Reiter des Hauptmenüs (zuletzt geöffneter wird gemerkt). */
+    private val MENU_TABS = arrayOf("🏠 Projekt", "🎛 Studio", "🎤 Mikro", "🎧 DJ", "⚙ Einstellungen", "❓ Hilfe")
+
+    /** Eintrag im Menü: Text, Aktion, [stay] = Schalter (Menü bleibt offen und zeigt den neuen Stand). Text "§…" = Zwischenüberschrift. */
+    private class MItem(val label: String, val stay: Boolean = false, val run: () -> Unit = {})
+
+    private fun menuTab(t: Int): List<MItem> {
+        val prefs = getSharedPreferences("marvpad", MODE_PRIVATE)
+        val out = ArrayList<MItem>()
+        fun sec(t: String) = out.add(MItem("§$t"))
+        fun add(label: String, stay: Boolean = false, run: () -> Unit) = out.add(MItem(label, stay, run))
+        fun group(g: Int) { val (_, items) = menuGroupItems(g); for (it in items) out.add(MItem(it.first, it.third, it.second)) }
+        when (t) {
+            0 -> {
+                sec("Projekt")
+                group(0)
+                sec("Weitergeben")
+                add("📤 Song exportieren: WAV, Stems, MIDI") { showSongExport() }
+                add("📲 Teilen: Song oder Set an WhatsApp, Instagram & Co.") { showShare() }
+            }
+            1 -> {
+                sec("Werkzeuge")
+                add("🎬 Szenen-Launcher: Spuren-Kombinationen im Takt starten") {
+                    if (djMode) switchMode(false)
+                    pads.openLauncher()
+                    hint("Zeile = Szene: ▶ startet sie auf der nächsten Eins · Felder antippen = Spur an/aus bzw. Pattern A–D · ▶ lange drücken = leeren")
+                }
+                add("🔁 Loop Station: 4 Spuren, ein großer Knopf") {
+                    if (djMode) switchMode(false)
+                    pads.openStation()
+                    hint("Großen Knopf tippen: Aufnahme · nochmal: Loop läuft · nochmal: Overdub · ■/▶ stoppt/startet die Spur")
+                }
+                add("✂ Slicer: Song-Abschnitt auf 16 Pads zerlegen") { if (djMode) switchMode(false); if (Slicer.data == null) pickSlicerSource() else pads.openSlicer() }
+                add("👻 Ghost-Producer: Genre-Patterns als Live-Remix") { openGhost() }
+                add("🪄 Ein-Tipp-Remix: aus einem Song ein neues Arrangement") { if (djMode) switchMode(false); pickRemixPad() }
+                add(if (Engine.scOn) "〽 Sidechain-Pumpen: AN" else "〽 Sidechain-Pumpen (Kick drückt Bass & Flächen)") { showSidechain() }
+                sec("Aufnahme & Wiedergabe")
+                group(1)
+            }
+            2 -> {
+                sec("Mit der Stimme produzieren")
+                add("🎤 Summen → Melodie") { askMicCapture(0) }
+                add("🥁 Beatbox → Drums") { askMicCapture(1) }
+                add("✋ Klang-Sammler: Geräusche → eigenes Drumkit") { showCollector() }
+                add("🎯 Folge dem Song: Tonart & Akkorde übernehmen") { showFollowSong() }
+                sec("Live-Mikro")
+                add((if (Engine.monitorOn) "☑" else "☐") + " 🎙 Live-Mikrofon mit Effekten …") { showMonitor() }
+                add((if (Engine.autoTuneOn) "☑" else "☐") + " 🎚 Auto-Tune …") { showAutoTune() }
+                add((if (Engine.harmOn) "☑" else "☐") + " 👥 Harmonizer …") { showHarmonizer() }
+                add((if (Engine.voiceSynthOn) "☑" else "☐") + " 🎹 Stimmen-Synth …") { showVoiceSynth() }
+                add("🎯 Mikro-Timing einmessen (jetzt ${Engine.micOffsetMs.toInt()} ms)") { calibrateMic() }
+            }
+            3 -> {
+                add(if (djMode) "▦ Zurück zum Pad-Modus" else "🎧 DJ-Modus starten (zwei Decks, Crossfader)") { switchMode(!djMode) }
+                if (djMode) {
+                    val djLand = prefs.getBoolean("djLand", true)
+                    add(if (Dj.gigMode) "🎤 GIG-MODUS AN – beenden" else "🎤 GIG-MODUS starten (Schutz, Bildschirm an, Nicht stören)") { if (Dj.gigMode) stopGig() else showGigCheck() }
+                    add(if (djLand) "📱 Querformat (wie ein Controller) – antippen = hochkant" else "📱 Hochkant – antippen = Querformat", true) {
+                        prefs.edit().putBoolean("djLand", !djLand).apply()
+                        applyDjOrientation()
+                    }
+                    add(if (Dj.mashArmed) "🎭 Mashup wartet … (antippen = abbrechen)" else "🎭 Mashup-Assistent") { showMashup() }
+                }
+                sec("Musik")
+                add("💿 Musik-Sammlung: Ordner laden, katalogisieren, Smart Crates") { showMusicLibrary() }
+                add("☁ Songs aus Dropbox / Drive / Link holen") { showCloudImport(CLOUD_COLLECTION) }
+                add("🧠 KI-Stems (Vocals · Drums · Bass · Melodie) …") { showAiStems(0) }
+            }
+            4 -> {
+                sec("Aussehen")
+                group(2)
+                sec("Audio, Latenz & MIDI")
+                group(3)
+                sec("Verbindungen")
+                add(if (Link.hosting) "📡 Handys gekoppelt (${Link.clients.size}) – Vorlagen & Verteilung" else "📡 Handys koppeln (WLAN / Bluetooth)") { showCoupling() }
+            }
+            else -> {
+                sec("Lernen")
+                add("🎓 Lektionen: Schritt für Schritt zum eigenen Song") { showTutorials() }
+                group(4)
+            }
+        }
+        return out
+    }
+
+    /** Hauptmenü mit Reitern: oben die Bereiche, darunter ihre Funktionen. */
     private fun showMainMenu() {
-        val djLand = getSharedPreferences("marvpad", MODE_PRIVATE).getBoolean("djLand", true)
-        val groups = (if (djMode) listOf<Pair<String, () -> Unit>>(
-            (if (Dj.gigMode) "🎤 GIG-MODUS AN – beenden" else "🎤 GIG-MODUS starten (Bühne: Schutz, Bildschirm an, Nicht stören)") to { if (Dj.gigMode) stopGig() else showGigCheck() },
-            (if (djLand) "📱 DJ im Querformat (wie ein Controller) – antippen = hochkant" else "📱 DJ hochkant – antippen = Querformat wie ein Controller") to {
-                getSharedPreferences("marvpad", MODE_PRIVATE).edit().putBoolean("djLand", !djLand).apply()
-                applyDjOrientation()
-            },
-            (if (Dj.mashArmed) "🎭 Mashup wartet auf die Eins … (antippen = abbrechen)" else "🎭 Mashup-Assistent: Gesang von einem Deck über den Beat des anderen") to { showMashup() }) else emptyList()) + listOf(
-            "🎤 Mikro-Werkzeuge: Summen, Beatbox, Auto-Tune, Harmonizer, Stimmen-Synth, Klang-Sammler, Folge dem Song" to { showMicTools() },
-            "🪄 Ein-Tipp-Remix: aus einem Song auf einem Pad ein neues Arrangement" to { if (djMode) switchMode(false); pickRemixPad() },
-            "💾 Projekt & Dateien" to { showMenuGroup(0) },
-            "💿 Musik-Sammlung: Ordner laden → automatisch katalogisiert & analysiert" to { showMusicLibrary() },
-            "📤 Song exportieren: WAV, Stems, MIDI" to { showSongExport() },
-            "📲 Teilen: Song oder Set an WhatsApp, Instagram & Co." to { showShare() },
-            "👻 Ghost-Producer: Genre-Patterns als Live-Remix über den Track" to { openGhost() },
-            "🎬 Szenen-Launcher: Spuren-Kombinationen im Takt starten (wie Ableton)" to {
-                if (djMode) switchMode(false)
-                pads.openLauncher()
-                hint("Zeile = Szene: ▶ startet sie auf der nächsten Eins · Felder antippen = Spur an/aus bzw. Pattern A–D · ▶ lange drücken = leeren")
-            },
-            "🔁 Loop Station: 4 Spuren, ein großer Knopf (Aufnahme → Overdub)" to {
-                if (djMode) switchMode(false)
-                pads.openStation()
-                hint("Großen Knopf tippen: Aufnahme · nochmal: Loop läuft · nochmal: Overdub · ■/▶ stoppt/startet die Spur")
-            },
-            "✂ Slicer: Song-Abschnitt auf 16 Pads zerlegen und neu spielen" to { if (Slicer.data == null) pickSlicerSource() else pads.openSlicer() },
-            ((if (Engine.scOn) "〽 Sidechain-Pumpen: AN" else "〽 Sidechain-Pumpen (Kick drückt Bass & Flächen)")) to { showSidechain() },
-            "🎙 Aufnahme & Wiedergabe" to { showMenuGroup(1) },
-            "🎨 Aussehen: Designs, Schriften, Ansicht" to { showMenuGroup(2) },
-            "🔌 Audio, Latenz & MIDI" to { showMenuGroup(3) },
-            (if (Link.hosting) "📡 Handys gekoppelt (${Link.clients.size}) – Vorlagen & Verteilung" else "📡 Handys koppeln (WLAN / Bluetooth)") to { showCoupling() },
-            "ℹ Hilfe & Info" to { showMenuGroup(4) },
-            (if (djMode) "▦ Zurück zum Pad-Modus" else "🎧 DJ-Modus (zwei Decks, Crossfader)") to { switchMode(!djMode) }
-        )
-        ui().setTitle("Marv PAD · Einstellungen")
-            .setItems(groups.map { it.first }.toTypedArray()) { _, w -> groups[w].second() }
-            .setNegativeButton("Schließen", null)
-            .show()
+        val prefs = getSharedPreferences("marvpad", MODE_PRIVATE)
+        var tab = prefs.getInt("menuTab", if (djMode) 3 else 0).coerceIn(0, MENU_TABS.size - 1)
+        val dens = resources.displayMetrics.density
+        fun px(v: Float) = (v * dens).toInt()
+        val acc = MenuStyle.accentColor()
+        val ink = MenuStyle.ink(this)
+        val light = MenuStyle.isLight(this)
+        val root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(px(8f), px(4f), px(8f), 0) }
+        val tabRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        val tabScroll = android.widget.HorizontalScrollView(this).apply { addView(tabRow); isHorizontalScrollBarEnabled = false }
+        val list = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        val scroll = android.widget.ScrollView(this).apply { addView(list) }
+        root.addView(tabScroll)
+        root.addView(scroll, LinearLayout.LayoutParams(-1, (resources.displayMetrics.heightPixels * 0.62f).toInt()))
+        var dlg: AlertDialog? = null
+        val tabViews = ArrayList<TextView>()
+        fun bg(col: Int, stroke: Int) = android.graphics.drawable.GradientDrawable().apply {
+            cornerRadius = px(18f).toFloat(); setColor(col); setStroke(px(1.2f), stroke)
+        }
+        lateinit var render: () -> Unit
+        render = {
+            for ((i, v) in tabViews.withIndex()) {
+                val on = i == tab
+                v.background = bg(if (on) acc else Color.TRANSPARENT, if (on) acc else Color.argb(90, Color.red(ink), Color.green(ink), Color.blue(ink)))
+                v.setTextColor(if (on) (if (light) Color.WHITE else Color.BLACK) else ink)
+            }
+            list.removeAllViews()
+            for (it in menuTab(tab)) {
+                if (it.label.startsWith("§")) {
+                    list.addView(TextView(this).apply {
+                        text = it.label.substring(1).uppercase(Locale.GERMANY)
+                        textSize = 11f
+                        setTextColor(acc)
+                        letterSpacing = 0.08f
+                        setPadding(px(10f), px(14f), px(10f), px(4f))
+                    })
+                    continue
+                }
+                list.addView(TextView(this).apply {
+                    text = it.label
+                    textSize = 15f
+                    setTextColor(ink)
+                    setPadding(px(12f), px(11f), px(12f), px(11f))
+                    val tv = android.util.TypedValue()
+                    context.theme.resolveAttribute(android.R.attr.selectableItemBackground, tv, true)
+                    setBackgroundResource(tv.resourceId)
+                    setOnClickListener { _ ->
+                        if (it.stay) { it.run(); render() } else { dlg?.dismiss(); it.run() }
+                    }
+                })
+            }
+            scroll.scrollTo(0, 0)
+        }
+        for ((i, name) in MENU_TABS.withIndex()) {
+            val v = TextView(this).apply {
+                text = name
+                textSize = 13.5f
+                gravity = Gravity.CENTER
+                setPadding(px(14f), px(8f), px(14f), px(8f))
+                setOnClickListener { tab = i; prefs.edit().putInt("menuTab", i).apply(); render() }
+            }
+            tabViews.add(v)
+            tabRow.addView(v, LinearLayout.LayoutParams(-2, -2).apply { rightMargin = px(6f); topMargin = px(4f); bottomMargin = px(6f) })
+        }
+        render()
+        dlg = ui().setTitle("Marv PAD · Menü").setView(root).setNegativeButton("Schließen", null).create()
+        dlg.show()
+        tabScroll.post { tabViews.getOrNull(tab)?.let { tabScroll.smoothScrollTo(max(0, it.left - px(20f)), 0) } }
+    }
+
+    /** Lektionen auswählen. */
+    private fun showTutorials() {
+        if (djMode) switchMode(false)
+        val prefs = getSharedPreferences("marvpad", MODE_PRIVATE)
+        val ls = pads.lessonList()
+        val labels = ls.mapIndexed { i, (n, d) -> (if (prefs.getBoolean("lessonDone$i", false)) "✅ " else "") + n + "\n   " + d }.toTypedArray()
+        ui().setTitle("🎓 Lektionen").setItems(labels) { _, w -> pads.startLesson(w) }
+            .setNeutralButton("Kurze Tour (1 min)") { _, _ -> pads.startTour() }
+            .setNegativeButton("Schließen", null).show()
     }
 
     private fun showMenuGroup(g: Int) {
+        val (title, items) = menuGroupItems(g)
+        ui().setTitle(title)
+            .setItems(items.map { it.first }.toTypedArray()) { _, w ->
+                val it = items[w]
+                it.second()
+                if (it.third) showMenuGroup(g)
+            }
+            .setNegativeButton("Zurück") { _, _ -> showMainMenu() }
+            .show()
+    }
+
+    private fun menuGroupItems(g: Int): Pair<String, ArrayList<Triple<String, () -> Unit, Boolean>>> {
         val prefs = getSharedPreferences("marvpad", MODE_PRIVATE)
         fun check(on: Boolean) = if (on) "☑" else "☐"
         // Einträge: Text, Aktion, danach Gruppe wieder öffnen (bei Schaltern)
@@ -2479,14 +2634,7 @@ class MainActivity : Activity() {
                 items.add(Triple("⏻ Programm schließen", { requestClose() }, false))
             }
         }
-        ui().setTitle(title)
-            .setItems(items.map { it.first }.toTypedArray()) { _, w ->
-                val it = items[w]
-                it.second()
-                if (it.third) showMenuGroup(g)
-            }
-            .setNegativeButton("Zurück") { _, _ -> showMainMenu() }
-            .show()
+        return title to items
     }
 
     // ---------------------------------------------------------------- Audio-Geräte / USB
