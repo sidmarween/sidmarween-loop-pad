@@ -15,7 +15,77 @@ object InstPresets {
     // Reihenfolge der Drum-Stimmen: BD SD LT MT HT RS CP CH OH CR RD
     private val V = mapOf("BD" to 0, "SD" to 1, "LT" to 2, "MT" to 3, "HT" to 4, "RS" to 5, "CP" to 6, "CH" to 7, "OH" to 8, "CR" to 9, "RD" to 10)
 
-    class Drum(val genre: String, val name: String, val bpm: Int, val swing: Float, val rows: Map<String, String>)
+    class Drum(val genre: String, val name: String, val bpm: Int, val swing: Float, val rows: Map<String, String>, val kit: String? = null)
+
+    // ---------------------------------------------------------------- Klang-Kits (Drumcomputer)
+    /**
+     * Kit: Klang-Modell je Stimme (Name aus [InstState.drumModelNames]) und Tune/Decay/Level, dazu Drive.
+     * Nicht genannte Stimmen: 909-Klang, Tune/Decay 50 %, Level 80 %.
+     */
+    class Kit(val genre: String, val name: String, val drive: Float, val voices: Map<String, KV>)
+    class KV(val model: String, val tune: Float = 0.5f, val decay: Float = 0.5f, val level: Float = 0.8f)
+    private fun kv(m: String, t: Float = 0.5f, d: Float = 0.5f, l: Float = 0.8f) = KV(m, t, d, l)
+
+    val KITS = listOf(
+        Kit("Klassiker", "909 Klassik", 0.15f, mapOf()),
+        Kit("Klassiker", "808 Klassik", 0.1f, mapOf("BD" to kv("808 Boom", 0.5f, 0.6f, 0.9f), "SD" to kv("808"), "CP" to kv("808 Clap"), "CH" to kv("808"), "OH" to kv("808"),
+            "LT" to kv("Conga"), "MT" to kv("Conga"), "HT" to kv("Conga"), "RS" to kv("Clave"), "RD" to kv("Agogo", l = 0.6f))),
+        Kit("Klassiker", "Electro 808", 0.25f, mapOf("BD" to kv("808 Boom", 0.62f, 0.35f, 0.9f), "SD" to kv("909", 0.6f, 0.4f), "CP" to kv("808 Clap"), "CH" to kv("808", d = 0.3f),
+            "LT" to kv("Syn-Tom"), "MT" to kv("Syn-Tom"), "HT" to kv("Syn-Tom"), "RS" to kv("Cowbell", l = 0.6f))),
+        Kit("Techno", "Techno Rumble", 0.35f, mapOf("BD" to kv("Techno Rumble", 0.45f, 0.6f, 0.95f), "CP" to kv("909 Clap", 0.55f, 0.35f), "CH" to kv("909", 0.55f, 0.25f), "RD" to kv("Ride", 0.45f, 0.6f, 0.6f), "RS" to kv("909 Rim", 0.6f, 0.3f))),
+        Kit("Techno", "Minimal", 0.1f, mapOf("BD" to kv("Minimal Click", 0.5f, 0.4f, 0.9f), "RS" to kv("Clave", 0.45f, 0.3f, 0.6f), "CP" to kv("Snap", 0.5f, 0.4f, 0.7f), "CH" to kv("Shaker", d = 0.35f, l = 0.6f), "OH" to kv("Shaker", d = 0.5f, l = 0.6f))),
+        Kit("Techno", "Industrial", 0.6f, mapOf("BD" to kv("Techno Rumble", 0.38f, 0.75f, 0.95f), "SD" to kv("Lo-Fi", 0.4f, 0.6f), "CP" to kv("Big Clap", 0.45f, 0.5f), "CH" to kv("909", 0.4f, 0.3f), "RS" to kv("Cowbell", 0.35f, 0.3f, 0.6f))),
+        Kit("Hart", "Hardstyle", 0.45f, mapOf("BD" to kv("Hardstyle", 0.5f, 0.55f, 0.95f), "CP" to kv("Big Clap", 0.55f, 0.45f, 0.8f), "OH" to kv("909", 0.55f, 0.4f), "CR" to kv("Crash"))),
+        Kit("Hart", "Gabber", 0.7f, mapOf("BD" to kv("Hardstyle", 0.42f, 0.4f, 0.95f), "SD" to kv("909", 0.6f, 0.3f), "CH" to kv("909", 0.6f, 0.2f))),
+        Kit("House", "Deep House", 0.1f, mapOf("BD" to kv("Deep", 0.5f, 0.55f, 0.9f), "CP" to kv("808 Clap", 0.5f, 0.45f, 0.7f), "RS" to kv("Woodblock", 0.5f, 0.4f, 0.55f), "CH" to kv("Shaker", d = 0.4f, l = 0.6f), "OH" to kv("808", d = 0.5f, l = 0.6f))),
+        Kit("House", "Afro House", 0.12f, mapOf("BD" to kv("Deep", 0.48f, 0.5f, 0.9f), "LT" to kv("Conga", 0.45f), "MT" to kv("Conga", 0.5f), "HT" to kv("Bongo"), "RS" to kv("Woodblock", l = 0.6f),
+            "CP" to kv("Snap", l = 0.7f), "CH" to kv("Shaker", l = 0.6f), "OH" to kv("Tambourin", l = 0.55f))),
+        Kit("Hip-Hop & Trap", "Trap 808", 0.2f, mapOf("BD" to kv("808 Boom", 0.38f, 0.9f, 0.95f), "SD" to kv("Trap"), "CP" to kv("808 Clap", 0.55f, 0.4f), "CH" to kv("808", 0.6f, 0.2f, 0.65f), "OH" to kv("808", 0.6f, 0.35f, 0.6f),
+            "RS" to kv("Clave", 0.6f, 0.3f, 0.5f))),
+        Kit("Hip-Hop & Trap", "Lo-Fi Hip-Hop", 0.25f, mapOf("BD" to kv("Lo-Fi", 0.45f, 0.5f, 0.85f), "SD" to kv("Lo-Fi", 0.5f, 0.5f, 0.75f), "CH" to kv("Shaker", 0.45f, 0.4f, 0.55f), "OH" to kv("808", 0.45f, 0.4f, 0.5f), "RS" to kv("909 Rim", 0.45f, 0.4f, 0.55f))),
+        Kit("Hip-Hop & Trap", "Boom Bap", 0.3f, mapOf("BD" to kv("Lo-Fi", 0.55f, 0.4f, 0.9f), "SD" to kv("909", 0.45f, 0.55f, 0.85f), "CH" to kv("909", 0.45f, 0.3f, 0.6f), "OH" to kv("Tambourin", l = 0.5f))),
+        Kit("Percussion", "Latin Percussion", 0.08f, mapOf("LT" to kv("Conga", 0.45f), "MT" to kv("Conga", 0.55f), "HT" to kv("Bongo"), "RS" to kv("Cowbell", l = 0.65f), "CH" to kv("Shaker", l = 0.6f),
+            "OH" to kv("Tambourin", l = 0.55f), "RD" to kv("Agogo", l = 0.6f), "CP" to kv("Snap", l = 0.6f), "BD" to kv("Deep", 0.5f, 0.4f, 0.75f))),
+        Kit("Percussion", "Holz & Glocken", 0.05f, mapOf("RS" to kv("Woodblock"), "RD" to kv("Agogo"), "CH" to kv("Shaker"), "OH" to kv("Tambourin"), "LT" to kv("Bongo", 0.4f), "MT" to kv("Bongo", 0.5f), "HT" to kv("Bongo", 0.6f), "CP" to kv("Snap"))),
+        Kit("Percussion", "80er Syn-Drums", 0.2f, mapOf("LT" to kv("Syn-Tom", 0.45f), "MT" to kv("Syn-Tom", 0.5f), "HT" to kv("Syn-Tom", 0.55f), "SD" to kv("909", 0.55f, 0.6f), "CP" to kv("Big Clap"), "CR" to kv("Splash")))
+    )
+
+    fun applyKit(k: Kit) {
+        val st = InstState
+        val names = st.drumNames
+        for (v in 0 until InstState.DV) {
+            val e = k.voices[names[v]]
+            st.drumModel[v] = if (e == null) 0 else st.drumModelNames[v].indexOf(e.model).coerceAtLeast(0)
+            st.drumTune[v] = e?.tune ?: 0.5f
+            st.drumDecay[v] = e?.decay ?: 0.5f
+            st.drumLevel[v] = e?.level ?: 0.8f
+        }
+        st.drumDrive = k.drive
+    }
+
+    // ---------------------------------------------------------------- Klang-Presets (303) – Töne bleiben
+    class AcidSound(val name: String, val cut: Float, val res: Float, val env: Float, val dec: Float, val acc: Float, val glide: Float, val drive: Float, val square: Boolean = false, val oct: Int = 0)
+
+    val ACID_SOUNDS = listOf(
+        AcidSound("Klassik 303", 0.35f, 0.7f, 0.6f, 0.35f, 0.6f, 0.25f, 0.2f),
+        AcidSound("Squelch (quietschend)", 0.25f, 0.9f, 0.8f, 0.3f, 0.8f, 0.2f, 0.25f),
+        AcidSound("Gummi-Bass", 0.18f, 0.6f, 0.45f, 0.5f, 0.5f, 0.35f, 0.15f),
+        AcidSound("Dunkel & tief", 0.12f, 0.75f, 0.5f, 0.6f, 0.55f, 0.3f, 0.2f, oct = -1),
+        AcidSound("Verzerrtes Acid", 0.35f, 0.85f, 0.7f, 0.3f, 0.75f, 0.2f, 0.85f),
+        AcidSound("Screamer", 0.5f, 0.95f, 0.9f, 0.2f, 0.9f, 0.15f, 0.6f),
+        AcidSound("Sub-Bass (Rechteck)", 0.1f, 0.3f, 0.2f, 0.7f, 0.3f, 0.3f, 0.1f, square = true, oct = -1),
+        AcidSound("Blubber", 0.22f, 0.88f, 0.9f, 0.12f, 0.7f, 0.2f, 0.1f),
+        AcidSound("Weicher Pluck", 0.3f, 0.4f, 0.55f, 0.15f, 0.4f, 0.2f, 0.05f),
+        AcidSound("Rechteck-Acid", 0.3f, 0.8f, 0.65f, 0.3f, 0.65f, 0.25f, 0.3f, square = true),
+        AcidSound("Langer Glide", 0.3f, 0.78f, 0.55f, 0.55f, 0.55f, 0.75f, 0.2f),
+        AcidSound("Hoch & spitz", 0.45f, 0.85f, 0.65f, 0.25f, 0.7f, 0.2f, 0.3f, oct = 1)
+    )
+
+    fun applyAcidSound(a: AcidSound) {
+        val st = InstState
+        st.acidCut = a.cut; st.acidRes = a.res; st.acidEnv = a.env; st.acidDec = a.dec
+        st.acidAccent = a.acc; st.acidGlide = a.glide; st.acidDrive = a.drive; st.acidSquare = a.square; st.acidOct = a.oct
+    }
     class Acid(
         val genre: String, val name: String, val bpm: Int, val line: String,
         val cut: Float, val res: Float, val env: Float, val dec: Float, val acc: Float, val glide: Float, val square: Boolean = false
@@ -58,6 +128,12 @@ object InstPresets {
         Drum("Band & World", "Rock", 110, 0f, mapOf("BD" to "X.......X.X.....", "SD" to "....X.......X...", "CH" to "x.x.x.x.x.x.x.x.", "CR" to "X...............")),
         Drum("Band & World", "Synthwave", 110, 0f, mapOf("BD" to "X...X...X...X...", "SD" to "....X.......X...", "CH" to ".x.x.x.x.x.x.x.x", "OH" to "..............x.")),
         Drum("Band & World", "Bossa Nova", 130, 0f, mapOf("RS" to "x..x..x...x..x..", "BD" to "X..xX..xX..xX..x", "CH" to "x.x.x.x.x.x.x.x.")),
+        Drum("Percussion", "Latin · Clave & Congas", 100, 0.1f, mapOf("RS" to "x..x...x..x.x...", "LT" to "......x.x.....x.", "MT" to "..x.......x.....", "HT" to "...x..x....x..x.", "CH" to "xxxxxxxxxxxxxxxx", "BD" to "X.......X......."), kit = "Latin Percussion"),
+        Drum("Percussion", "Afro House Perc", 122, 0.12f, mapOf("BD" to "X...X...X...X...", "LT" to "......x.......x.", "MT" to "...x.......x....", "HT" to ".x....x..x....x.", "RS" to "..x..x..x...x.x.", "CH" to "x.xx.x.xx.x.xx.x", "CP" to "....x.......x..."), kit = "Afro House"),
+        Drum("Percussion", "Samba Batucada", 104, 0.05f, mapOf("BD" to "X.......X.......", "LT" to "x..x..x.x..x..x.", "HT" to "..x...x...x...xx", "CH" to "xxxxxxxxxxxxxxxx", "RS" to "x.x..x.x.x..x.x.", "RD" to "..x...x...x...x."), kit = "Latin Percussion"),
+        Drum("Percussion", "Cowbell Groove", 118, 0.08f, mapOf("BD" to "X...X...X...X...", "RS" to "..x...x...x.xx..", "CP" to "....X.......X...", "CH" to "x.x.x.x.x.x.x.x.", "OH" to "..............x."), kit = "808 Klassik"),
+        Drum("Percussion", "Baile Funk", 130, 0f, mapOf("BD" to "X..X..X...X..X..", "SD" to "...x..x....x..x.", "CP" to "....X.......X...", "CH" to "x.x.x.x.x.x.x.x.", "LT" to "......x.......x."), kit = "808 Klassik"),
+        Drum("Percussion", "Amapiano", 112, 0.15f, mapOf("BD" to "X.......X.......", "RS" to "..x..x...x..x...", "CP" to "....x.......x...", "CH" to "xxxxxxxxxxxxxxxx", "LT" to "...X......X..X..", "OH" to "..x...x...x...x."), kit = "Deep House"),
         Drum("Fills", "Fill · Toms", 0, 0f, mapOf("BD" to "X...............", "HT" to "........xx......", "MT" to "..........xx....", "LT" to "............xxXX", "CR" to "X...............")),
         Drum("Fills", "Fill · Snare-Roll", 0, 0f, mapOf("BD" to "X.......X.......", "SD" to "........xxxxXXXX", "CR" to "X..............."))
     )

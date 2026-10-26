@@ -87,6 +87,22 @@ object InstState {
     /** Stumm geschaltete Instrumente. */
     val drumMute = BooleanArray(DV)
     val drumTune = FloatArray(DV) { 0.5f }
+    /** Klang-Modell je Stimme (0 = 909; siehe [drumModelNames]). */
+    val drumModel = IntArray(DV)
+    val drumModelNames: Array<Array<String>> = arrayOf(
+        arrayOf("909", "808 Boom", "Techno Rumble", "Hardstyle", "Deep", "Minimal Click", "Lo-Fi"),
+        arrayOf("909", "808", "Trap", "Lo-Fi"),
+        arrayOf("909 Tom", "Conga", "Bongo", "Syn-Tom"),
+        arrayOf("909 Tom", "Conga", "Bongo", "Syn-Tom"),
+        arrayOf("909 Tom", "Conga", "Bongo", "Syn-Tom"),
+        arrayOf("909 Rim", "Clave", "Cowbell", "Woodblock"),
+        arrayOf("909 Clap", "808 Clap", "Snap", "Big Clap"),
+        arrayOf("909", "808", "Shaker", "Tambourin"),
+        arrayOf("909", "808", "Shaker", "Tambourin"),
+        arrayOf("Crash", "Splash"),
+        arrayOf("Ride", "Agogo")
+    )
+    fun drumModelName(v: Int): String = drumModelNames[v][drumModel[v].coerceIn(0, drumModelNames[v].size - 1)]
     val drumDecay = FloatArray(DV) { 0.5f }
     val drumLevel = FloatArray(DV) { 0.8f }
     @Volatile var drumOn = true
@@ -526,6 +542,7 @@ object InstState {
         for (v in 0 until DV) ds.put(ia(drumSteps[v]))
         j.put("drumSteps", ds)
         j.put("drumTune", fa(drumTune)); j.put("drumDecay", fa(drumDecay)); j.put("drumLevel", fa(drumLevel))
+        j.put("drumModel", ia(drumModel))
         j.put("drumOn", drumOn); j.put("drumFx", drumFx); j.put("drumDrive", drumDrive.toDouble()); j.put("drumVol", drumVol.toDouble())
         j.put("acidTie", ba(acidTie)); j.put("acidLen", acidLen); j.put("drumLen", drumLen)
         j.put("acidGlide", acidGlide.toDouble()); j.put("acidAccent", acidAccent.toDouble()); j.put("acidDrive", acidDrive.toDouble()); j.put("acidTune", acidTune)
@@ -559,6 +576,8 @@ object InstState {
         acidEnv = j.optDouble("acidEnv", 0.6).toFloat(); acidDec = j.optDouble("acidDec", 0.35).toFloat(); acidVol = j.optDouble("acidVol", 0.75).toFloat()
         j.optJSONArray("drumSteps")?.let { ds -> for (v in 0 until min(DV, ds.length())) ds.optJSONArray(v)?.let { r -> for (k in 0 until min(MAX, r.length())) drumSteps[v][k] = r.optInt(k) } }
         rf("drumTune", drumTune); rf("drumDecay", drumDecay); rf("drumLevel", drumLevel)
+        java.util.Arrays.fill(drumModel, 0); ri("drumModel", drumModel)
+        for (v in 0 until DV) drumModel[v] = drumModel[v].coerceIn(0, drumModelNames[v].size - 1)
         drumOn = j.optBoolean("drumOn", true); drumFx = j.optBoolean("drumFx", false)
         drumDrive = j.optDouble("drumDrive", 0.15).toFloat(); drumVol = j.optDouble("drumVol", 0.8).toFloat()
         java.util.Arrays.fill(acidTie, false)
@@ -828,6 +847,221 @@ class DrumMachine(private val sr: Int) {
         return best
     }
 
+    // ---------------------------------------------------------------- weitere Klang-Modelle (808, Percussion …)
+    private var altS = 0.0
+    private var altEnv = 0.0
+    private val gF = DoubleArray(16)
+    private val gHz = doubleArrayOf(250.0, 800.0, 1000.0, 1200.0, 1400.0, 2000.0, 2500.0, 3000.0, 5000.0, 6000.0, 7000.0, 8000.0, 9000.0, 4000.0, 600.0, 11000.0)
+    private fun gx(i: Int): Double { if (gF[i] == 0.0) gF[i] = g(gHz[i]); return gF[i] }
+    private val G250 = 0; private val G800 = 1; private val G1000 = 2; private val G1200 = 3; private val G1400 = 4; private val G2000 = 5
+    private val G2500 = 6; private val G3000 = 7; private val G5000 = 8; private val G6000 = 9; private val G7000 = 10; private val G8000 = 11
+    private val G9000 = 12; private val G4000 = 13; private val G600 = 14; private val G11000 = 15
+
+    /** Klang-Modelle 1… je Stimme (0 = 909, im Hauptteil). Ergebnis in [altS] und [altEnv]. */
+    private fun altVoice(vc: Voice, v: Int, m: Int, t: Double, tune: Double, dec: Double) {
+        val ft = 2.0.pow(tune - 0.5)
+        var s: Double
+        var env: Double
+        when (v) {
+            0 -> { // Bass Drums
+                when (m) {
+                    1 -> { // 808 Boom: langer Sinus, sanfter Tonhöhen-Abfall
+                        val f = 48.0 * 2.0.pow((tune - 0.5) * 1.2) * (1.0 + 1.3 * exp(-t / 0.03))
+                        vc.p1 += f / sr
+                        env = exp(-t / (0.35 + dec * 1.8))
+                        vc.f1.run(noise(), gx(G2000), 1.4)
+                        s = tanh(sin(2 * PI * vc.p1) * 1.15) + vc.f1.bp * exp(-t / 0.0012) * 0.25
+                    }
+                    2 -> { // Techno Rumble: verzerrt, druckvoll
+                        val f = 46.0 * 2.0.pow((tune - 0.5) * 1.2) * (1.0 + 2.6 * exp(-t / 0.014) + 0.3 * exp(-t / 0.08))
+                        vc.p1 += f / sr
+                        env = exp(-t / (0.25 + dec * 0.9))
+                        val body = sin(2 * PI * vc.p1)
+                        vc.f1.run(tanh(body * (2.5 + 4.0 * exp(-t / 0.12))), gx(G600), 0.9)
+                        vc.f2.run(noise(), gx(G4000), 1.2)
+                        s = vc.f1.lp * 1.1 + vc.f2.bp * exp(-t / 0.002) * 0.6
+                    }
+                    3 -> { // Hardstyle: starker Pitch-Sweep, harte Sättigung
+                        val f = 52.0 * 2.0.pow((tune - 0.5) * 1.2) * (1.0 + 6.0 * exp(-t / 0.018) + 1.4 * exp(-t / 0.11))
+                        vc.p1 += f / sr
+                        env = exp(-t / (0.3 + dec * 0.6))
+                        vc.f1.run(tanh(sin(2 * PI * vc.p1) * 7.0), gx(G3000), 0.8)
+                        s = vc.f1.lp * 0.95
+                    }
+                    4 -> { // Deep: rund, ohne Klick
+                        val f = 44.0 * 2.0.pow((tune - 0.5) * 1.2) * (1.0 + 1.8 * exp(-t / 0.025))
+                        vc.p1 += f / sr
+                        env = exp(-t / (0.2 + dec * 0.7)) * (1 - exp(-t / 0.0015))
+                        s = sin(2 * PI * vc.p1) * 1.1
+                    }
+                    5 -> { // Minimal Click: kurz und knackig
+                        val f = 58.0 * 2.0.pow((tune - 0.5) * 1.2) * (1.0 + 4.0 * exp(-t / 0.006))
+                        vc.p1 += f / sr
+                        env = exp(-t / (0.08 + dec * 0.25))
+                        vc.f1.run(noise(), gx(G5000), 0.8)
+                        s = sin(2 * PI * vc.p1) + vc.f1.hp * exp(-t / 0.0015) * 0.9
+                    }
+                    else -> { // Lo-Fi: Wumms mit Rauschen, leicht zerbröselt
+                        val f = 52.0 * 2.0.pow((tune - 0.5) * 1.2) * (1.0 + 2.0 * exp(-t / 0.02))
+                        vc.p1 += f / sr
+                        env = exp(-t / (0.15 + dec * 0.5))
+                        vc.f1.run(noise(), gx(G250), 0.9)
+                        val x = sin(2 * PI * vc.p1) + vc.f1.lp * exp(-t / 0.03) * 1.2
+                        s = Math.round(x * 20.0) / 20.0
+                    }
+                }
+            }
+            1 -> { // Snares
+                when (m) {
+                    1 -> { // 808: mehr Ton, weniger Teppich
+                        vc.p1 += 238.0 * ft / sr; vc.p2 += 476.0 * ft / sr
+                        val tone = (sin(2 * PI * vc.p1) * 0.75 + sin(2 * PI * vc.p2) * 0.35) * exp(-t / 0.07)
+                        vc.f1.run(noise(), gx(G2000), 1.0)
+                        val sn = vc.f1.hp * exp(-t / (0.06 + dec * 0.18)) * 0.9
+                        env = 1.0; s = tone + sn
+                        if (t > 0.08 + dec * 0.6) env = 0.0
+                    }
+                    2 -> { // Trap: kurzer Ton, heller langer Teppich, doppelter Anschlag
+                        vc.p1 += 200.0 * ft * (1 + 0.6 * exp(-t / 0.01)) / sr
+                        val tone = sin(2 * PI * vc.p1) * exp(-t / 0.03) * 0.6
+                        vc.f1.run(noise(), gx(G3000), 0.9)
+                        vc.f2.run(vc.f1.hp, gx(G7000), 0.7)
+                        var e = exp(-t / (0.1 + dec * 0.25))
+                        if (t > 0.012) e += exp(-(t - 0.012) / 0.006) * 0.6
+                        env = 1.0; s = tone + vc.f2.bp * e * 1.6
+                        if (t > 0.1 + dec * 0.8) env = 0.0
+                    }
+                    else -> { // Lo-Fi: dumpf, körnig
+                        vc.p1 += 180.0 * ft / sr
+                        val tone = sin(2 * PI * vc.p1) * exp(-t / 0.05) * 0.7
+                        vc.f1.run(noise(), gx(G5000), 0.8)
+                        val x = tone + vc.f1.lp * exp(-t / (0.08 + dec * 0.2))
+                        env = 1.0; s = Math.round(x * 12.0) / 12.0
+                        if (t > 0.08 + dec * 0.6) env = 0.0
+                    }
+                }
+            }
+            2, 3, 4 -> { // Toms / Percussion
+                val k = v - 2
+                when (m) {
+                    1 -> { // Conga (808)
+                        val f = doubleArrayOf(180.0, 250.0, 330.0)[k] * ft
+                        vc.p1 += f * (1 + 0.12 * exp(-t / 0.01)) / sr
+                        env = exp(-t / (0.12 + dec * 0.3))
+                        vc.f1.run(noise(), gx(G2000), 1.2)
+                        s = sin(2 * PI * vc.p1) + vc.f1.bp * exp(-t / 0.003) * 0.5
+                    }
+                    2 -> { // Bongo: höher, kürzer
+                        val f = doubleArrayOf(400.0, 520.0, 680.0)[k] * ft
+                        vc.p1 += f * (1 + 0.15 * exp(-t / 0.006)) / sr
+                        env = exp(-t / (0.06 + dec * 0.15))
+                        vc.f1.run(noise(), gx(G3000), 1.0)
+                        s = sin(2 * PI * vc.p1) + vc.f1.bp * exp(-t / 0.002) * 0.6
+                    }
+                    else -> { // Syn-Tom (Simmons): „Piuu“
+                        val f = doubleArrayOf(110.0, 160.0, 230.0)[k] * ft
+                        vc.p1 += f * (1 + 1.5 * exp(-t / 0.12)) / sr
+                        env = exp(-t / (0.2 + dec * 0.6))
+                        val ph = vc.p1 % 1.0
+                        val tri = 4 * abs(ph - 0.5) - 1
+                        vc.f1.run(noise(), gx(G1200), 1.5)
+                        s = tri * 0.9 + vc.f1.bp * exp(-t / 0.01) * 0.4
+                    }
+                }
+            }
+            5 -> { // Rimshot-Platz: Clave, Cowbell, Woodblock
+                when (m) {
+                    1 -> { // Clave (808)
+                        vc.p1 += 2500.0 * ft / sr
+                        env = exp(-t / (0.02 + dec * 0.04))
+                        s = sin(2 * PI * vc.p1)
+                    }
+                    2 -> { // Cowbell (808): zwei Rechtecke durch Bandpass
+                        vc.p1 += 540.0 * ft / sr; vc.p2 += 800.0 * ft / sr
+                        val a = if (vc.p1 % 1.0 < 0.5) 1.0 else -1.0
+                        val b = if (vc.p2 % 1.0 < 0.5) 1.0 else -1.0
+                        vc.f1.run((a + b) * 0.5, gx(G1000), 1.4)
+                        env = 0.6 * exp(-t / 0.01) + 0.4 * exp(-t / (0.06 + dec * 0.3))
+                        s = vc.f1.bp * 1.8
+                    }
+                    else -> { // Woodblock
+                        vc.p1 += 1100.0 * ft * (1 + 0.05 * exp(-t / 0.004)) / sr
+                        vc.p2 += 1100.0 * 2.7 * ft / sr
+                        env = exp(-t / (0.03 + dec * 0.05))
+                        s = sin(2 * PI * vc.p1) * 0.8 + sin(2 * PI * vc.p2) * 0.25 * exp(-t / 0.008)
+                    }
+                }
+            }
+            6 -> { // Claps
+                when (m) {
+                    1 -> { // 808 Clap: vier Anschläge, längere Fahne
+                        vc.f1.run(noise(), gx(G1000), 0.6)
+                        vc.f2.run(vc.f1.bp, gx(G600), 1.2)
+                        var e = 0.0
+                        for (d in 0..3) { val td = t - d * 0.008; if (td >= 0) e += exp(-td / 0.004) }
+                        if (t > 0.03) e += exp(-(t - 0.03) / (0.15 + dec * 0.4)) * 0.8
+                        env = 1.0; s = vc.f2.hp * e * 2.4
+                        if (t > 0.2 + dec * 1.6) env = 0.0
+                    }
+                    2 -> { // Snap (Fingerschnipsen)
+                        vc.f1.run(noise(), gx(G2500), 0.7)
+                        vc.p1 += 1800.0 * ft / sr
+                        env = exp(-t / (0.012 + dec * 0.02))
+                        s = vc.f1.bp * 2.2 + sin(2 * PI * vc.p1) * 0.25
+                    }
+                    else -> { // Big Clap: breiter, mit Raum
+                        vc.f1.run(noise(), gx(G1400), 0.5)
+                        vc.f2.run(noise(), gx(G3000), 0.8)
+                        val band = vc.f1.bp + vc.f2.bp * 0.6
+                        var e = 0.0
+                        for (d in 0..3) { val td = t - d * 0.011; if (td >= 0) e += exp(-td / 0.005) }
+                        if (t > 0.035) e += exp(-(t - 0.035) / (0.3 + dec * 0.8)) * 0.7
+                        env = 1.0; s = band * e * 2.0
+                        if (t > 0.4 + dec * 2.5) env = 0.0
+                    }
+                }
+            }
+            7, 8 -> { // Hi-Hats / Shaker / Tambourin
+                val open = v == 8
+                when (m) {
+                    1 -> { // 808: dunkler, weicher
+                        val mm = metallic(vc, 0.9 * 2.0.pow((tune - 0.5) * 0.8)) * 0.9 + noise() * 0.15
+                        vc.f1.run(mm, gx(G8000), 1.0)
+                        vc.f2.run(vc.f1.bp, gx(G6000), 1.0)
+                        env = if (!open) exp(-t / (0.03 + dec * 0.06)) else exp(-t / (0.25 + dec * 0.6))
+                        s = vc.f2.hp * 3.0
+                    }
+                    2 -> { // Shaker
+                        vc.f1.run(noise(), gx(G7000), 1.2)
+                        val att = 1 - exp(-t / 0.006)
+                        env = att * (if (!open) exp(-t / (0.05 + dec * 0.08)) else exp(-t / (0.12 + dec * 0.25)))
+                        s = vc.f1.bp * 1.6
+                    }
+                    else -> { // Tambourin: Schellen (Metall + flatternde Rausch-Stöße)
+                        val mm = metallic(vc, 2.3 * ft) * 0.6 + noise() * 0.5
+                        vc.f1.run(mm, gx(G9000), 0.9)
+                        val jingle = 0.6 + 0.4 * sin(2 * PI * 38.0 * t)
+                        env = if (!open) exp(-t / (0.08 + dec * 0.1)) else exp(-t / (0.3 + dec * 0.5))
+                        s = vc.f1.bp * 2.4 * jingle
+                    }
+                }
+            }
+            9 -> { // Splash: höher, kürzer
+                val mm = metallic(vc, 1.9 * ft) * 0.6 + noise() * 0.5
+                vc.f1.run(mm, gx(G8000), 0.7)
+                vc.f2.run(vc.f1.bp, gx(G5000), 1.0)
+                env = exp(-t / (0.25 + dec * 0.6)) * (1 - exp(-t / 0.0015))
+                s = vc.f2.hp * 1.8
+            }
+            else -> { // Agogo: zweiteilige Glocke
+                vc.p1 += 1300.0 * ft / sr; vc.p2 += 1300.0 * 2.76 * ft / sr
+                env = exp(-t / (0.15 + dec * 0.35))
+                s = sin(2 * PI * vc.p1) * 0.7 + sin(2 * PI * vc.p2) * 0.3 * exp(-t / 0.05)
+            }
+        }
+        altS = s; altEnv = env
+    }
+
     /** Sechs Rechtecke (808/909-Metall) – leicht geglättet gegen Aliasing. */
     private fun metallic(vc: Voice, mul: Double): Double {
         var s = 0.0
@@ -876,75 +1110,81 @@ class DrumMachine(private val sr: Int) {
                     val t = vc.t.toDouble() / sr
                     var s: Double
                     var env: Double
-                    when (v) {
-                        0 -> { // Bass Drum (909): schneller Tonhöhen-Abfall + Klick
-                            val base = 50.0 * 2.0.pow((tune - 0.5) * 1.2)
-                            val f = base * (1.0 + 3.6 * exp(-t / 0.012) + 0.6 * exp(-t / 0.06))
-                            vc.p1 += f / sr
-                            env = exp(-t / (0.18 + dec * 0.8))
-                            val body = sin(2 * PI * vc.p1)
-                            vc.f1.run(noise(), g3500, 1.2)
-                            val click = vc.f1.bp * exp(-t / 0.0025) * 0.9 + (if (vc.t < sr / 1000) 0.6 else 0.0)
-                            s = tanh(body * 1.25) + click
-                        }
-                        1 -> { // Snare (909): zwei Oszillatoren + Rauschen durch Hoch- und Tiefpass
-                            val ft = 2.0.pow(tune - 0.5)
-                            vc.p1 += 180.0 * ft * (1 + 0.5 * exp(-t / 0.015)) / sr
-                            vc.p2 += 330.0 * ft * (1 + 0.5 * exp(-t / 0.015)) / sr
-                            val tone = (sin(2 * PI * vc.p1) * 0.65 + sin(2 * PI * vc.p2) * 0.4) * exp(-t / 0.045)
-                            vc.f1.run(noise(), g1800, 1.0)
-                            vc.f2.run(vc.f1.hp, g9000, 0.9)
-                            val snappy = vc.f2.lp * exp(-t / (0.06 + dec * 0.22)) * 1.3
-                            env = 1.0
-                            s = tone + snappy
-                            if (t > 0.05 + dec * 0.4 && abs(snappy) < 1e-4) env = 0.0
-                        }
-                        2, 3, 4 -> { // Toms: Sinus mit Tonhöhen-Abfall + gefilterter Anschlag
-                            val baseF = when (v) { 2 -> 95.0; 3 -> 140.0; else -> 200.0 } * 2.0.pow(tune - 0.5)
-                            vc.p1 += baseF * (1 + 0.45 * exp(-t / 0.04)) / sr
-                            env = exp(-t / (0.15 + dec * 0.6))
-                            vc.f1.run(noise(), gTom, 1.5)
-                            s = sin(2 * PI * vc.p1) + vc.f1.bp * exp(-t / 0.006) * 0.4
-                        }
-                        5 -> { // Rimshot: zwei Resonatoren, sehr kurz
-                            vc.p1 += 1700.0 * 2.0.pow(tune - 0.5) / sr
-                            vc.p2 += 480.0 * 2.0.pow(tune - 0.5) / sr
-                            env = exp(-t / (0.008 + dec * 0.02))
-                            vc.f1.run(noise() * exp(-t / 0.001), g2500, 0.6)
-                            s = sin(2 * PI * vc.p1) * 0.6 + sin(2 * PI * vc.p2) * 0.5 + vc.f1.bp * 0.8
-                        }
-                        6 -> { // Clap: Rauschen durch Bandpass, drei schnelle Anschläge + Hall-Fahne
-                            vc.f1.run(noise(), g1150, 0.55)
-                            vc.f2.run(vc.f1.bp, g700, 1.2)
-                            val band = vc.f2.hp
-                            var e = 0.0
-                            for (d in 0..2) { val td = t - d * 0.0105; if (td >= 0) e += exp(-td / 0.0045) }
-                            if (t > 0.03) e += exp(-(t - 0.03) / (0.09 + dec * 0.35)) * 0.75
-                            env = 1.0
-                            s = band * e * 2.4
-                            if (t > 0.12 + dec * 1.2) env = 0.0
-                        }
-                        7, 8 -> { // Hi-Hats: Metall-Rechtecke → Bandpass ~10 kHz → Hochpass
-                            val m = metallic(vc, 1.0 * 2.0.pow((tune - 0.5) * 0.8)) * 0.9 + noise() * 0.12
-                            vc.f1.run(m, g10k, 0.9)
-                            vc.f2.run(vc.f1.bp, g7000, 1.0)
-                            env = if (v == 7) exp(-t / (0.025 + dec * 0.07)) else exp(-t / (0.16 + dec * 0.6))
-                            s = vc.f2.hp * 3.4
-                        }
-                        9 -> { // Crash: Metall + Rauschen, breiter Bandpass, lang
-                            val m = metallic(vc, 1.45 * 2.0.pow(tune - 0.5)) * 0.6 + noise() * 0.5
-                            vc.f1.run(m, g7000, 0.7)
-                            vc.f2.run(vc.f1.bp, g4500, 1.0)
-                            env = exp(-t / (0.7 + dec * 2.0)) * (1 - exp(-t / 0.002))
-                            s = vc.f2.hp * 1.8
-                        }
-                        else -> { // Ride: Metall mit Glocke
-                            val m = metallic(vc, 1.9 * 2.0.pow(tune - 0.5)) * 0.85 + noise() * 0.1
-                            vc.f1.run(m, g8500, 0.8)
-                            vc.f2.run(vc.f1.bp, g5000, 1.0)
-                            vc.p1 += 3200.0 / sr
-                            env = exp(-t / (0.9 + dec * 2.0))
-                            s = vc.f2.hp * 1.8 + sin(2 * PI * vc.p1) * 0.18 * exp(-t / 0.35)
+                    val model = st.drumModel[v]
+                    if (model > 0) {
+                        altVoice(vc, v, model, t, tune, dec)
+                        s = altS; env = altEnv
+                    } else {
+                        when (v) {
+                            0 -> { // Bass Drum (909): schneller Tonhöhen-Abfall + Klick
+                                val base = 50.0 * 2.0.pow((tune - 0.5) * 1.2)
+                                val f = base * (1.0 + 3.6 * exp(-t / 0.012) + 0.6 * exp(-t / 0.06))
+                                vc.p1 += f / sr
+                                env = exp(-t / (0.18 + dec * 0.8))
+                                val body = sin(2 * PI * vc.p1)
+                                vc.f1.run(noise(), g3500, 1.2)
+                                val click = vc.f1.bp * exp(-t / 0.0025) * 0.9 + (if (vc.t < sr / 1000) 0.6 else 0.0)
+                                s = tanh(body * 1.25) + click
+                            }
+                            1 -> { // Snare (909): zwei Oszillatoren + Rauschen durch Hoch- und Tiefpass
+                                val ft = 2.0.pow(tune - 0.5)
+                                vc.p1 += 180.0 * ft * (1 + 0.5 * exp(-t / 0.015)) / sr
+                                vc.p2 += 330.0 * ft * (1 + 0.5 * exp(-t / 0.015)) / sr
+                                val tone = (sin(2 * PI * vc.p1) * 0.65 + sin(2 * PI * vc.p2) * 0.4) * exp(-t / 0.045)
+                                vc.f1.run(noise(), g1800, 1.0)
+                                vc.f2.run(vc.f1.hp, g9000, 0.9)
+                                val snappy = vc.f2.lp * exp(-t / (0.06 + dec * 0.22)) * 1.3
+                                env = 1.0
+                                s = tone + snappy
+                                if (t > 0.05 + dec * 0.4 && abs(snappy) < 1e-4) env = 0.0
+                            }
+                            2, 3, 4 -> { // Toms: Sinus mit Tonhöhen-Abfall + gefilterter Anschlag
+                                val baseF = when (v) { 2 -> 95.0; 3 -> 140.0; else -> 200.0 } * 2.0.pow(tune - 0.5)
+                                vc.p1 += baseF * (1 + 0.45 * exp(-t / 0.04)) / sr
+                                env = exp(-t / (0.15 + dec * 0.6))
+                                vc.f1.run(noise(), gTom, 1.5)
+                                s = sin(2 * PI * vc.p1) + vc.f1.bp * exp(-t / 0.006) * 0.4
+                            }
+                            5 -> { // Rimshot: zwei Resonatoren, sehr kurz
+                                vc.p1 += 1700.0 * 2.0.pow(tune - 0.5) / sr
+                                vc.p2 += 480.0 * 2.0.pow(tune - 0.5) / sr
+                                env = exp(-t / (0.008 + dec * 0.02))
+                                vc.f1.run(noise() * exp(-t / 0.001), g2500, 0.6)
+                                s = sin(2 * PI * vc.p1) * 0.6 + sin(2 * PI * vc.p2) * 0.5 + vc.f1.bp * 0.8
+                            }
+                            6 -> { // Clap: Rauschen durch Bandpass, drei schnelle Anschläge + Hall-Fahne
+                                vc.f1.run(noise(), g1150, 0.55)
+                                vc.f2.run(vc.f1.bp, g700, 1.2)
+                                val band = vc.f2.hp
+                                var e = 0.0
+                                for (d in 0..2) { val td = t - d * 0.0105; if (td >= 0) e += exp(-td / 0.0045) }
+                                if (t > 0.03) e += exp(-(t - 0.03) / (0.09 + dec * 0.35)) * 0.75
+                                env = 1.0
+                                s = band * e * 2.4
+                                if (t > 0.12 + dec * 1.2) env = 0.0
+                            }
+                            7, 8 -> { // Hi-Hats: Metall-Rechtecke → Bandpass ~10 kHz → Hochpass
+                                val m = metallic(vc, 1.0 * 2.0.pow((tune - 0.5) * 0.8)) * 0.9 + noise() * 0.12
+                                vc.f1.run(m, g10k, 0.9)
+                                vc.f2.run(vc.f1.bp, g7000, 1.0)
+                                env = if (v == 7) exp(-t / (0.025 + dec * 0.07)) else exp(-t / (0.16 + dec * 0.6))
+                                s = vc.f2.hp * 3.4
+                            }
+                            9 -> { // Crash: Metall + Rauschen, breiter Bandpass, lang
+                                val m = metallic(vc, 1.45 * 2.0.pow(tune - 0.5)) * 0.6 + noise() * 0.5
+                                vc.f1.run(m, g7000, 0.7)
+                                vc.f2.run(vc.f1.bp, g4500, 1.0)
+                                env = exp(-t / (0.7 + dec * 2.0)) * (1 - exp(-t / 0.002))
+                                s = vc.f2.hp * 1.8
+                            }
+                            else -> { // Ride: Metall mit Glocke
+                                val m = metallic(vc, 1.9 * 2.0.pow(tune - 0.5)) * 0.85 + noise() * 0.1
+                                vc.f1.run(m, g8500, 0.8)
+                                vc.f2.run(vc.f1.bp, g5000, 1.0)
+                                vc.p1 += 3200.0 / sr
+                                env = exp(-t / (0.9 + dec * 2.0))
+                                s = vc.f2.hp * 1.8 + sin(2 * PI * vc.p1) * 0.18 * exp(-t / 0.35)
+                            }
                         }
                     }
                     if (vc.fade < 1f) { vc.fade *= 0.997f; if (vc.fade < 0.001f) { vc.active = false; if (pi < 0) break else continue } }

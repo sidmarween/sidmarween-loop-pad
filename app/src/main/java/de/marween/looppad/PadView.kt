@@ -8708,6 +8708,7 @@ class PadView(context: Context) : View(context) {
         ed.onRec = { recPressed() }
         ed.onMidi = { k -> onInstMidi?.invoke(k) }
         ed.onPresets = { k -> onInstPresets?.invoke(k) }
+        ed.onKits = { onInstKits?.invoke(ed.kindNow()) }
         ed.onScale = { onInstScale?.invoke() }
         ed.onChords = { onInstChords?.invoke() }
         ed.onSidechain = { onSidechain?.invoke() }
@@ -9191,6 +9192,8 @@ class PadView(context: Context) : View(context) {
     var onInstMidi: ((Int) -> Unit)? = null
     /** Preset-Bibliothek für ACID (1) / DRUM (2). */
     var onInstPresets: ((Int) -> Unit)? = null
+    /** Klang-Kits (2) bzw. 303-Klang (1). */
+    var onInstKits: ((Int) -> Unit)? = null
     private val modeRects = Array(2) { RectF() }
 
     // ---------------------------------------------------------------- Ansicht anpassen (Bereiche verschieben / ausblenden)

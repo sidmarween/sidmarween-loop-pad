@@ -45,12 +45,15 @@ class InstEditor(private val host: View) {
         if (kind == 3) Engine.synthLiveOff(SYN_TAG) else Engine.acidLiveOff()
     }
     val isOpen: Boolean get() = kind != 0
+    fun kindNow(): Int = kind
 
     var onHint: ((String) -> Unit)? = null
     var onMidi: ((Int) -> Unit)? = null
     var onRec: (() -> Unit)? = null
     /** Preset-Auswahl (1 = ACID, 2 = DRUM). */
     var onPresets: ((Int) -> Unit)? = null
+    /** Klang-Kits (Drums) bzw. Klang-Presets (303) öffnen. */
+    var onKits: (() -> Unit)? = null
     /** Tonleiter wählen (Piano-Roll). */
     var onScale: (() -> Unit)? = null
     /** Akkordfolge erzeugen (SYNTH). */
@@ -896,6 +899,7 @@ class InstEditor(private val host: View) {
         return if (mel) listOf(
             Toggle({ if (st.acidOn) "● AN" else "○ AUS" }, { st.acidOn }, { st.acidOn = !st.acidOn }),
             Toggle({ if (st.acidSquare) "⊓ SQUARE" else "⩘ SAW" }, { st.acidSquare }, { st.acidSquare = !st.acidSquare }),
+            Toggle({ "🎛 KLANG" }, { false }, { onKits?.invoke() }),
             Toggle({ "FX-BUS" }, { st.acidFx }, { st.acidFx = !st.acidFx }),
             Toggle({ "👻 ANDERE SPUREN" }, { ghosts }, { ghosts = !ghosts }),
             Toggle({ "SKALA: " + st.scaleLabel() }, { st.scaleType != 0 }, { onScale?.invoke() }),
@@ -905,6 +909,13 @@ class InstEditor(private val host: View) {
             Toggle({ "FX-BUS" }, { st.drumFx }, { st.drumFx = !st.drumFx }),
             Toggle({ "〽 SIDECHAIN" }, { Engine.scOn }, { onSidechain?.invoke() }),
             Toggle({ if (st.drumMute[st.drumSel]) "${st.drumNames[st.drumSel]} STUMM" else "${st.drumNames[st.drumSel]} HÖRBAR" }, { st.drumMute[st.drumSel] }, { st.drumMute[st.drumSel] = !st.drumMute[st.drumSel] }),
+            Toggle({ "${st.drumNames[st.drumSel]} KLANG: " + st.drumModelName(st.drumSel) }, { st.drumModel[st.drumSel] != 0 }, {
+                val v = st.drumSel
+                st.drumModel[v] = (st.drumModel[v] + 1) % st.drumModelNames[v].size
+                Engine.previewDrum(v)
+                onHint?.invoke("${st.drumLong[v]}: Klang „${st.drumModelName(v)}“ (nochmal tippen = nächster)")
+            }),
+            Toggle({ "🎛 KITS" }, { false }, { onKits?.invoke() }),
             Toggle({ "▦ " + (if (st.drumPreset >= 0) st.presetNames[st.drumPreset] else "PRESET") }, { false }, { Engine.pushPatternUndo("DRUM Preset"); st.drumApplyPreset(st.drumPreset + 1) })
         )
     }

@@ -466,6 +466,9 @@ object Engine {
         synth?.queue(-1, false, 0, 0f, tag)
     }
 
+    /** Vorhören eines Drum-Klangs (ohne Aufnahme). */
+    fun previewDrum(v: Int) { drum?.trigger(v, 0, false) }
+
     /** Touchpad/Pads: DRUM-Instrument anschlagen. */
     fun drumHit(v: Int, accent: Boolean) {
         if (recLive()) {

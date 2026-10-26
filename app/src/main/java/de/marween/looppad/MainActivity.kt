@@ -176,6 +176,7 @@ class MainActivity : Activity() {
         pads.onRollIo = { p -> showRollIo(p) }
         pads.onInstMidi = { k -> showInstMidi(k) }
         pads.onInstPresets = { k -> showInstPresets(k) }
+        pads.onInstKits = { k -> if (k == 1) showAcidSounds() else showDrumKits() }
         pads.onInstScale = { showScaleMenu() }
         pads.onInstChords = { showChordProgression() }
         pads.onSidechain = { showSidechain() }
@@ -1869,7 +1870,7 @@ class MainActivity : Activity() {
         val items = listOf("🎲 Zufall (Acid-Banger-Generator)") + genres.map { g ->
             val n = if (isAcid) InstPresets.ACIDS.count { it.genre == g } else InstPresets.DRUMS.count { it.genre == g }
             "$g ($n)"
-        } + listOf("📥 Eigene MIDI-Datei laden …")
+        } + listOf(if (isAcid) "🎛 Klang-Presets (${InstPresets.ACID_SOUNDS.size}) – Töne bleiben" else "🎛 Klang-Kits (${InstPresets.KITS.size}) – Kicks, Claps, Percussion", "📥 Eigene MIDI-Datei laden …")
         ui()
             .setTitle(if (isAcid) "ACID 303 · Presets" else "DRUM 909 · Beats")
             .setItems(items.toTypedArray()) { _, w ->
@@ -1880,6 +1881,7 @@ class MainActivity : Activity() {
                         hint("🎲 Neues Zufalls-Pattern – nochmal für ein anderes")
                     }
                     w == items.size - 1 -> showInstMidi(k)
+                    w == items.size - 2 -> if (isAcid) showAcidSounds() else showDrumKits()
                     else -> {
                         val g = genres[w - 1]
                         if (isAcid) {
@@ -1899,6 +1901,7 @@ class MainActivity : Activity() {
                                     val p = list[i]
                                     Engine.pushPatternUndo("DRUM Preset")
                                     InstPresets.applyDrum(p)
+                                    p.kit?.let { kn -> InstPresets.KITS.firstOrNull { it.name == kn }?.let { InstPresets.applyKit(it) } }
                                     if (p.bpm > 0) {
                                         presetTempo(p.bpm)
                                         if (p.swing > 0f) Engine.swing = p.swing
@@ -1911,6 +1914,27 @@ class MainActivity : Activity() {
             }
             .setNegativeButton("Abbrechen", null)
             .show()
+    }
+
+    /** Klang-Kits für den Drumcomputer (Pattern bleibt). */
+    private fun showDrumKits() {
+        val kits = InstPresets.KITS
+        val labels = kits.map { "${it.genre} · ${it.name}" + (if (it.voices.isEmpty()) "" else "  (" + it.voices.values.map { v -> v.model }.distinct().take(4).joinToString(", ") + ")") }
+        ui().setTitle("🎛 Klang-Kits – Pattern bleibt")
+            .setItems(labels.toTypedArray()) { _, i ->
+                InstPresets.applyKit(kits[i])
+                hint("Kit: ${kits[i].name} – einzelne Klänge änderst du im Editor (KLANG: …)")
+            }.setNegativeButton("Abbrechen", null).show()
+    }
+
+    /** Klang-Presets für die 303 (Töne bleiben). */
+    private fun showAcidSounds() {
+        val list = InstPresets.ACID_SOUNDS
+        ui().setTitle("🎛 303 · Klang – Töne bleiben")
+            .setItems(list.map { it.name }.toTypedArray()) { _, i ->
+                InstPresets.applyAcidSound(list[i])
+                hint("303-Klang: ${list[i].name}")
+            }.setNegativeButton("Abbrechen", null).show()
     }
 
     /** Tempo des Presets übernehmen – nur wenn noch keine Loops laufen (sonst bleibt das Master-Tempo). */
