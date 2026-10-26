@@ -2547,6 +2547,7 @@ object Engine {
         val monBuf = FloatArray(block)
         val djL = FloatArray(block)
         val djR = FloatArray(block)
+        val safety = SafetyLimiter(sampleRate)
         val cue = FloatArray(block)
         val mono = FloatArray(block)
         val stereo = FloatArray(block * 2)
@@ -2881,6 +2882,8 @@ object Engine {
                 mR[i] = (if (djOn) m + djR[i] else m) * vol
             }
             MasterBus.process(mL, mR, block, sampleRate)
+            // Schutz-Limiter: Spitzen (z. B. zwei Decks gleichzeitig) sanft absenken statt hart zu clippen
+            safety.process(mL, mR, block)
             val split = djOn && Dj.splitCue && !quadOn
             val cg = Dj.cueGain
             for (i in 0 until block) {

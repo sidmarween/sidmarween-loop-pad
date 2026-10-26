@@ -1432,14 +1432,14 @@ object Dj {
 
     /** Auto-Gain: alle Tracks auf gleiche Lautheit (Ziel [targetLufs]). */
     @Volatile var autoGain = true
-    @Volatile var targetLufs = -10f
+    @Volatile var targetLufs = -14f
     /** Wellenform nach Frequenzen färben (Bass rot, Mitten grün, Höhen blau). */
     @Volatile var colorWave = true
 
-    /** Verstärkung für eine gemessene Lautheit (begrenzt auf −12 … +9 dB). */
+    /** Verstärkung für eine gemessene Lautheit (begrenzt auf −15 … +6 dB). */
     fun agOf(lufs: Float): Float {
         if (lufs.isNaN() || lufs < -60f) return 1f
-        val db = (targetLufs - lufs).coerceIn(-12f, 9f)
+        val db = (targetLufs - lufs).coerceIn(-15f, 6f)
         return Math.pow(10.0, db / 20.0).toFloat()
     }
 

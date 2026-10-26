@@ -251,7 +251,7 @@ class MainActivity : Activity() {
         Engine.tightTiming = prefs.getBoolean("tightTiming", true)
         Engine.quadOut = prefs.getBoolean("quadOut", false)
         Dj.colorWave = prefs.getBoolean("djColorWave", true)
-        Dj.changeTargetLufs(prefs.getFloat("djTargetLufs", -10f))
+        Dj.changeTargetLufs(prefs.getFloat("djTargetLufs2", -14f))
         dj.onLoad = { k -> showDeckLoad(k) }
         dj.onMenu = { showMainMenu() }
         dj.onTempo = { showTempo() }
@@ -3123,10 +3123,10 @@ class MainActivity : Activity() {
                     return@setItems
                 }
                 if (w0 == agIdx + 1) {
-                    val opts = intArrayOf(-6, -8, -9, -10, -12, -14)
-                    ui().setTitle("Auto-Gain: Ziel-Lautheit").setItems(opts.map { "$it LUFS" + when (it) { -8 -> " (laut, Club)"; -10 -> " (Standard)"; -14 -> " (leise, viel Reserve)"; else -> "" } }.toTypedArray()) { _, i ->
+                    val opts = intArrayOf(-8, -10, -12, -14, -16)
+                    ui().setTitle("Auto-Gain: Ziel-Lautheit").setItems(opts.map { "$it LUFS" + when (it) { -8 -> " (sehr laut, wenig Reserve)"; -14 -> " (Standard, sauberes Mischen)"; -16 -> " (leise, viel Reserve)"; else -> "" } }.toTypedArray()) { _, i ->
                         Dj.changeTargetLufs(opts[i].toFloat())
-                        getSharedPreferences("marvpad", MODE_PRIVATE).edit().putFloat("djTargetLufs", Dj.targetLufs).apply()
+                        getSharedPreferences("marvpad", MODE_PRIVATE).edit().putFloat("djTargetLufs2", Dj.targetLufs).apply()
                     }.show()
                     return@setItems
                 }
