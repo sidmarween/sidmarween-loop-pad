@@ -41,7 +41,74 @@ object TrackDb {
         var barOffset: Int = 0,
         var phraseOff: Int = 0,
         var missing: Boolean = false
-    )
+    ) {
+        /** Genre aus den Datei-Tags (leer = unbekannt); [genreRead] = schon nachgesehen. */
+        var genre: String = ""
+        var genreRead: Boolean = false
+    }
+
+    /**
+     * Smart Crate: füllt sich selbst nach Regeln. Leere/0-Werte = egal.
+     * [keys]: Camelot-Codes wie „8A“; [plays]: 0 = egal, 1 = nie gespielt, 2 = schon gespielt; [newDays]: nur die letzten n Tage hinzugefügt.
+     */
+    class Smart(val name: String, val bpmMin: Float = 0f, val bpmMax: Float = 0f, val enMin: Int = 0, val enMax: Int = 0,
+                val keys: Set<String> = emptySet(), val genre: String = "", val plays: Int = 0, val newDays: Int = 0) {
+        fun matches(t: Track): Boolean {
+            if (bpmMin > 0f && (t.bpm <= 0f || t.bpm < bpmMin)) return false
+            if (bpmMax > 0f && (t.bpm <= 0f || t.bpm > bpmMax)) return false
+            if (enMin > 0 && (t.energy <= 0 || t.energy < enMin)) return false
+            if (enMax > 0 && (t.energy <= 0 || t.energy > enMax)) return false
+            if (keys.isNotEmpty() && (t.key < 0 || Keys.camelot(t.key) !in keys)) return false
+            if (genre.isNotBlank() && !t.genre.lowercase().contains(genre.lowercase().trim())) return false
+            if (plays == 1 && t.plays > 0) return false
+            if (plays == 2 && t.plays == 0) return false
+            if (newDays > 0 && System.currentTimeMillis() - t.added > newDays * 86_400_000L) return false
+            return true
+        }
+
+        fun describe(): String {
+            val p = ArrayList<String>()
+            if (bpmMin > 0f || bpmMax > 0f) p.add("${if (bpmMin > 0f) bpmMin.roundToInt() else "…"}–${if (bpmMax > 0f) bpmMax.roundToInt() else "…"} BPM")
+            if (enMin > 0 || enMax > 0) p.add("Energie ${if (enMin > 0) enMin else 1}–${if (enMax > 0) enMax else 10}")
+            if (keys.isNotEmpty()) p.add(keys.joinToString(" "))
+            if (genre.isNotBlank()) p.add("Genre „$genre“")
+            if (plays == 1) p.add("nie gespielt")
+            if (plays == 2) p.add("schon gespielt")
+            if (newDays > 0) p.add("neu (${newDays} Tage)")
+            return if (p.isEmpty()) "alle Tracks" else p.joinToString(" · ")
+        }
+
+        fun toJson(): JSONObject = JSONObject().apply {
+            put("name", name); put("bpmMin", bpmMin.toDouble()); put("bpmMax", bpmMax.toDouble()); put("enMin", enMin); put("enMax", enMax)
+            put("keys", JSONArray().apply { keys.forEach { put(it) } }); put("genre", genre); put("plays", plays); put("newDays", newDays)
+        }
+
+        companion object {
+            fun of(o: JSONObject) = Smart(o.optString("name"), o.optDouble("bpmMin", 0.0).toFloat(), o.optDouble("bpmMax", 0.0).toFloat(),
+                o.optInt("enMin", 0), o.optInt("enMax", 0),
+                LinkedHashSet<String>().apply { o.optJSONArray("keys")?.let { a -> for (i in 0 until a.length()) add(a.optString(i)) } },
+                o.optString("genre", ""), o.optInt("plays", 0), o.optInt("newDays", 0))
+        }
+    }
+
+    private val smarts = ArrayList<Smart>()
+    @Synchronized fun smartCrates(): List<Smart> = ArrayList(smarts)
+    @Synchronized fun addSmart(sm: Smart) { smarts.removeAll { it.name == sm.name }; smarts.add(sm) }
+    @Synchronized fun deleteSmart(name: String) { smarts.removeAll { it.name == name } }
+
+    /** Genre aus den Tags lesen (schnell, ohne Dekodieren). ID3-Zahlen wie „(13)“ werden verworfen. */
+    fun readGenre(ctx: Context, t: Track) {
+        t.genreRead = true
+        val r = android.media.MediaMetadataRetriever()
+        try {
+            r.setDataSource(ctx, Uri.parse(t.uri))
+            val g = r.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_GENRE)?.trim() ?: ""
+            t.genre = if (g.matches(Regex("^\\(?\\d+\\)?$"))) "" else g.replace(Regex("^\\(\\d+\\)"), "").trim()
+        } catch (ignored: Exception) {
+        } finally {
+            try { r.release() } catch (ignored: Exception) {}
+        }
+    }
 
     class Play(val id: String, val title: String, val at: Long, val bpm: Float, val key: Int)
 
@@ -73,8 +140,11 @@ object TrackDb {
                     o.optInt("plays", 0), o.optLong("last", 0L), o.optLong("added", 0L), o.optBoolean("ok", false),
                     o.optInt("barOff", 0), o.optInt("phraseOff", 0)
                 )
+                t.genre = o.optString("genre", "")
+                t.genreRead = o.optBoolean("gRead", false)
                 tracks.add(t)
             }
+            j.optJSONArray("smart")?.let { a -> for (k in 0 until a.length()) a.optJSONObject(k)?.let { smarts.add(Smart.of(it)) } }
             j.optJSONArray("crates")?.let { c -> for (k in 0 until c.length()) crateNames.add(c.optString(k)) }
             j.optJSONArray("history")?.let { hh ->
                 for (k in 0 until hh.length()) {
@@ -99,11 +169,14 @@ object TrackDb {
                 o.put("crates", JSONArray().apply { t.crates.forEach { put(it) } })
                 o.put("plays", t.plays); o.put("last", t.lastPlayed); o.put("added", t.added); o.put("ok", t.analyzed)
                 o.put("barOff", t.barOffset); o.put("phraseOff", t.phraseOff)
+                if (t.genre.isNotEmpty()) o.put("genre", t.genre)
+                if (t.genreRead) o.put("gRead", true)
                 a.put(o)
             }
             val j = JSONObject()
             j.put("tracks", a)
             j.put("crates", JSONArray().apply { crateNames.forEach { put(it) } })
+            j.put("smart", JSONArray().apply { smarts.forEach { put(it.toJson()) } })
             j.put("history", JSONArray().apply {
                 for (p in history.takeLast(500)) put(JSONObject().apply { put("id", p.id); put("title", p.title); put("at", p.at); put("bpm", p.bpm.toDouble()); put("key", p.key) })
             })
@@ -224,6 +297,7 @@ object TrackDb {
         Dj.analyzePhrase(tmp)
         t.barOffset = tmp.barOffset
         t.phraseOff = tmp.phraseOff
+        if (!t.genreRead) readGenre(ctx, t)
         t.analyzed = true
         t.missing = false
     }

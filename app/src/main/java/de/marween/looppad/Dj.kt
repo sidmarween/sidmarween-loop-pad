@@ -183,6 +183,12 @@ object Dj {
         @Volatile var sweepMode = 0
         @Volatile var sweepBars = 8f
         @Volatile var sweepStart = 0L
+        /** Stems live: Karte (null = noch nicht berechnet), Fortschritt der Analyse (-1 = keine), Regler VOC/MEL/BASS/DRUMS. */
+        @Volatile var stemMask: DeckStems.Mask? = null
+        @Volatile var stemProg = -1f
+        @Volatile var stemGen = 0
+        val stemGain = floatArrayOf(1f, 1f, 1f, 1f)
+        internal val stemLive = DeckStems.Live()
 
         /** Hörbare Tonart: mit Key-Shift und (ohne Keylock) der Tonhöhenänderung durchs Tempo. */
         fun effKey(): Int {
@@ -258,7 +264,19 @@ object Dj {
             }
             val bl = d.bufL
             val br = d.bufR
+            val p0 = d.pos
             renderDeck(d, bl, br, n, w, sr)
+            // Stems live (immer im Signalweg: gleiche Verzögerung für beide Decks)
+            run {
+                val base = d.srcRate.toDouble() / sr
+                val moved = abs(d.pos - p0) / max(1, n)
+                val pf = when {
+                    d.keylock -> Keys.factor(d.keyShift.toDouble())
+                    moved > 1e-4 -> moved / base * Keys.factor(d.keyShift.toDouble())
+                    else -> 1.0
+                }
+                d.stemLive.process(bl, br, n, p0, d.pos, pf, sr, d.stemMask, d.stemGain)
+            }
             // Filter-Sweep im Takt (BUILD hoch / SWEEP zu)
             if (d.sweepMode != 0 && d.bpm > 0f) {
                 val len = sr * 240.0 / max(1f, d.effBpm()) * d.sweepBars
@@ -864,7 +882,9 @@ object Dj {
     private fun alignPhase(d: Deck, w: Long) {
         val mp = Engine.beatPhaseAt(w)
         if (mp < 0) return
-        val dp = beatPhase(d, d.pos)
+        // hörbare Position: Stems-Filter verzögert um DeckStems.LAT Ausgabe-Samples
+        val heard = d.pos - DeckStems.LAT * (d.srcRate.toDouble() / Engine.sampleRate) * d.ratio
+        val dp = beatPhase(d, heard)
         var diff = mp - dp
         if (diff > 0.5) diff -= 1.0
         if (diff < -0.5) diff += 1.0
@@ -1177,9 +1197,36 @@ object Dj {
         d.slipTrack = false
         d.lufs = w.lufs
         d.agFactor = agOf(w.lufs)
+        d.stemMask = null
+        d.stemGen++
+        d.stemProg = -1f
+        for (s in 0..3) d.stemGain[s] = 1f
         d.data = t.data
         analyzePhrase(d)
         detectKeyAsync(d)
+        if (d === decks[0] || d === decks[1]) stemsAsync(d)
+    }
+
+    /** Stem-Karte im Hintergrund berechnen (beim Laden automatisch). */
+    fun stemsAsync(d: Deck) {
+        val gen = ++d.stemGen
+        val data = d.data ?: return
+        val ch = d.ch
+        val len = d.len
+        val rate = d.srcRate
+        d.stemMask = null
+        d.stemProg = 0f
+        Thread {
+            try {
+                val m = DeckStems.analyze(data, ch, len, rate, { gen != d.stemGen }) { p -> if (gen == d.stemGen) d.stemProg = p }
+                if (gen == d.stemGen && m != null) {
+                    d.stemMask = m
+                    d.stemProg = -1f
+                }
+            } catch (t: Throwable) {
+                if (gen == d.stemGen) d.stemProg = -1f
+            }
+        }.start()
     }
 
     // ---------------------------------------------------------------- Auto-Gain
@@ -1391,6 +1438,8 @@ object Dj {
         }
         d.seekTo = newPos
         d.pitch = 0f
+        d.stemMask?.let { d.stemMask = it.scaled(r) }
+        if (d.stemProg >= 0f) stemsAsync(d) // Analyse lief noch auf dem alten Audio
         analyzePhrase(d)
         progress(1f)
     }

@@ -168,12 +168,16 @@ class DjView(context: Context) : View(context) {
     /** Beide Decks gleichzeitig mit je 8 Pads (groß hochkant oder Querformat). */
     private val dual: Boolean get() = padsBig || land
     private var padCount = 8
-    private val MODE_NAMES = arrayOf("CUES", "LOOP", "ROLL", "FX", "SAMPLER")
-    private val MODE_COLS = intArrayOf(Color.rgb(255, 150, 40), Color.rgb(60, 200, 120), Color.rgb(70, 160, 255), Color.rgb(255, 70, 110), Color.rgb(190, 120, 255))
+    private val MODE_NAMES = arrayOf("CUES", "LOOP", "ROLL", "FX", "SAMPLER", "STEMS")
+    private val MODE_COLS = intArrayOf(Color.rgb(255, 150, 40), Color.rgb(60, 200, 120), Color.rgb(70, 160, 255), Color.rgb(255, 70, 110), Color.rgb(190, 120, 255), Color.rgb(40, 210, 200))
+    /** Farben der Stems (VOCALS, MELODIE, BASS, DRUMS). */
+    private val STEM_COLS = intArrayOf(Color.rgb(255, 214, 90), Color.rgb(120, 200, 255), Color.rgb(255, 90, 90), Color.rgb(150, 235, 120))
+    /** Stem-Pad wurde gezogen (Pegel) statt getippt. */
+    private val stemDragged = BooleanArray(16)
     private val ROLLS = floatArrayOf(0.125f, 0.25f, 0.5f, 1f, 2f, 4f, 8f)
     private val tabBar = RectF()
     private val tabDeckR = RectF()
-    private val tabModeR = Array(5) { RectF() }
+    private val tabModeR = Array(6) { RectF() }
     private val tabBigR = RectF()
     private val tabFxStop = RectF()
     private var xyHold = false
@@ -340,8 +344,8 @@ class DjView(context: Context) : View(context) {
         if (showDeckTab) tabDeckR.set(L, y, L + dw, y + tabH) else tabDeckR.setEmpty()
         tabBigR.set(R - bw2, y, R, y + tabH)
         val mx0 = L + dw + (if (showDeckTab) dp(6f) else 0f)
-        val mw = (tabBigR.left - dp(6f) - mx0) / 5f
-        for (i in 0..4) tabModeR[i].set(mx0 + i * mw + dp(1.5f), y, mx0 + (i + 1) * mw - dp(1.5f), y + tabH)
+        val mw = (tabBigR.left - dp(6f) - mx0) / 6f
+        for (i in 0..5) tabModeR[i].set(mx0 + i * mw + dp(1.5f), y, mx0 + (i + 1) * mw - dp(1.5f), y + tabH)
         y += tabH + dp(8f)
         // Pads: 4 Spalten, klein 2 Reihen, groß 4 Reihen (Deck A oben, Deck B unten bzw. alle Sampler)
         val pb = panel.bottom - m
@@ -417,8 +421,8 @@ class DjView(context: Context) : View(context) {
         tabBar.set(cx0, y, cx1, y + tabH)
         tabDeckR.setEmpty()
         tabBigR.setEmpty()
-        val mw = (cx1 - cx0) / 5f
-        for (i in 0..4) tabModeR[i].set(cx0 + i * mw + dp(1.5f), y, cx0 + (i + 1) * mw - dp(1.5f), y + tabH)
+        val mw = (cx1 - cx0) / 6f
+        for (i in 0..5) tabModeR[i].set(cx0 + i * mw + dp(1.5f), y, cx0 + (i + 1) * mw - dp(1.5f), y + tabH)
         var cy = y + tabH + dp(8f)
         val kh = min(dp(52f), (bottom - cy) * 0.2f)
         val kw = (cx1 - cx0) / 4f
@@ -1776,6 +1780,24 @@ class DjView(context: Context) : View(context) {
         val k = if (dual) i / 8 else padDeck
         val sl = if (dual) i % 8 else i
         val dd = Dj.decks[k]
+        if (padMode == 5) {
+            val g = dd.stemGain
+            val busy = dd.stemProg >= 0f
+            return when (sl) {
+                in 0..3 -> {
+                    val pct = (g[sl] * 100).toInt()
+                    PadSpec(DeckStems.NAMES[sl] + if (pct in 1..99) " $pct%" else if (pct == 0) " ✕" else "", g[sl] > 0.02f && dd.loaded(), STEM_COLS[sl], false, k, sl)
+                }
+                4 -> PadSpec("ACAPELLA", g[0] > 0.9f && g[1] < 0.05f && g[2] < 0.05f && g[3] < 0.05f, mc, false, k, sl)
+                5 -> PadSpec("INSTRUMENTAL", g[0] < 0.05f && g[1] > 0.9f && g[2] > 0.9f && g[3] > 0.9f, mc, false, k, sl)
+                6 -> PadSpec("NUR BEAT", g[0] < 0.05f && g[1] < 0.05f && g[2] > 0.9f && g[3] > 0.9f, mc, false, k, sl)
+                else -> PadSpec(when {
+                    busy -> "ANALYSE ${(dd.stemProg * 100).toInt()}%"
+                    dd.loaded() && dd.stemMask == null -> "STEMS BERECHNEN"
+                    else -> "ALLE AN"
+                }, busy, mc, false, k, sl)
+            }
+        }
         return when (padMode) {
             0 -> PadSpec("CUE ${sl + 1}", dd.hot[sl] >= 0, HOT[sl], false, k, sl)
             1 -> when (sl) {
@@ -1822,7 +1844,7 @@ class DjView(context: Context) : View(context) {
             if (padMode == 4) box(tabDeckR, if (samplerPage == 0) "1–8" else "9–12", true, MODE_COLS[4])
             else box(tabDeckR, "DECK ${"AB"[padDeck]}", true, if (padDeck == 0) s.colA else s.colB)
         }
-        for (i in 0..4) box(tabModeR[i], MODE_NAMES[i], padMode == i, MODE_COLS[i])
+        for (i in 0..5) box(tabModeR[i], MODE_NAMES[i], padMode == i, MODE_COLS[i])
         box(tabBigR, if (padsBig) "⌄" else "⌃", padsBig, s.accent)
         // FX-Stopp nur im FX-Modus, wenn etwas läuft
         tabFxStop.setEmpty()
@@ -2005,6 +2027,23 @@ class DjView(context: Context) : View(context) {
                 text.color = alpha(if (dark) Color.rgb(30, 30, 34) else Color.WHITE, 0.7f)
                 c.drawText("● HALTEN", rr.centerX(), rr.bottom - dp(5f), text)
             }
+            if (padMode == 5 && spec.deck >= 0) {
+                val dd = Dj.decks[spec.deck]
+                val v = when {
+                    spec.slot < 4 -> dd.stemGain[spec.slot]
+                    spec.slot == 7 && dd.stemProg >= 0f -> dd.stemProg
+                    else -> -1f
+                }
+                if (v >= 0f) {
+                    // Pegel-/Fortschrittsbalken unten im Pad
+                    tmp.set(rr.left + dp(6f), rr.bottom - dp(8f), rr.right - dp(6f), rr.bottom - dp(5f))
+                    fill.color = Color.argb(70, 0, 0, 0)
+                    c.drawRoundRect(tmp, dp(1.5f), dp(1.5f), fill)
+                    tmp.right = tmp.left + tmp.width() * v.coerceIn(0f, 1f)
+                    fill.color = hotCol
+                    c.drawRoundRect(tmp, dp(1.5f), dp(1.5f), fill)
+                }
+            }
         }
         // Deck-Kennung: groß über jedem 4×2-Block
         if (padsBig && !land && padMode != 4) {
@@ -2116,7 +2155,7 @@ class DjView(context: Context) : View(context) {
                     for (q in padDown.indices) padDown[q] = false
                     onHint?.invoke(if (padMode == 4) (if (samplerPage == 0) "Sampler-Pads 1–8" else "Sampler-Pads 9–12 + Steuerung") else "Pads steuern Deck ${"AB"[padDeck]}")
                 }
-                else -> for (m in 0..4) if (hit(tabModeR[m], x, y, dp(2f))) {
+                else -> for (m in 0..5) if (hit(tabModeR[m], x, y, dp(2f))) {
                     if (padMode != m) {
                         padMode = m
                         for (q in padDown.indices) padDown[q] = false
@@ -2126,6 +2165,7 @@ class DjView(context: Context) : View(context) {
                             1 -> "LOOP: Beat Jump (Weite in der Mitte), SLIP, Loop ½ / an-aus / ×2, Reloop"
                             2 -> "ROLL: halten = Stotter-Loop 1/32 … 2 Takte, loslassen = Track läuft im Takt weiter"
                             3 -> "FX: Echo-Out, Brake, Backspin, Censor (halten), Build/Sweep, Loop/Schlag → Pad"
+                            5 -> "STEMS: Vocals/Melodie/Bass/Drums – tippen = an/aus, hoch/runter ziehen = Pegel. Unten: Acapella, Instrumental, Beat, alle an"
                             else -> "SAMPLER: die Pads der App – leeres Pad antippen = Audio laden"
                         })
                     }
@@ -2236,6 +2276,16 @@ class DjView(context: Context) : View(context) {
                 dd.scratchTarget = (dd.scratchTarget - dx * fpp).coerceIn(0.0, (dd.len - 2).toDouble())
             }
             K.OVERVIEW -> seekOverview(p.idx, x)
+            K.PAD -> if (padMode == 5) {
+                val spec = padSpec(p.idx)
+                if (spec.deck >= 0 && spec.slot < 4) {
+                    if (!stemDragged[p.idx] && abs(y - p.lastY0) > dp(10f)) stemDragged[p.idx] = true
+                    if (stemDragged[p.idx]) {
+                        val g = Dj.decks[spec.deck].stemGain
+                        g[spec.slot] = (g[spec.slot] - dy / dp(140f)).coerceIn(0f, 1f)
+                    }
+                }
+            }
             K.CHIP -> {
                 // über die Reiter wischen: hoch = Pads groß, runter = Regler zurück
                 if (abs(y - p.lastY0) > dp(46f)) {
@@ -2408,6 +2458,10 @@ class DjView(context: Context) : View(context) {
             if (down) onLoad?.invoke(k)
             return
         }
+        if (padMode == 5) {
+            stemPad(i, k, sl, down)
+            return
+        }
         when (padMode) {
             0 -> if (down) hotPress(k, sl)
             1 -> {
@@ -2474,6 +2528,42 @@ class DjView(context: Context) : View(context) {
                 }
             }
         }
+    }
+
+    /** STEMS-Pads: 0–3 an/aus (beim Loslassen, wenn nicht gezogen), 4–7 Voreinstellungen. */
+    private fun stemPad(i: Int, k: Int, sl: Int, down: Boolean) {
+        val dd = Dj.decks[k]
+        val g = dd.stemGain
+        if (sl < 4) {
+            if (down) { stemDragged[i] = false; return }
+            if (stemDragged[i]) return
+            g[sl] = if (g[sl] > 0.5f) 0f else 1f
+            stemHint(dd, k)
+            return
+        }
+        if (!down) return
+        fun set(v: Float, m: Float, b: Float, d: Float) { g[0] = v; g[1] = m; g[2] = b; g[3] = d }
+        val all = g.all { it > 0.99f }
+        when (sl) {
+            4 -> if (g[0] > 0.9f && g[1] < 0.05f && g[2] < 0.05f && g[3] < 0.05f) set(1f, 1f, 1f, 1f) else set(1f, 0f, 0f, 0f)
+            5 -> if (g[0] < 0.05f && g[1] > 0.9f) set(1f, 1f, 1f, 1f) else set(0f, 1f, 1f, 1f)
+            6 -> if (g[0] < 0.05f && g[1] < 0.05f && g[3] > 0.9f) set(1f, 1f, 1f, 1f) else set(0f, 0f, 1f, 1f)
+            else -> {
+                if (dd.stemMask == null && dd.stemProg < 0f) { Dj.stemsAsync(dd); onHint?.invoke("Stems für Deck ${"AB"[k]} werden berechnet …"); return }
+                if (!all) set(1f, 1f, 1f, 1f)
+            }
+        }
+        stemHint(dd, k)
+    }
+
+    private fun stemHint(dd: Dj.Deck, k: Int) {
+        if (dd.stemMask == null) {
+            onHint?.invoke(if (dd.stemProg >= 0f) "Stems Deck ${"AB"[k]}: Analyse läuft (${(dd.stemProg * 100).toInt()} %) – die Regler wirken, sobald sie fertig ist" else "Stems Deck ${"AB"[k]}: noch nicht berechnet – Pad unten rechts")
+            return
+        }
+        val g = dd.stemGain
+        val parts = (0..3).filter { g[it] > 0.02f }.map { DeckStems.NAMES[it] }
+        onHint?.invoke("Deck ${"AB"[k]}: " + if (parts.size == 4) "alle Stems an" else if (parts.isEmpty()) "alle Stems stumm" else parts.joinToString(" + "))
     }
 
     /** FX-Knopf lange gedrückt: nächster Effekt für diesen Kanal. */

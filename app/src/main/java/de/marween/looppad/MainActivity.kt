@@ -3757,6 +3757,129 @@ class MainActivity : Activity() {
     private val CRATE_ALL = ""
     private val CRATE_HISTORY = "\u0001Verlauf"
     private val CRATE_OPEN = "\u0002Nicht analysiert"
+    /** Smart Crates: Kennung beginnt mit diesem Zeichen (z. B. SMART + "peak", "bpm:120", "genre:House", "own:Name"). */
+    private val SMART = "\u0003"
+
+    private fun smartTracks(code: String, all: List<TrackDb.Track>): List<TrackDb.Track> {
+        val c = code.removePrefix(SMART)
+        val now = System.currentTimeMillis()
+        return when {
+            c == "peak" -> all.filter { it.energy >= 8 }
+            c == "warm" -> all.filter { it.energy in 1..4 }
+            c == "mid" -> all.filter { it.energy in 5..7 }
+            c == "new" -> all.filter { now - it.added < 30 * 86_400_000L }
+            c == "never" -> all.filter { it.plays == 0 }
+            c == "hot" -> all.filter { it.plays >= 3 }.sortedByDescending { it.plays }
+            c == "fresh" -> all.filter { it.lastPlayed > 0 && now - it.lastPlayed > 30 * 86_400_000L }
+            c.startsWith("bpm:") -> { val b = c.substring(4).toIntOrNull() ?: 0; all.filter { it.bpm >= b && it.bpm < b + 10 } }
+            c.startsWith("key:") -> { val k = c.substring(4); all.filter { it.key >= 0 && Keys.camelot(it.key) == k } }
+            c.startsWith("genre:") -> { val g = c.substring(6); all.filter { it.genre.equals(g, true) } }
+            c.startsWith("own:") -> { val sm = TrackDb.smartCrates().firstOrNull { it.name == c.substring(4) }; if (sm == null) emptyList() else all.filter { sm.matches(it) } }
+            else -> all
+        }
+    }
+
+    private fun smartLabel(code: String): String {
+        val c = code.removePrefix(SMART)
+        return when {
+            c == "peak" -> "Peak Time"
+            c == "warm" -> "Warm-up"
+            c == "mid" -> "Mittlere Energie"
+            c == "new" -> "Neu"
+            c == "never" -> "Nie gespielt"
+            c == "hot" -> "Oft gespielt"
+            c == "fresh" -> "Lange nicht gespielt"
+            c.startsWith("bpm:") -> c.substring(4) + "er BPM"
+            c.startsWith("key:") -> "Tonart " + c.substring(4)
+            c.startsWith("genre:") -> c.substring(6)
+            c.startsWith("own:") -> c.substring(4)
+            else -> c
+        }
+    }
+
+    /** Smart Crates: automatische (Energie, BPM, Tonart, Genre, Spielhäufigkeit) und eigene mit Regeln. */
+    private fun showSmartCrates(pick: (String) -> Unit) {
+        val all = TrackDb.all().filter { !it.missing }
+        val codes = ArrayList<String>()
+        val labels = ArrayList<String>()
+        fun add(code: String, label: String) {
+            val n = smartTracks(SMART + code, all).size
+            if (n == 0 && !code.startsWith("own:")) return
+            codes.add(SMART + code); labels.add("$label  ($n)")
+        }
+        for (sm in TrackDb.smartCrates()) add("own:" + sm.name, "⚙ ${sm.name} – ${sm.describe()}")
+        add("peak", "⚡ Peak Time – Energie 8–10")
+        add("mid", "〰 Mittlere Energie 5–7")
+        add("warm", "🌅 Warm-up – Energie 1–4")
+        add("new", "🆕 Neu (30 Tage)")
+        add("never", "💤 Nie gespielt")
+        add("hot", "🔥 Oft gespielt (3× und mehr)")
+        add("fresh", "🕸 Lange nicht gespielt (30 Tage)")
+        val bpms = all.filter { it.bpm > 0f }.map { (it.bpm / 10f).toInt() * 10 }.distinct().sorted()
+        for (b in bpms) add("bpm:$b", "🥁 $b–${b + 9} BPM")
+        val genres = all.map { it.genre.trim() }.filter { it.isNotEmpty() }.groupBy { it.lowercase() }.map { it.value.first() }.sortedBy { it.lowercase() }
+        for (g in genres) add("genre:$g", "🏷 $g")
+        val keys = all.filter { it.key >= 0 }.map { it.key }.distinct().sortedWith(compareBy({ Keys.camelotNum(it) }, { if (Keys.isMinor(it)) 0 else 1 }))
+        for (k in keys) add("key:" + Keys.camelot(k), "🎹 ${Keys.camelot(k)} · ${Keys.name(k)}")
+        labels.add("＋ Eigene Smart Crate …")
+        if (TrackDb.smartCrates().isNotEmpty()) labels.add("🗑 Eigene Smart Crate löschen …")
+        ui().setTitle("🧠 Smart Crates").setItems(labels.toTypedArray()) { _, w ->
+            when {
+                w < codes.size -> pick(codes[w])
+                w == codes.size -> editSmartCrate { name -> pick(SMART + "own:" + name) }
+                else -> {
+                    val sms = TrackDb.smartCrates()
+                    ui().setTitle("Löschen").setItems(sms.map { it.name }.toTypedArray()) { _, i -> TrackDb.deleteSmart(sms[i].name); TrackDb.save(this); toast("„${sms[i].name}“ gelöscht") }.show()
+                }
+            }
+        }.setNegativeButton("Abbrechen", null).show()
+    }
+
+    /** Eigene Smart Crate anlegen: BPM, Energie, Tonarten (Camelot), Genre, gespielt/nie gespielt, neu. */
+    private fun editSmartCrate(done: (String) -> Unit) {
+        val dens = resources.displayMetrics.density
+        fun px(v: Float) = (v * dens).toInt()
+        val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(px(18f), px(6f), px(18f), 0) }
+        fun field(h: String, num: Boolean): EditText = EditText(this).apply {
+            hint = h; textSize = 14f; isSingleLine = true
+            if (num) inputType = android.text.InputType.TYPE_CLASS_NUMBER or android.text.InputType.TYPE_NUMBER_FLAG_DECIMAL
+        }
+        fun row(a: View, b: View) {
+            box.addView(LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                addView(a, LinearLayout.LayoutParams(0, -2, 1f)); addView(b, LinearLayout.LayoutParams(0, -2, 1f))
+            })
+        }
+        val name = field("Name (z. B. „Tech House 124–128“)", false)
+        val bMin = field("BPM von", true); val bMax = field("BPM bis", true)
+        val eMin = field("Energie von (1–10)", true); val eMax = field("Energie bis", true)
+        val keys = field("Tonarten, z. B. 8A 9A 8B (leer = alle)", false)
+        val genre = field("Genre enthält (leer = alle)", false)
+        val days = field("nur neu: letzte … Tage (leer = egal)", true)
+        val plays = android.widget.RadioGroup(this).apply { orientation = android.widget.RadioGroup.HORIZONTAL }
+        val pLabels = arrayOf("egal", "nie gespielt", "schon gespielt")
+        for (i in pLabels.indices) plays.addView(android.widget.RadioButton(this).apply { text = pLabels[i]; id = 7100 + i; textSize = 12f })
+        plays.check(7100)
+        box.addView(name)
+        row(bMin, bMax)
+        row(eMin, eMax)
+        box.addView(keys)
+        box.addView(genre)
+        box.addView(days)
+        box.addView(plays)
+        ui().setTitle("＋ Smart Crate").setView(box).setPositiveButton("Anlegen") { _, _ ->
+            val nm = name.text.toString().trim().ifEmpty { "Smart ${TrackDb.smartCrates().size + 1}" }
+            val ks = keys.text.toString().uppercase().split(Regex("[\\s,;]+")).map { it.trim() }.filter { it.matches(Regex("^(1[0-2]|[1-9])[AB]$")) }.toSet()
+            val sm = TrackDb.Smart(nm,
+                bMin.text.toString().replace(',', '.').toFloatOrNull() ?: 0f, bMax.text.toString().replace(',', '.').toFloatOrNull() ?: 0f,
+                eMin.text.toString().toIntOrNull()?.coerceIn(0, 10) ?: 0, eMax.text.toString().toIntOrNull()?.coerceIn(0, 10) ?: 0,
+                ks, genre.text.toString().trim(), plays.checkedRadioButtonId - 7100, days.text.toString().toIntOrNull() ?: 0)
+            TrackDb.addSmart(sm)
+            TrackDb.save(this)
+            toast("Smart Crate „$nm“: ${sm.describe()}")
+            done(nm)
+        }.setNegativeButton("Abbrechen", null).show()
+    }
 
     /** Basis für Vorschläge und Ampel: das andere (laufende) Deck, sonst dieses. */
     private fun colRef(k: Int): Dj.Deck? {
@@ -3842,7 +3965,7 @@ class MainActivity : Activity() {
                 CRATE_ALL -> all
                 CRATE_HISTORY -> TrackDb.history().reversed().mapNotNull { h -> TrackDb.byId(h.id) }.distinct()
                 CRATE_OPEN -> all.filter { !it.analyzed }
-                else -> all.filter { colCrate in it.crates }
+                else -> if (colCrate.startsWith(SMART)) smartTracks(colCrate, all) else all.filter { colCrate in it.crates }
             }.filter { q.isEmpty() || it.title.lowercase().contains(q) }
             rows = if (colSuggest && ref != null) {
                 val en = TrackDb.byId(ref.colId)?.energy ?: 0
@@ -3862,7 +3985,7 @@ class MainActivity : Activity() {
             adapter.notifyDataSetChanged()
             val open = all.count { !it.analyzed }
             sortBtn.text = "⇅ ${SORTS[colSort]}"
-            crateBtn.text = "📁 " + when (colCrate) { CRATE_ALL -> "Alle (${all.size})"; CRATE_HISTORY -> "Verlauf"; CRATE_OPEN -> "Nicht analysiert"; else -> colCrate }
+            crateBtn.text = when (colCrate) { CRATE_ALL -> "📁 Alle (${all.size})"; CRATE_HISTORY -> "📁 Verlauf"; CRATE_OPEN -> "📁 Nicht analysiert"; else -> if (colCrate.startsWith(SMART)) "🧠 " + smartLabel(colCrate) else "📁 $colCrate" }
             sugBtn.text = if (colSuggest) "✨ Vorschläge AN" else "✨ Vorschläge"
             anaBtn.text = if (colBatch) "■ Analyse stoppen" else "⟳ Analysieren ($open)"
             info.text = when {
@@ -3878,14 +4001,15 @@ class MainActivity : Activity() {
         anaBtn = chip("⟳ Analysieren") { if (colBatch) colBatch = false else startBatchAnalysis(); refresh() }
         crateBtn = chip("📁 Alle") {
             val cr = TrackDb.crates()
-            val labels = listOf("Alle Tracks", "🕘 Verlauf", "⟳ Nicht analysiert") + cr.map { "📁 $it" } + listOf("＋ Neue Crate …", "✎ Crates verwalten …")
+            val labels = listOf("Alle Tracks", "🕘 Verlauf", "⟳ Nicht analysiert", "🧠 Smart Crates (sortieren sich selbst) …") + cr.map { "📁 $it" } + listOf("＋ Neue Crate …", "✎ Crates verwalten …")
             ui().setTitle("Crate").setItems(labels.toTypedArray()) { _, w ->
                 when {
                     w == 0 -> colCrate = CRATE_ALL
                     w == 1 -> colCrate = CRATE_HISTORY
                     w == 2 -> colCrate = CRATE_OPEN
-                    w < 3 + cr.size -> colCrate = cr[w - 3]
-                    w == 3 + cr.size -> askName("", "Name der Crate (z. B. „Warm-up“, „Peak Time“)") { n -> TrackDb.addCrate(n.trim()); TrackDb.save(this); colCrate = n.trim(); refresh() }
+                    w == 3 -> { showSmartCrates { code -> colCrate = code; colSuggest = false; refresh() }; return@setItems }
+                    w < 4 + cr.size -> colCrate = cr[w - 4]
+                    w == 4 + cr.size -> askName("", "Name der Crate (z. B. „Warm-up“, „Peak Time“)") { n -> TrackDb.addCrate(n.trim()); TrackDb.save(this); colCrate = n.trim(); refresh() }
                     else -> manageCrates { refresh() }
                 }
                 refresh()
@@ -3912,6 +4036,12 @@ class MainActivity : Activity() {
             true
         }
         refresh()
+        // Genres aus den Tags nachlesen (für Smart Crates) – schnell, im Hintergrund
+        Thread {
+            var n = 0
+            for (t in TrackDb.all()) if (!t.genreRead && !t.missing) { TrackDb.readGenre(this, t); n++ }
+            if (n > 0) { TrackDb.save(this); colRefresh?.invoke() }
+        }.start()
         dlg = ui().setTitle("💿 Sammlung → Deck ${"AB"[k]}").setView(root).setNegativeButton("Schließen", null).create()
         dlg.setOnDismissListener { colRefresh = null }
         dlg.show()
