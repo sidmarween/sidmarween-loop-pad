@@ -180,6 +180,7 @@ class MainActivity : Activity() {
         pads.onInstChords = { showChordProgression() }
         pads.onSidechain = { showSidechain() }
         pads.onSlicerSource = { pickSlicerSource() }
+        pads.onPanelExport = { showPanelExport(it) }
         pads.onTourDone = {
             val pr = getSharedPreferences("marvpad", MODE_PRIVATE)
             pr.edit().putBoolean("tourDone", true).apply()
@@ -6186,6 +6187,91 @@ class MainActivity : Activity() {
         } catch (e: Exception) {
             toast("Kein Dateimanager gefunden")
         }
+    }
+
+    /** ⇪ EXPORT aus Loop Station (0) oder Slicer (1): WAV, Stems oder direkt in die DJ-Sammlung. */
+    private fun showPanelExport(kind: Int) {
+        val bpm = Engine.currentBpm()
+        val bpmTxt = if (bpm > 0f) String.format(Locale.GERMANY, "%.1f BPM", bpm) else "ohne Tempo"
+        val items = ArrayList<Pair<String, () -> Unit>>()
+        if (kind == 0) {
+            val n = PanelBounce.stationPads().size
+            if (n == 0) { toast("Loop Station ist leer – erst eine Spur aufnehmen"); return }
+            items.add("💾 Mix als WAV speichern" to {
+                val d = PanelBounce.stationMix()
+                if (d == null) toast("Nichts zu exportieren") else { exportData = d; exportRate = Engine.sampleRate; pickCreate("MarvPAD_LoopStation", REQ_EXPORT) }
+            })
+            items.add("🎚 Spuren als Stems ($n WAV, gleich lang, ab der Eins)" to {
+                val st = PanelBounce.stationStems()
+                if (st.isEmpty()) toast("Nichts zu exportieren") else exportStems(st.map { it.second }, "LoopStation_" + stamp())
+            })
+            items.add("💿 Mix in die DJ-Sammlung ($bpmTxt, Raster, Tonart)" to {
+                val d = PanelBounce.stationMix()
+                if (d == null) toast("Nichts zu exportieren") else addAudioToCollection("Loop Station " + stamp().replace('_', ' '), d)
+            })
+            if (n > 1) items.add("💿 Jede Spur einzeln in die DJ-Sammlung" to {
+                val st = PanelBounce.stationStems()
+                val base = "Loop Station " + stamp().replace('_', ' ')
+                for ((p, d) in st) addAudioToCollection("$base · Spur ${p - LoopStationPanel.FIRST + 1}", d)
+            })
+        } else {
+            if (Slicer.data == null) { toast("Slicer ist leer – erst eine QUELLE wählen"); return }
+            val pat = Slicer.hasPattern()
+            if (pat) items.add("💾 Slicer-Pattern als WAV speichern" to {
+                val d = PanelBounce.slicerPattern()
+                if (d == null) toast("Kein Pattern aufgenommen") else { exportData = d; exportRate = Engine.sampleRate; pickCreate("MarvPAD_Slicer", REQ_EXPORT) }
+            })
+            items.add("🎚 16 Slices einzeln als WAV (Stems)" to {
+                val sl = PanelBounce.slicerSlices()
+                if (sl.isEmpty()) toast("Keine Slices") else exportStems(sl, "Slicer_" + stamp())
+            })
+            if (pat) items.add("💿 Pattern in die DJ-Sammlung ($bpmTxt, Raster, Tonart)" to {
+                val d = PanelBounce.slicerPattern()
+                if (d == null) toast("Kein Pattern aufgenommen") else addAudioToCollection("Slicer " + stamp().replace('_', ' '), d)
+            })
+            if (!pat) items.add("ℹ Fürs Pattern erst mit ● REC Slices einspielen" to { hint("● REC antippen, Slices spielen – dann ⇪ EXPORT") })
+        }
+        ui().setTitle(if (kind == 0) "⇪ Loop Station exportieren" else "⇪ Slicer exportieren")
+            .setItems(items.map { it.first }.toTypedArray()) { _, i -> items[i].second() }
+            .setNegativeButton("Abbrechen", null).show()
+    }
+
+    /**
+     * Eigenes Audio als Track in die DJ-Sammlung: als WAV im App-Speicher, mit Tempo und Raster aus der App
+     * (beginnt auf der Eins) – Tonart, Lautheit und Energie werden gleich analysiert und gespeichert.
+     */
+    private fun addAudioToCollection(title: String, data: FloatArray) {
+        val rate = Engine.sampleRate
+        val bpm = Engine.currentBpm()
+        hint("💿 Lege „$title“ in die Sammlung …")
+        Thread {
+            try {
+                val dir = java.io.File(filesDir, "eigene").apply { mkdirs() }
+                val safe = title.replace(Regex("[^A-Za-z0-9äöüÄÖÜß ._-]+"), "_").trim()
+                val f = java.io.File(dir, "$safe.wav")
+                f.outputStream().buffered(1 shl 16).use { AudioFiles.writeWav(it, data, rate) }
+                TrackDb.load(this)
+                val (t, _) = TrackDb.add(Uri.fromFile(f), title)
+                t.bpm = bpm
+                t.grid = 0.0
+                t.cue = 0.0
+                t.barOffset = 0
+                t.phraseOff = 0
+                t.seconds = data.size.toDouble() / rate
+                val crate = "Eigene Aufnahmen"
+                TrackDb.addCrate(crate)
+                t.crates.add(crate)
+                val sh = ShortArray(data.size) { (data[it].coerceIn(-1f, 1f) * 32767f).toInt().toShort() }
+                TrackDb.analyzeData(this, t, sh, 1, sh.size, rate, bpm > 0f)
+                TrackDb.save(this)
+                colRefresh?.invoke()
+                runOnUiThread {
+                    hint(String.format(Locale.GERMANY, "💿 „%s“ in der Sammlung (Crate „%s“) · %.1f BPM · %s", title, crate, t.bpm, if (t.key >= 0) Keys.camelot(t.key) else "Tonart ?"))
+                }
+            } catch (e: Throwable) {
+                runOnUiThread { toast("In die Sammlung ging nicht: ${e.message ?: e}") }
+            }
+        }.start()
     }
 
     private fun pickExport(p: Int) {

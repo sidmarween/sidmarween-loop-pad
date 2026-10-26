@@ -25,6 +25,8 @@ class LoopStationPanel(private val host: View) {
     var onHint: ((String) -> Unit)? = null
     /** Erste Mikro-Aufnahme ohne eingemessenes Mikro-Timing: erst einmessen lassen. */
     var onNeedMicCalib: (() -> Unit)? = null
+    /** ⇪ EXPORT: WAV, Stems oder in die DJ-Sammlung. */
+    var onExport: (() -> Unit)? = null
 
     private val d = host.resources.displayMetrics.density
     private fun dp(v: Float) = v * d
@@ -33,7 +35,7 @@ class LoopStationPanel(private val host: View) {
     private val text = Paint(Paint.ANTI_ALIAS_FLAG).apply { textAlign = Paint.Align.CENTER; typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL) }
 
     private val box = RectF()
-    private val bClose = RectF(); private val bAll = RectF(); private val bUndo = RectF()
+    private val bClose = RectF(); private val bAll = RectF(); private val bUndo = RectF(); private val bExp = RectF()
     private val big = Array(TRACKS) { RectF() }
     private val play = Array(TRACKS) { RectF() }
     private val clr = Array(TRACKS) { RectF() }
@@ -58,7 +60,8 @@ class LoopStationPanel(private val host: View) {
         val y = box.top + m
         bClose.set(box.right - m - dp(44f), y, box.right - m, y + bh)
         bUndo.set(bClose.left - dp(6f) - dp(64f), y, bClose.left - dp(6f), y + bh)
-        bAll.set(bUndo.left - dp(6f) - dp(86f), y, bUndo.left - dp(6f), y + bh)
+        bAll.set(bUndo.left - dp(6f) - dp(76f), y, bUndo.left - dp(6f), y + bh)
+        bExp.set(bAll.left - dp(6f) - dp(76f), y, bAll.left - dp(6f), y + bh)
         val top = y + bh + dp(26f)
         val g = dp(8f)
         val cw = (box.width() - 2 * m - (TRACKS - 1) * g) / TRACKS
@@ -97,8 +100,8 @@ class LoopStationPanel(private val host: View) {
         stroke.strokeWidth = dp(2f); stroke.color = acc
         c.drawRoundRect(box, dp(14f), dp(14f), stroke)
         text.textAlign = Paint.Align.LEFT
-        text.textSize = dp(16f); text.color = Color.WHITE
-        c.drawText("🔁 LOOP STATION", box.left + dp(12f), bClose.centerY() + dp(1f), text)
+        text.color = Color.WHITE
+        c.drawText(fitLabel(text, "🔁 LOOP STATION", bExp.left - box.left - dp(18f), dp(16f), dp(9f)), box.left + dp(12f), bClose.centerY() + dp(1f), text)
         // Eingangspegel
         val lv = min(1f, Engine.inputLevel * 3f)
         val mr = RectF(box.left + dp(12f), bClose.bottom + dp(8f), box.right - dp(12f), bClose.bottom + dp(14f))
@@ -112,6 +115,7 @@ class LoopStationPanel(private val host: View) {
         text.textAlign = Paint.Align.CENTER
         btn(c, bAll, if (Engine.seqPlaying) "■ ALLE" else "▶ ALLE", Engine.seqPlaying, acc)
         btn(c, bUndo, "↶ UNDO", false, acc)
+        btn(c, bExp, "⇪ EXPORT", false, acc)
         btn(c, bClose, "✕", false, acc)
         for (t in 0 until TRACKS) drawTrack(c, t)
         host.postInvalidateOnAnimation()
@@ -246,6 +250,7 @@ class LoopStationPanel(private val host: View) {
                 when {
                     bClose.contains(x, y) -> { close(); haptic() }
                     bAll.contains(x, y) -> { if (Engine.seqPlaying) Engine.seqStop() else Engine.seqPlay(); haptic() }
+                    bExp.contains(x, y) -> { haptic(); onExport?.invoke() }
                     bUndo.contains(x, y) -> { val l = Engine.undo(); onHint?.invoke(if (l != null) "↶ $l" else "Nichts zum Rückgängigmachen"); haptic() }
                 }
             }

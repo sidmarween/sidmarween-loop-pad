@@ -5060,6 +5060,9 @@ object Engine {
     }
 
     fun padGain(p: Int): Float = loops.get(p)?.gain ?: 1f
+    /** Ausgabe-Frame, an dem Position 0 des Loops erklingt (für den Export im Takt). */
+    fun loopStart(p: Int): Long = loops.get(p)?.start ?: 0L
+    fun padMuted(p: Int): Boolean = loops.get(p)?.muted ?: false
 
     /** Bricht eine laufende Aufnahme/Overdub ab (Wischgeste) und stellt den Loop wieder her. */
     fun abortTake(p: Int) {

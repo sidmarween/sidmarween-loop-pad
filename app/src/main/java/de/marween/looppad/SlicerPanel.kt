@@ -20,6 +20,8 @@ class SlicerPanel(private val host: View) {
     var onSource: (() -> Unit)? = null
     var onRec: (() -> Unit)? = null
     var onToPads: (() -> Unit)? = null
+    /** ⇪ EXPORT: Pattern/Slices als WAV oder in die DJ-Sammlung. */
+    var onExport: (() -> Unit)? = null
 
     private val d = host.resources.displayMetrics.density
     private fun dp(v: Float) = v * d
@@ -28,7 +30,7 @@ class SlicerPanel(private val host: View) {
     private val text = Paint(Paint.ANTI_ALIAS_FLAG).apply { textAlign = Paint.Align.CENTER; typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL) }
 
     private val box = RectF()
-    private val bClose = RectF(); private val bPlay = RectF(); private val bRec = RectF()
+    private val bClose = RectF(); private val bPlay = RectF(); private val bRec = RectF(); private val bExp = RectF()
     private val bSrc = RectF(); private val bPrev = RectF(); private val bNext = RectF(); private val bLen = RectF()
     private val bChoke = RectF(); private val bClear = RectF(); private val bFx = RectF(); private val bPads = RectF()
     private val wave = RectF()
@@ -50,6 +52,7 @@ class SlicerPanel(private val host: View) {
         bClose.set(box.right - m - dp(42f), y, box.right - m, y + bh)
         bPlay.set(bClose.left - dp(6f) - dp(42f), y, bClose.left - dp(6f), y + bh)
         bRec.set(bPlay.left - dp(6f) - dp(42f), y, bPlay.left - dp(6f), y + bh)
+        bExp.set(bRec.left - dp(6f) - dp(76f), y, bRec.left - dp(6f), y + bh)
         y += bh + dp(8f)
         val row = arrayOf(bSrc, bPrev, bNext, bLen, bChoke, bFx, bClear, bPads)
         val g = dp(5f)
@@ -93,16 +96,18 @@ class SlicerPanel(private val host: View) {
         stroke.strokeWidth = dp(2f); stroke.color = acc
         c.drawRoundRect(box, dp(14f), dp(14f), stroke)
         text.textAlign = Paint.Align.LEFT
-        text.textSize = dp(15f); text.color = Color.WHITE
-        c.drawText("✂ SLICER", box.left + dp(12f), bClose.centerY() - dp(1f), text)
-        text.textSize = dp(9.5f); text.color = Color.argb(180, 255, 255, 255)
+        val tw = bExp.left - box.left - dp(18f)
+        text.color = Color.WHITE
+        c.drawText(fitLabel(text, "✂ SLICER", tw, dp(15f), dp(9f)), box.left + dp(12f), bClose.centerY() - dp(1f), text)
+        text.color = Color.argb(180, 255, 255, 255)
         val sub = if (Slicer.data == null) "Quelle wählen: ein Pad mit Loop/Song" else
             "Pad ${Slicer.srcPad + 1} · Takt ${Slicer.startBar + 1}–${Slicer.startBar + Slicer.bars} von ${Slicer.srcBars()} · 16 Slices"
-        c.drawText(sub, box.left + dp(12f), bClose.centerY() + dp(12f), text)
+        c.drawText(fitLabel(text, sub, tw, dp(9.5f), dp(7f)), box.left + dp(12f), bClose.centerY() + dp(12f), text)
         text.textAlign = Paint.Align.CENTER
         btn(c, bRec, if (Engine.seqRecording) "● REC" else "●", Engine.seqRecording, Color.rgb(225, 40, 50))
         btn(c, bPlay, if (Engine.seqPlaying) "■" else "▶", Engine.seqPlaying, acc)
         btn(c, bClose, "✕", false, acc)
+        btn(c, bExp, "⇪ EXPORT", false, acc)
         btn(c, bSrc, "QUELLE", false, acc)
         btn(c, bPrev, "◀ TAKT", false, acc)
         btn(c, bNext, "TAKT ▶", false, acc)
@@ -217,6 +222,7 @@ class SlicerPanel(private val host: View) {
             bClose.contains(x, y) -> close()
             bPlay.contains(x, y) -> if (Engine.seqPlaying) Engine.seqStop() else Engine.seqPlay()
             bRec.contains(x, y) -> onRec?.invoke()
+            bExp.contains(x, y) -> onExport?.invoke()
             bSrc.contains(x, y) -> onSource?.invoke()
             bPrev.contains(x, y) || bNext.contains(x, y) -> {
                 if (Slicer.data == null) return true

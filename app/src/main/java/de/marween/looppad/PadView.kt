@@ -9106,7 +9106,10 @@ class PadView(context: Context) : View(context) {
         sp.onRec = { recPressed() }
         sp.onSource = { onSlicerSource?.invoke() }
         sp.onToPads = { onSlicerToPads?.invoke() }
+        sp.onExport = { onPanelExport?.invoke(1) }
     }
+    /** Export aus Loop Station (0) bzw. Slicer (1). */
+    var onPanelExport: ((Int) -> Unit)? = null
     var onSlicerSource: (() -> Unit)? = null
     var onSlicerToPads: (() -> Unit)? = null
     fun openSlicer() { closeFocus(); slicer.open(); invalidate() }
@@ -9114,7 +9117,7 @@ class PadView(context: Context) : View(context) {
     fun closeSlicer() { slicer.close(); invalidate() }
 
     /** Loop Station: 4 Spuren mit großem Rec/Dub-Knopf (Pads 13–16). */
-    private val station = LoopStationPanel(this).also { it.onHint = { m -> hint(m) }; it.onNeedMicCalib = { onLessonAction?.invoke("calibAsk") } }
+    private val station = LoopStationPanel(this).also { it.onHint = { m -> hint(m) }; it.onNeedMicCalib = { onLessonAction?.invoke("calibAsk") }; it.onExport = { onPanelExport?.invoke(0) } }
     fun openStation() { closeFocus(); station.open(); invalidate() }
     val stationOpen: Boolean get() = station.isOpen
     fun closeStation() { station.close(); invalidate() }
