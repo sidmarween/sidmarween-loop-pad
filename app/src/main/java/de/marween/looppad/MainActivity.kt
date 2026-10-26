@@ -1141,7 +1141,7 @@ class MainActivity : Activity() {
         actions.add { pickImport() }
         if (has) {
             if (!shot) {
-                labels.add("🎚 Stems trennen: Drums · Bass · Melodie & Gesang auf 3 Pads")
+                labels.add(if (AiStems.ready(this)) "🧠 KI-Stems: Vocals · Drums · Bass · Melodie auf 4 Pads" else "🎚 Stems trennen (Drums · Bass · Melodie – oder 🧠 KI auf 4 Pads)")
                 actions.add { splitStems(p) }
                 labels.add("✂ Slicer: an den Schlägen in 16 Stücke auf 16 Pads zerlegen")
                 actions.add { openSlicerFor(p) }
