@@ -577,8 +577,8 @@ class PadView(context: Context) : View(context) {
         val topH = dp(64f)
         // Logo schrumpft auf schmalen Handys, damit das Display genug Platz für seine Schrift behält
         val aspect = logo.width.toFloat() / logo.height
-        val avail = w - 2 * margin - dp(36f + 6f + 46f + 8f + 12f)
-        val lh = ((avail - dp(122f)) / aspect).coerceIn(dp(28f), dp(44f))
+        val headAvail = w - 2 * margin - dp(36f + 6f + 46f + 8f + 12f)
+        val lh = ((headAvail - dp(122f)) / aspect).coerceIn(dp(28f), dp(44f))
         val lw = aspect * lh
         logoDst.set(margin, by + (topH - lh) / 2f, margin + lw, by + (topH + lh) / 2f)
         val db = dp(36f)
