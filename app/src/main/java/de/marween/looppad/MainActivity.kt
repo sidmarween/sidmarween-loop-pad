@@ -752,7 +752,18 @@ class MainActivity : Activity() {
 
     // ---------------------------------------------------------------- Auto-Beatmatch
 
-    private fun beatKey(name: String?, data: FloatArray) = (name ?: "?").trim() + "|" + data.size
+    /**
+     * Schlüssel für gespeicherte Tempo-Analysen. „v2“: seit dem Entfernen der MP3-Encoder-Verzögerung liegen die Samples
+     * anders – alte Einträge (mit altem Versatz) dürfen nicht mehr greifen. Dazu ein kleiner Inhalts-Fingerabdruck,
+     * damit gleich lange, aber anders dekodierte Dateien nicht verwechselt werden.
+     */
+    private fun beatKey(name: String?, data: FloatArray): String {
+        var h = 0L
+        val step = maxOf(1, data.size / 4096)
+        var i = 0
+        while (i < data.size) { h = h * 31 + (data[i] * 1000f).toInt(); i += step }
+        return "v2|" + (name ?: "?").trim() + "|" + data.size + "|" + java.lang.Long.toHexString(h)
+    }
 
     private fun cachedInfo(key: String): Warp.Info? = try {
         val j = getSharedPreferences("beatmatch", MODE_PRIVATE).getString(key, null)?.let { org.json.JSONObject(it) }
