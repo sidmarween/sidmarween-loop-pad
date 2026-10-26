@@ -788,16 +788,44 @@ class DrumMachine(private val sr: Int) {
         if (v !in 0 until InstState.DV) return
         synchronized(lock) {
             val vc = voices[v]
-            vc.active = true
+            restart(vc, v, (if (accent) 1.35f else 1f) * vel.coerceIn(0.02f, 1f))
             vc.delay = max(0, delay)
-            vc.t = 0
-            vc.acc = (if (accent) 1.35f else 1f) * vel.coerceIn(0.02f, 1f)
-            vc.p1 = 0.0; vc.p2 = 0.0
-            for (k in vc.ph.indices) vc.ph[k] = (noise() + 1.0) * 0.5
-            vc.f1.reset(); vc.f2.reset(); vc.f3.reset()
-            // Closed Hat würgt Open Hat ab (weich, kein Knacks)
-            if (v == 7) voices[8].fade = 0.999f
         }
+    }
+
+    private fun restart(vc: Voice, v: Int, acc: Float) {
+        vc.active = true
+        vc.delay = 0
+        vc.t = 0
+        vc.fade = 1f
+        vc.acc = acc
+        vc.p1 = 0.0; vc.p2 = 0.0
+        for (k in vc.ph.indices) vc.ph[k] = (noise() + 1.0) * 0.5
+        vc.f1.reset(); vc.f2.reset(); vc.f3.reset()
+        // Closed Hat würgt Open Hat ab (weich, kein Knacks)
+        if (v == 7) voices[8].fade = 0.999f
+    }
+
+    // Zwischenschläge (32tel, Vorschläge): erneuter Anschlag derselben Stimme mitten im Block
+    private val pendV = IntArray(32)
+    private val pendAt = IntArray(32)
+    private val pendVel = FloatArray(32)
+    private var pendN = 0
+
+    /** Zusätzlicher Anschlag von [v] nach [delay] Frames – ohne den gerade geplanten Schlag zu ersetzen. */
+    fun triggerExtra(v: Int, delay: Int, vel: Float) {
+        if (v !in 0 until InstState.DV) return
+        synchronized(lock) {
+            if (pendN >= pendV.size) return
+            pendV[pendN] = v; pendAt[pendN] = max(0, delay); pendVel[pendN] = vel.coerceIn(0.02f, 1f); pendN++
+        }
+    }
+
+    /** Frühester ausstehender Zusatzschlag für Stimme [v] innerhalb von [n] Frames (Index) oder −1. */
+    private fun nextPend(v: Int, n: Int, after: Int): Int {
+        var best = -1
+        for (k in 0 until pendN) if (pendV[k] == v && pendAt[k] < n && pendAt[k] >= after && (best < 0 || pendAt[k] < pendAt[best])) best = k
+        return best
     }
 
     /** Sechs Rechtecke (808/909-Metall) – leicht geglättet gegen Aliasing. */
@@ -829,13 +857,21 @@ class DrumMachine(private val sr: Int) {
         synchronized(lock) {
             for (v in 0 until InstState.DV) {
                 val vc = voices[v]
-                if (!vc.active) continue
+                var pi = if (pendN > 0) nextPend(v, n, 0) else -1
+                if (!vc.active && pi < 0) continue
                 if (st.drumMute[v]) { vc.active = false; continue }
                 val tune = st.drumTune[v].toDouble()
                 val dec = st.drumDecay[v].toDouble()
-                val lvl = st.drumLevel[v] * st.drumVolNow() * vc.acc
+                var lvl = st.drumLevel[v] * st.drumVolNow() * vc.acc
                 val gTom = if (v in 2..4) g(when (v) { 2 -> 95.0; 3 -> 140.0; else -> 200.0 } * 2.0.pow(tune - 0.5) * 6) else 0.0
                 for (i in 0 until n) {
+                    if (pi >= 0 && pendAt[pi] == i) {
+                        restart(vc, v, pendVel[pi])
+                        lvl = st.drumLevel[v] * st.drumVolNow() * vc.acc
+                        pendV[pi] = -1
+                        pi = nextPend(v, n, i + 1)
+                    }
+                    if (!vc.active) continue
                     if (vc.delay > 0) { vc.delay--; continue }
                     val t = vc.t.toDouble() / sr
                     var s: Double
@@ -911,13 +947,20 @@ class DrumMachine(private val sr: Int) {
                             s = vc.f2.hp * 1.8 + sin(2 * PI * vc.p1) * 0.18 * exp(-t / 0.35)
                         }
                     }
-                    if (vc.fade < 1f) { vc.fade *= 0.997f; if (vc.fade < 0.001f) { vc.active = false; break } }
+                    if (vc.fade < 1f) { vc.fade *= 0.997f; if (vc.fade < 0.001f) { vc.active = false; if (pi < 0) break else continue } }
                     out[i] += (tanh(s * env * lvl * drive) * norm * 0.8 * vc.fade).toFloat()
                     vc.t++
-                    if (vc.t > sr * 4 || ((env < 1e-4) && vc.t > sr / 20)) { vc.active = false; vc.fade = 1f; break }
+                    if (vc.t > sr * 4 || ((env < 1e-4) && vc.t > sr / 20)) { vc.active = false; vc.fade = 1f; if (pi < 0) break }
                 }
                 if (!vc.active) vc.fade = 1f
             }
+            // Zusatzschläge: verbrauchte/abgelaufene entfernen, übrige in den nächsten Block verschieben
+            var k = 0
+            for (j in 0 until pendN) {
+                if (pendV[j] < 0 || pendAt[j] < n) continue
+                pendV[k] = pendV[j]; pendAt[k] = pendAt[j] - n; pendVel[k] = pendVel[j]; k++
+            }
+            pendN = k
         }
     }
 }

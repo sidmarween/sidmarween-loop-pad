@@ -4912,13 +4912,13 @@ class MainActivity : Activity() {
     private fun showLivePatterns() {
         val prefs = getSharedPreferences("marvpad", MODE_PRIVATE)
         val (box, scroll) = dialogBox()
-        note(box, "Beim Abspielen verändern sich Drums, Bass und Synths leicht: Ghost-Notes auf der Hi-Hat, lebendige Lautstärke, ab und zu ein Nachbarton oder Oktavsprung. Deine Patterns selbst bleiben unverändert.")
+        note(box, "Beim Abspielen verändern sich Drums, Bass und Synths leicht: Jeder Takt bekommt eigene Variationen (Ghost-Notes, offene Hi-Hat, Kick-Synkopen, Ride, Rimshots, Tom-Groove …), dazu verschiedene Fills (Snare-Wirbel, Tom-Lauf, Clap-Stotterer, Stopp, 32tel-Wirbel …). Dezent = wenige und ruhige, Wild = viele gleichzeitig und alle Fill-Arten. Bass und Synths: ab und zu ein Nachbarton oder Oktavsprung. Deine Patterns selbst bleiben unverändert.")
         val rg = android.widget.RadioGroup(this)
         LIVE_NAMES.forEachIndexed { i, n -> rg.addView(android.widget.RadioButton(this).apply { id = 7600 + i; text = n; setTextColor(Color.WHITE) }) }
         rg.check(7600 + liveIdx())
         rg.setOnCheckedChangeListener { _, id -> InstState.liveAmt = LIVE_AMT[id - 7600]; prefs.edit().putFloat("liveAmt", InstState.liveAmt).apply() }
         box.addView(rg)
-        check(box, "🥁 Fills vor jeder Phrase (Snare-Wirbel, Toms) und Crash auf der Eins danach", InstState.liveFills) {
+        check(box, "🥁 Fills: groß vor jeder Phrase, klein alle 4 Takte – mit Crash auf der Eins danach", InstState.liveFills) {
             InstState.liveFills = it; prefs.edit().putBoolean("liveFills", it).apply()
         }
         note(box, "Phrase (alle wie viele Takte ein Fill):", Color.WHITE)

@@ -184,6 +184,10 @@ object Engine {
         return (v * (1f + grooveRand(n, inst * 57 + 13 + salt) * 0.3f * hv)).coerceIn(0.05f, 1f)
     }
 
+    private val liveOut = LiveDrums.Out()
+    private val liveUsed = BooleanArray(InstState.DV)
+    private var liveUsedStep = Long.MIN_VALUE
+
     /** Zufall 0..1, für Schritt [n] und [salt] immer gleich. */
     private fun rnd01(n: Long, salt: Int): Float = grooveRand(n, salt) * 0.5f + 0.5f
 
@@ -270,44 +274,37 @@ object Engine {
             val bar = Math.floorDiv(n, 16L)
             val inBar = Math.floorMod(n, 16L).toInt()
             val ph = max(1, st.livePhrase).toLong()
-            // Fill: letzter Schlag (bei „wild“ letzte zwei) vor einer neuen Phrase
-            val fillFrom = if (la > 0.7f) 8 else 12
-            val inFill = la > 0f && st.liveFills && Math.floorMod(bar, ph) == ph - 1 && inBar >= fillFrom
-            val crash = la > 0f && st.liveFills && bar > 0 && Math.floorMod(bar, ph) == 0L && inBar == 0
-            for (v in 0 until InstState.DV) {
-                var x = st.drumSteps[v][ds]
-                var vel = st.drumVel[v][ds]
-                if (la > 0f) {
-                    if (inFill) {
-                        val k = inBar - fillFrom
-                        val span = 16 - fillFrom
-                        when (v) {
-                            1 -> { // Snare-Wirbel, lauter werdend
-                                val on = inBar >= 14 || Math.floorMod(inBar, 2) == 0 || rnd01(n, 900) < la
-                                x = if (on) 1 else 0
-                                vel = 0.45f + 0.55f * (k + 1f) / span
-                            }
-                            2, 3, 4 -> { // Toms von hoch nach tief
-                                val slot = when (v) { 4 -> 13; 3 -> 14; else -> 15 }
-                                x = if (inBar == slot && rnd01(n, 910 + v) < 0.4f + la * 0.6f) 1 else 0
-                                vel = 0.9f
-                            }
-                            7, 8, 9, 10 -> x = 0 // Becken pausieren im Fill
-                            0 -> if (inBar > 12) x = 0
-                        }
-                    } else {
-                        // Ghost-Notes auf der Hi-Hat, gelegentlich ausgelassene Schläge, lebendige Lautstärke
-                        if (x == 0 && v == 7 && rowUsed(7) && rnd01(n, 920) < la * 0.2f) { x = 1; vel = 0.3f + 0.2f * rnd01(n, 921) }
-                        if (x > 0 && v != 0 && v != 1 && inBar % 4 != 0 && rnd01(n, 930 + v) < la * 0.07f) x = 0
-                        if (x > 0) vel = (vel * (1f + (rnd01(n, 940 + v) - 0.5f) * 0.35f * la)).coerceIn(0.1f, 1f)
-                    }
-                    if (crash && v == 9 && rnd01(n, 950) < 0.4f + la * 0.6f) { x = 2; vel = 0.9f }
+            val o = liveOut
+            for (v in 0 until InstState.DV) { o.x[v] = st.drumSteps[v][ds]; o.vel[v] = st.drumVel[v][ds] }
+            if (la > 0f) {
+                if (inBar == 0 || liveUsedStep != n - 1) for (v in 0 until InstState.DV) liveUsed[v] = rowUsed(v)
+                liveUsedStep = n
+                // Takt-Variationen und Fills (mehrere Arten je Stufe)
+                LiveDrums.apply(n, la, st.liveFills, ph.toInt(), liveUsed, o)
+                if (o.fill < 0) for (v in 0 until InstState.DV) {
+                    // zusätzlich je Schritt: gelegentlich ausgelassene Schläge, lebendige Lautstärke
+                    if (o.x[v] > 0 && v != 0 && v != 1 && inBar % 4 != 0 && rnd01(n, 930 + v) < la * 0.07f) o.x[v] = 0
+                    if (o.x[v] > 0) o.vel[v] = (o.vel[v] * (1f + (rnd01(n, 940 + v) - 0.5f) * 0.35f * la)).coerceIn(0.1f, 1f)
                 }
+                // Crash auf der Eins nach einem Fill (große Phrase sicherer, kleine Fills manchmal)
+                val bigCrash = st.liveFills && bar > 0 && Math.floorMod(bar, ph) == 0L && inBar == 0
+                val smallCrash = st.liveFills && bar > 0 && ph >= 8 && Math.floorMod(bar, 4L) == 0L && inBar == 0 && rnd01(bar, 951) < la * 0.5f
+                if ((bigCrash && rnd01(n, 950) < 0.4f + la * 0.6f) || smallCrash) { o.x[9] = 2; o.vel[9] = if (bigCrash) 0.9f else 0.6f }
+            } else o.exN = 0
+            for (v in 0 until InstState.DV) {
+                val x = o.x[v]
                 if (x > 0 && !st.drumMute[v]) {
                     val fd = base + grooveOff(1, n, stepLen, v)
                     if (v == 0 && scSource == 0) scKick(fd)
-                    d.trigger(v, (fd - w).toInt(), x == 2, grooveVel(1, n, vel, v))
+                    d.trigger(v, (fd - w).toInt(), x == 2, grooveVel(1, n, o.vel[v], v))
                 }
+            }
+            // Zwischenschläge (32tel, Vorschläge)
+            for (i in 0 until o.exN) {
+                val v = o.exV[i]
+                if (st.drumMute[v]) continue
+                val fd = base + grooveOff(1, n, stepLen, v) + (o.exFrac[i] * stepLen).toLong()
+                d.triggerExtra(v, (fd - w).toInt(), grooveVel(1, n, o.exVel[i], v + 40))
             }
         }
         // Slicer-Pattern (Groove wie die Drums)
