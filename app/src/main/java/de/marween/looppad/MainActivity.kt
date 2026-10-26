@@ -224,6 +224,9 @@ class MainActivity : Activity() {
         dj.onTempo = { showTempo() }
         dj.onPadsMode = { switchMode(false) }
         dj.onHint = { hint(it) }
+        dj.onAiStems = { k -> showAiStems(k) }
+        AiStems.auto = prefs.getBoolean("aiAuto", true)
+        Dj.onDeckLoaded = { d -> if (AiStems.auto) AiStems.request(applicationContext, d) }
         dj.onSkinMenu = { showDesigns() }
         dj.onSamplerLoad = { p -> showSamplerLoad(p) }
         dj.onEditSaveLib = { k -> saveDeckToLib(k) }
@@ -2906,10 +2909,13 @@ class MainActivity : Activity() {
         items.add(if (Dj.colorWave) "🌈 Wellenform farbig (Bass rot · Mitten grün · Höhen blau) – antippen = Deck-Farbe" else "〰 Wellenform in Deck-Farbe – antippen = farbig nach Frequenzen")
         val cloudIdx = items.size
         items.add("☁ Aus Dropbox / Google Drive / OneDrive oder per Link laden")
+        val aiIdx = items.size
+        items.add("🧠 KI-Stems (Vocals · Drums · Bass · Melodie) …")
         ui()
             .setTitle("Deck ${"AB"[k]} laden")
             .setItems(items.toTypedArray()) { _, w0 ->
                 if (w0 == cloudIdx) { showCloudImport(CLOUD_DECK + k); return@setItems }
+                if (w0 == aiIdx) { showAiStems(k); return@setItems }
                 if (w0 == agIdx) {
                     Dj.autoGain = !Dj.autoGain
                     getSharedPreferences("marvpad", MODE_PRIVATE).edit().putBoolean("djAutoGain", Dj.autoGain).apply()
@@ -4110,6 +4116,94 @@ class MainActivity : Activity() {
                 try { startActivity(Intent.createChooser(i, "Tracklist teilen")) } catch (e: Exception) { toast("Teilen nicht möglich") }
             } else confirm("Verlauf leeren?", "Die Tracks bleiben in der Sammlung.") { TrackDb.clearHistory(); TrackDb.save(this) }
         }.show()
+    }
+
+    // ================================================================ KI-Stems
+
+    private fun showAiStems(k: Int) {
+        val prefs = getSharedPreferences("marvpad", MODE_PRIVATE)
+        val dd = Dj.decks[k]
+        if (!AiStems.ready(this)) {
+            ui().setTitle("🧠 KI-Stems wie bei Serato").setMessage(
+                "Ein neuronales Netz (Spleeter von Deezer) trennt jeden Track sauber in Vocals, Drums, Bass und Melodie – " +
+                "viel genauer als die schnelle Trennung.\n\n" +
+                "• Einmalig ~80 MB Modelle laden (am besten im WLAN).\n" +
+                "• Danach rechnet die App jeden geladenen Track im Hintergrund (je nach Handy etwa ½–2 Minuten für einen 5-Minuten-Song). " +
+                "Bis dahin wirken die STEMS-Pads mit der schnellen Trennung, dann wird automatisch umgeschaltet.\n" +
+                "• Ergebnisse werden gespeichert – derselbe Track hat beim nächsten Laden sofort KI-Stems."
+            ).setPositiveButton("Modelle laden") { _, _ ->
+                progressJob("🧠 KI-Modelle laden", { cancel, prog -> AiStems.download(this, cancel, prog) }) {
+                    AiStems.auto = true
+                    prefs.edit().putBoolean("aiAuto", true).apply()
+                    var n = 0
+                    for (d in Dj.decks) if (d.loaded()) { AiStems.request(this, d); n++ }
+                    toast(if (n > 0) "🧠 KI-Stems bereit – rechne jetzt ${if (n == 2) "beide Decks" else "das Deck"}" else "🧠 KI-Stems bereit – ab jetzt für jeden geladenen Track")
+                }
+            }.setNegativeButton("Später", null).show()
+            return
+        }
+        val items = arrayListOf(
+            if (AiStems.auto) "✅ Automatisch für jeden geladenen Track – antippen = aus" else "⬜ Automatisch beim Laden – antippen = an",
+            when {
+                !dd.loaded() -> "Deck ${"AB"[k]} ist leer"
+                dd.aiProg >= 0f -> "⏳ Deck ${"AB"[k]}: KI rechnet (${(dd.aiProg * 100).toInt()} %)"
+                dd.stemMask?.ai == true -> "✔ Deck ${"AB"[k]} hat KI-Stems"
+                else -> "▶ Jetzt für Deck ${"AB"[k]} rechnen"
+            },
+            "🗑 Modelle löschen (${AiStems.sizeMb(this)} MB)"
+        )
+        AiStems.lastError?.let { items.add("⚠ Letzter Fehler: $it") }
+        ui().setTitle("🧠 KI-Stems (Spleeter)").setItems(items.toTypedArray()) { _, w ->
+            when (w) {
+                0 -> {
+                    AiStems.auto = !AiStems.auto
+                    prefs.edit().putBoolean("aiAuto", AiStems.auto).apply()
+                    if (AiStems.auto) for (d in Dj.decks) if (d.loaded() && d.stemMask?.ai != true && d.aiProg < 0f) AiStems.request(this, d)
+                    hint(if (AiStems.auto) "🧠 KI-Stems: automatisch an" else "🧠 KI-Stems: nur auf Wunsch")
+                }
+                1 -> if (dd.loaded() && dd.aiProg < 0f && dd.stemMask?.ai != true) { AiStems.request(this, dd); hint("🧠 KI-Trennung Deck ${"AB"[k]} läuft …") }
+                2 -> confirm("KI-Modelle löschen?", "Die STEMS-Pads nutzen dann wieder die schnelle Trennung.") { AiStems.deleteModels(this); hint("Modelle gelöscht") }
+                else -> {}
+            }
+        }.setNegativeButton("Schließen", null).show()
+    }
+
+    /** Hintergrund-Auftrag mit Fortschrittsbalken und Abbrechen. */
+    private fun progressJob(title: String, job: (cancel: () -> Boolean, prog: (Float, String) -> Unit) -> Unit, done: () -> Unit) {
+        val pad = (18 * resources.displayMetrics.density).toInt()
+        val bar = android.widget.ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply { max = 1000; isIndeterminate = true }
+        val tv = TextView(this).apply { textSize = 12f; setTextColor(Color.rgb(200, 200, 200)); setPadding(0, pad / 3, 0, 0) }
+        val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(pad, pad / 2, pad, 0); addView(bar); addView(tv) }
+        val cancelled = java.util.concurrent.atomic.AtomicBoolean(false)
+        val dlg = ui().setTitle(title).setView(box).setCancelable(false).setNegativeButton("Abbrechen") { _, _ -> cancelled.set(true) }.create()
+        dlg.show()
+        var lastUi = 0L
+        Thread {
+            try {
+                job({ cancelled.get() }, prog@{ p, n ->
+                    val now = android.os.SystemClock.uptimeMillis()
+                    if (now - lastUi < 120 && p < 1f) return@prog
+                    lastUi = now
+                    runOnUiThread {
+                        if (p < 0f) bar.isIndeterminate = true else { bar.isIndeterminate = false; bar.progress = (p * 1000).toInt() }
+                        tv.text = n + if (p >= 0f) "  ·  ${(p * 100).toInt()} %" else ""
+                    }
+                })
+                runOnUiThread { dlg.dismiss(); done() }
+            } catch (e: CloudImport.Cancelled) {
+                runOnUiThread { dlg.dismiss(); hint("Abgebrochen") }
+            } catch (e: Throwable) {
+                runOnUiThread {
+                    dlg.dismiss()
+                    val m = when (e) {
+                        is java.net.UnknownHostException -> "Keine Internetverbindung"
+                        is java.net.SocketTimeoutException -> "Zeitüberschreitung – Verbindung zu langsam?"
+                        else -> e.message ?: e.toString()
+                    }
+                    ui().setTitle("Fehlgeschlagen").setMessage(m).setPositiveButton("OK", null).show()
+                }
+            }
+        }.start()
     }
 
     // ================================================================ Cloud-Import (Dropbox, Drive, OneDrive, Links)

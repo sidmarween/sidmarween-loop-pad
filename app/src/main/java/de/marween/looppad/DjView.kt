@@ -145,6 +145,8 @@ class DjView(context: Context) : View(context) {
     var onTempo: (() -> Unit)? = null
     var onPadsMode: (() -> Unit)? = null
     var onHint: ((String) -> Unit)? = null
+    /** STEMS-Pad „KI“: KI-Trennung einrichten/starten (Deck). */
+    var onAiStems: ((Int) -> Unit)? = null
     var onSkinMenu: (() -> Unit)? = null
     var onInfo: (() -> Unit)? = null
     private val logoHit = RectF()
@@ -1791,11 +1793,17 @@ class DjView(context: Context) : View(context) {
                 4 -> PadSpec("ACAPELLA", g[0] > 0.9f && g[1] < 0.05f && g[2] < 0.05f && g[3] < 0.05f, mc, false, k, sl)
                 5 -> PadSpec("INSTRUMENTAL", g[0] < 0.05f && g[1] > 0.9f && g[2] > 0.9f && g[3] > 0.9f, mc, false, k, sl)
                 6 -> PadSpec("NUR BEAT", g[0] < 0.05f && g[1] < 0.05f && g[2] > 0.9f && g[3] > 0.9f, mc, false, k, sl)
-                else -> PadSpec(when {
-                    busy -> "ANALYSE ${(dd.stemProg * 100).toInt()}%"
-                    dd.loaded() && dd.stemMask == null -> "STEMS BERECHNEN"
-                    else -> "ALLE AN"
-                }, busy, mc, false, k, sl)
+                else -> {
+                    val ai = dd.stemMask?.ai == true
+                    PadSpec(when {
+                        dd.aiProg >= 0f -> "🧠 KI ${(dd.aiProg * 100).toInt()}%"
+                        busy -> "ANALYSE ${(dd.stemProg * 100).toInt()}%"
+                        dd.loaded() && dd.stemMask == null -> "STEMS BERECHNEN"
+                        ai -> "ALLE AN · KI"
+                        dd.loaded() -> "ALLE AN · 🧠?"
+                        else -> "ALLE AN"
+                    }, busy || dd.aiProg >= 0f, mc, false, k, sl)
+                }
             }
         }
         return when (padMode) {
@@ -2031,6 +2039,7 @@ class DjView(context: Context) : View(context) {
                 val dd = Dj.decks[spec.deck]
                 val v = when {
                     spec.slot < 4 -> dd.stemGain[spec.slot]
+                    spec.slot == 7 && dd.aiProg >= 0f -> dd.aiProg
                     spec.slot == 7 && dd.stemProg >= 0f -> dd.stemProg
                     else -> -1f
                 }
@@ -2165,7 +2174,7 @@ class DjView(context: Context) : View(context) {
                             1 -> "LOOP: Beat Jump (Weite in der Mitte), SLIP, Loop ½ / an-aus / ×2, Reloop"
                             2 -> "ROLL: halten = Stotter-Loop 1/32 … 2 Takte, loslassen = Track läuft im Takt weiter"
                             3 -> "FX: Echo-Out, Brake, Backspin, Censor (halten), Build/Sweep, Loop/Schlag → Pad"
-                            5 -> "STEMS: Vocals/Melodie/Bass/Drums – tippen = an/aus, hoch/runter ziehen = Pegel. Unten: Acapella, Instrumental, Beat, alle an"
+                            5 -> "STEMS: Vocals/Melodie/Bass/Drums – tippen = an/aus, ziehen = Pegel. Unten: Acapella, Instrumental, Beat · „ALLE AN“ bei allen an = 🧠 KI-Trennung"
                             else -> "SAMPLER: die Pads der App – leeres Pad antippen = Audio laden"
                         })
                     }
@@ -2549,7 +2558,9 @@ class DjView(context: Context) : View(context) {
             5 -> if (g[0] < 0.05f && g[1] > 0.9f) set(1f, 1f, 1f, 1f) else set(0f, 1f, 1f, 1f)
             6 -> if (g[0] < 0.05f && g[1] < 0.05f && g[3] > 0.9f) set(1f, 1f, 1f, 1f) else set(0f, 0f, 1f, 1f)
             else -> {
-                if (dd.stemMask == null && dd.stemProg < 0f) { Dj.stemsAsync(dd); onHint?.invoke("Stems für Deck ${"AB"[k]} werden berechnet …"); return }
+                if (dd.stemMask == null && dd.stemProg < 0f && dd.aiProg < 0f) { Dj.stemsAsync(dd); onHint?.invoke("Stems für Deck ${"AB"[k]} werden berechnet …"); return }
+                // alle schon an (oder KI noch nicht da): KI-Menü
+                if (all) { onAiStems?.invoke(k); return }
                 if (!all) set(1f, 1f, 1f, 1f)
             }
         }
@@ -2557,13 +2568,18 @@ class DjView(context: Context) : View(context) {
     }
 
     private fun stemHint(dd: Dj.Deck, k: Int) {
+        if (dd.aiProg >= 0f && dd.stemMask == null) {
+            onHint?.invoke("🧠 KI-Trennung Deck ${"AB"[k]}: ${(dd.aiProg * 100).toInt()} % – die Regler wirken, sobald sie fertig ist")
+            return
+        }
         if (dd.stemMask == null) {
             onHint?.invoke(if (dd.stemProg >= 0f) "Stems Deck ${"AB"[k]}: Analyse läuft (${(dd.stemProg * 100).toInt()} %) – die Regler wirken, sobald sie fertig ist" else "Stems Deck ${"AB"[k]}: noch nicht berechnet – Pad unten rechts")
             return
         }
         val g = dd.stemGain
         val parts = (0..3).filter { g[it] > 0.02f }.map { DeckStems.NAMES[it] }
-        onHint?.invoke("Deck ${"AB"[k]}: " + if (parts.size == 4) "alle Stems an" else if (parts.isEmpty()) "alle Stems stumm" else parts.joinToString(" + "))
+        val mode = if (dd.stemMask?.ai == true) " (🧠 KI)" else if (dd.aiProg >= 0f) " (schnell · KI rechnet ${(dd.aiProg * 100).toInt()} %)" else " (schnell)"
+        onHint?.invoke("Deck ${"AB"[k]}: " + (if (parts.size == 4) "alle Stems an" else if (parts.isEmpty()) "alle Stems stumm" else parts.joinToString(" + ")) + mode)
     }
 
     /** FX-Knopf lange gedrückt: nächster Effekt für diesen Kanal. */
