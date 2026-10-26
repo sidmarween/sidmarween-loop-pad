@@ -534,7 +534,7 @@ class PadView(context: Context) : View(context) {
             }
         }
         insetTop = top.toFloat()
-        insetBottom = bottom.toFloat()
+        insetBottom = safeBottom(insets, bottom).toFloat()
         layoutPads()
         return insets
     }
@@ -542,6 +542,24 @@ class PadView(context: Context) : View(context) {
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
         super.onSizeChanged(w, h, oldw, oldh)
         layoutPads()
+    }
+
+    /**
+     * Abstand unten: nicht nur die Navigationsleiste, auch der Wisch-Bereich der Android-Gesten (Home/Zurück)
+     * plus etwas Luft – sonst landen Knöpfe ganz unten im Gestenbereich und lösen aus Versehen aus.
+     */
+    private fun safeBottom(insets: WindowInsets, bars: Int): Int {
+        var b = bars
+        try {
+            if (Build.VERSION.SDK_INT >= 30) {
+                b = max(b, insets.getInsets(WindowInsets.Type.mandatorySystemGestures()).bottom)
+                b = max(b, insets.getInsets(WindowInsets.Type.systemGestures()).bottom)
+            } else if (Build.VERSION.SDK_INT >= 29) {
+                @Suppress("DEPRECATION")
+                b = max(b, insets.mandatorySystemGestureInsets.bottom)
+            }
+        } catch (ignored: Throwable) {}
+        return b + dp(10f).toInt()
     }
 
     private fun layoutPads() {

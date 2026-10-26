@@ -247,12 +247,14 @@ class DjView(context: Context) : View(context) {
         if (android.os.Build.VERSION.SDK_INT >= 30) {
             val i = insets.getInsets(WindowInsets.Type.systemBars() or WindowInsets.Type.displayCutout())
             insetTop = i.top.toFloat()
-            insetBottom = i.bottom.toFloat()
+            // auch den Wisch-Bereich der Android-Gesten freihalten (+ etwas Luft)
+            val g = max(insets.getInsets(WindowInsets.Type.mandatorySystemGestures()).bottom, insets.getInsets(WindowInsets.Type.systemGestures()).bottom)
+            insetBottom = max(i.bottom, g).toFloat() + dp(10f)
         } else {
             @Suppress("DEPRECATION")
             insetTop = insets.systemWindowInsetTop.toFloat()
             @Suppress("DEPRECATION")
-            insetBottom = insets.systemWindowInsetBottom.toFloat()
+            insetBottom = insets.systemWindowInsetBottom.toFloat() + dp(16f)
         }
         layoutAll()
         return insets
