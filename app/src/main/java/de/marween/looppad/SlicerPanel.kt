@@ -32,7 +32,28 @@ class SlicerPanel(private val host: View) {
     private val box = RectF()
     private val bClose = RectF(); private val bPlay = RectF(); private val bRec = RectF(); private val bExp = RectF()
     private val bSrc = RectF(); private val bPrev = RectF(); private val bNext = RectF(); private val bLen = RectF()
-    private val bChoke = RectF(); private val bClear = RectF(); private val bFx = RectF(); private val bPads = RectF()
+    private val bChoke = RectF(); private val bClear = RectF(); private val bFx = RectF(); private val bPads = RectF(); private val bGrid = RectF()
+
+    // ---- Raster-Ansicht des Slicer-Patterns
+    /** true = Raster (Schritte je Slice) statt der 16 großen Pads. */
+    var gridMode = false
+        private set
+    private val gridArea = RectF()
+    private val labelW get() = dp(34f)
+    private var gridPage = 0
+    private val pageBtns = Array(4) { RectF() }
+    private var cellW = 0f
+    private var cellH = 0f
+    private var gridTop = 0f
+    private var gPtr = -1
+    private var gSlice = -1
+    private var gStep = -1
+    private var gDownY = 0f
+    private var gStartVel = 1f
+    private var gWasOn = false
+    private var gDragged = false
+    private var labelDown = -1
+    private var labelDownAt = 0L
     private val wave = RectF()
     private val pads = Array(Slicer.N) { RectF() }
     private val flash = FloatArray(Slicer.N)
@@ -54,13 +75,29 @@ class SlicerPanel(private val host: View) {
         bRec.set(bPlay.left - dp(6f) - dp(42f), y, bPlay.left - dp(6f), y + bh)
         bExp.set(bRec.left - dp(6f) - dp(76f), y, bRec.left - dp(6f), y + bh)
         y += bh + dp(8f)
-        val row = arrayOf(bSrc, bPrev, bNext, bLen, bChoke, bFx, bClear, bPads)
+        val row = arrayOf(bSrc, bPrev, bNext, bLen, bChoke, bFx, bGrid, bClear, bPads)
         val g = dp(5f)
         val w = (box.width() - 2 * m - (row.size - 1) * g) / row.size
         for (i in row.indices) row[i].set(box.left + m + i * (w + g), y, box.left + m + i * (w + g) + w, y + dp(32f))
         y += dp(40f)
         wave.set(box.left + m, y, box.right - m, y + max(dp(64f), box.height() * 0.13f))
         y = wave.bottom + dp(10f)
+        // Raster: Seiten-Knöpfe (bei mehr als 16 Schritten), darunter 16 Zeilen
+        val pages = (Slicer.len + 15) / 16
+        var gy = y
+        if (pages > 1) {
+            val pw = (box.width() - 2 * m - labelW - 3 * dp(6f)) / 4f
+            for (k in 0 until 4) {
+                if (k < pages) pageBtns[k].set(box.left + m + labelW + k * (pw + dp(6f)), gy, box.left + m + labelW + k * (pw + dp(6f)) + pw, gy + dp(26f))
+                else pageBtns[k].setEmpty()
+            }
+            gy += dp(32f)
+        } else for (r in pageBtns) r.setEmpty()
+        if (gridPage >= pages) gridPage = 0
+        gridArea.set(box.left + m, gy, box.right - m, box.bottom - m)
+        gridTop = gy
+        cellH = gridArea.height() / Slicer.N
+        cellW = (gridArea.width() - labelW) / 16f
         val pg = dp(8f)
         val side = min((box.width() - 2 * m - 3 * pg) / 4f, (box.bottom - m - y - 3 * pg) / 4f)
         val gx = box.centerX() - (4 * side + 3 * pg) / 2f
@@ -114,9 +151,15 @@ class SlicerPanel(private val host: View) {
         btn(c, bLen, "${Slicer.bars} TAKT" + if (Slicer.bars > 1) "E" else "", false, acc)
         btn(c, bChoke, if (Slicer.choke) "CHOKE" else "POLY", Slicer.choke, acc)
         btn(c, bFx, "FX-BUS", Slicer.fx, acc)
+        btn(c, bGrid, if (gridMode) "▦ PADS" else "▤ RASTER", gridMode, acc)
         btn(c, bClear, "LEEREN", false, acc)
         btn(c, bPads, "→ PADS", false, acc)
         drawWave(c, acc)
+        if (gridMode) {
+            drawGrid(c, acc, now)
+            host.postInvalidateOnAnimation()
+            return
+        }
         // Pads
         val lh = Slicer.lastHit
         if (lh in 0 until Slicer.N && now - Slicer.lastHitAt < 30_000_000L) flash[lh] = 1f
@@ -147,6 +190,124 @@ class SlicerPanel(private val host: View) {
             c.drawText("Zuerst QUELLE wählen", box.centerX(), wave.centerY(), text)
         }
         host.postInvalidateOnAnimation()
+    }
+
+    /** Raster: Zeile = Slice (Farbe wie das Pad), Spalte = 1/16-Schritt; Helligkeit = Lautstärke. */
+    private fun drawGrid(c: Canvas, acc: Int, now: Long) {
+        val len = Slicer.len
+        val pages = (len + 15) / 16
+        for (k in 0 until pages) btn(c, pageBtns[k], "TAKT ${k + 1}", k == gridPage, acc)
+        val cur = Engine.instCurrentStep(len)
+        val lh = Slicer.lastHit
+        val recent = now - Slicer.lastHitAt < 120_000_000L
+        for (sl in 0 until Slicer.N) {
+            // unten = Slice 1 (wie bei den Pads unten links)
+            val row = Slicer.N - 1 - sl
+            val y0 = gridTop + row * cellH
+            val col = COLS[sl]
+            // Beschriftung (antippen = vorhören, lange halten = Zeile leeren)
+            val lr = RectF(gridArea.left, y0 + 1f, gridArea.left + labelW - dp(4f), y0 + cellH - 1f)
+            fill.color = if (recent && lh == sl) col else blend(Color.rgb(30, 32, 40), col, 0.35f)
+            c.drawRoundRect(lr, dp(4f), dp(4f), fill)
+            text.color = if (recent && lh == sl) Color.BLACK else Color.WHITE
+            text.textSize = min(dp(11f), cellH * 0.6f)
+            c.drawText("${sl + 1}", lr.centerX(), lr.centerY() + text.textSize * 0.36f, text)
+            for (k in 0 until 16) {
+                val step = gridPage * 16 + k
+                if (step >= len) break
+                val x0 = gridArea.left + labelW + k * cellW
+                val r = RectF(x0 + 1.5f, y0 + 1.5f, x0 + cellW - 1.5f, y0 + cellH - 1.5f)
+                val v = Slicer.steps[sl][step]
+                val beat = k % 4 == 0
+                fill.color = when {
+                    v > 0f -> blend(Color.rgb(40, 42, 50), col, 0.35f + 0.65f * v)
+                    beat -> Color.rgb(38, 40, 48)
+                    else -> Color.rgb(28, 30, 37)
+                }
+                c.drawRoundRect(r, dp(3f), dp(3f), fill)
+                if (step == cur) {
+                    stroke.strokeWidth = dp(1.5f); stroke.color = Color.WHITE
+                    c.drawRoundRect(r, dp(3f), dp(3f), stroke)
+                }
+            }
+        }
+        // Takt-Trennlinien (alle 4 Schritte)
+        stroke.strokeWidth = dp(1f); stroke.color = Color.argb(70, 255, 255, 255)
+        for (k in 1 until 4) {
+            val x = gridArea.left + labelW + k * 4 * cellW
+            c.drawLine(x, gridTop, x, gridArea.bottom, stroke)
+        }
+    }
+
+    /** Raster berührt: Zelle (Slice, Schritt) oder −1. */
+    private fun cellAt(x: Float, y: Float): Pair<Int, Int>? {
+        if (!gridArea.contains(x, y) || x < gridArea.left + labelW) return null
+        val row = ((y - gridTop) / cellH).toInt().coerceIn(0, Slicer.N - 1)
+        val k = ((x - gridArea.left - labelW) / cellW).toInt().coerceIn(0, 15)
+        val step = gridPage * 16 + k
+        if (step >= Slicer.len) return null
+        return (Slicer.N - 1 - row) to step
+    }
+
+    private fun gridTouch(e: MotionEvent): Boolean {
+        when (e.actionMasked) {
+            MotionEvent.ACTION_DOWN, MotionEvent.ACTION_POINTER_DOWN -> {
+                val i = e.actionIndex
+                val x = e.getX(i); val y = e.getY(i)
+                for (k in pageBtns.indices) if (pageBtns[k].contains(x, y)) { gridPage = k; haptic(); return true }
+                if (gridArea.contains(x, y) && x < gridArea.left + labelW) {
+                    val row = ((y - gridTop) / cellH).toInt().coerceIn(0, Slicer.N - 1)
+                    val sl = Slicer.N - 1 - row
+                    Slicer.queue(-1, sl, 0.9f)
+                    labelDown = sl; labelDownAt = System.nanoTime()
+                    val tok = labelDownAt
+                    host.postDelayed({
+                        if (labelDown == sl && labelDownAt == tok) {
+                            java.util.Arrays.fill(Slicer.steps[sl], 0f)
+                            labelDown = -1
+                            host.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+                            onHint?.invoke("Slice ${sl + 1}: alle Schläge gelöscht")
+                        }
+                    }, 650L)
+                    haptic()
+                    return true
+                }
+                val cell = cellAt(x, y) ?: return false
+                if (gPtr >= 0) return true
+                gPtr = e.getPointerId(i)
+                gSlice = cell.first; gStep = cell.second
+                gDownY = y
+                gWasOn = Slicer.steps[gSlice][gStep] > 0f
+                gStartVel = if (gWasOn) Slicer.steps[gSlice][gStep] else 1f
+                gDragged = false
+                if (!gWasOn) { Slicer.steps[gSlice][gStep] = 1f; Slicer.queue(-1, gSlice, 1f) }
+                haptic()
+                return true
+            }
+            MotionEvent.ACTION_MOVE -> {
+                val pi = e.findPointerIndex(gPtr)
+                if (pi < 0) return gPtr >= 0
+                val dy = gDownY - e.getY(pi)
+                if (abs(dy) > dp(8f)) gDragged = true
+                if (gDragged) {
+                    // Wischen hoch/runter = Lautstärke
+                    val v = (gStartVel + dy / dp(120f)).coerceIn(0.05f, 1f)
+                    Slicer.steps[gSlice][gStep] = v
+                    onHint?.invoke("Slice ${gSlice + 1} · Schritt ${gStep + 1}: ${(v * 100).toInt()} %")
+                }
+                return true
+            }
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_POINTER_UP, MotionEvent.ACTION_CANCEL -> {
+                labelDown = -1
+                if (gPtr >= 0 && (e.actionMasked == MotionEvent.ACTION_CANCEL || e.getPointerId(e.actionIndex) == gPtr)) {
+                    // kurzer Tipp auf einen gesetzten Schritt löscht ihn
+                    if (gWasOn && !gDragged && e.actionMasked != MotionEvent.ACTION_CANCEL) Slicer.steps[gSlice][gStep] = 0f
+                    gPtr = -1
+                }
+                return gridArea.contains(e.getX(e.actionIndex), e.getY(e.actionIndex))
+            }
+        }
+        return false
     }
 
     private fun blend(a: Int, b: Int, t: Float): Int = Color.rgb(
@@ -194,12 +355,13 @@ class SlicerPanel(private val host: View) {
     private fun haptic() = host.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
 
     fun touch(e: MotionEvent) {
+        if (gridMode && Slicer.data != null && gridTouch(e)) return
         when (e.actionMasked) {
             MotionEvent.ACTION_DOWN, MotionEvent.ACTION_POINTER_DOWN -> {
                 val i = e.actionIndex
                 val x = e.getX(i)
                 val y = e.getY(i)
-                val p = pads.indexOfFirst { it.contains(x, y) }
+                val p = if (gridMode) -1 else pads.indexOfFirst { it.contains(x, y) }
                 if (p >= 0) {
                     if (Slicer.data == null) { onHint?.invoke("Zuerst QUELLE wählen"); return }
                     val tNs = TouchVelocity.eventNanos(e)
@@ -238,6 +400,10 @@ class SlicerPanel(private val host: View) {
             }
             bChoke.contains(x, y) -> { Slicer.choke = !Slicer.choke; onHint?.invoke(if (Slicer.choke) "CHOKE: ein neuer Slice beendet den vorigen" else "POLY: Slices klingen übereinander aus") }
             bFx.contains(x, y) -> Slicer.fx = !Slicer.fx
+            bGrid.contains(x, y) -> {
+                gridMode = !gridMode
+                onHint?.invoke(if (gridMode) "Raster: antippen setzt/löscht einen Schlag · hoch/runter wischen = Lautstärke · Zahl links = vorhören (lange halten = Zeile leeren)" else "Pads")
+            }
             bClear.contains(x, y) -> { Slicer.clearPattern(); onHint?.invoke("Slicer-Pattern geleert") }
             bPads.contains(x, y) -> onToPads?.invoke()
             else -> return false
