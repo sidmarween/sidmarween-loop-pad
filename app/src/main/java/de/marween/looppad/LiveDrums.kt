@@ -85,14 +85,14 @@ object LiveDrums {
         val snare = used[SD] || used[CP]
         cand(0, hats)
         cand(1, hats)
-        cand(2, kick)
+        cand(2, kick && t >= 1)
         cand(3, snare)
-        cand(4, kick)
+        cand(4, kick && t >= 1)
         cand(5, true)
         cand(6, hats && t >= 1)
         cand(7, hats && t >= 1 && pb >= ph / 2)
         cand(8, used[SD] || used[CP])
-        cand(9, kick && t == 2 && pb != 0)
+        cand(9, false) // Kick-Pause: bei Loops im Pad zu störend – nicht mehr automatisch
         cand(10, hats)
         cand(11, t >= 1)
         if (np == 0) return

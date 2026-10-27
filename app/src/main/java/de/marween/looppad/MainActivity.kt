@@ -1915,9 +1915,12 @@ class MainActivity : Activity() {
                                     p.kit?.let { kn -> InstPresets.KITS.firstOrNull { it.name == kn }?.let { InstPresets.applyKit(it) } }
                                     if (p.bpm > 0) {
                                         presetTempo(p.bpm)
-                                        if (p.swing > 0f) Engine.swing = p.swing
+                                        // Swing nur für die Drums dieses Beats – nicht global: sonst laufen danach alle Pads/Patterns
+                                        // „unrund“ gegen gerade Loops, auch nach dem Laden eines geraden Beats
+                                        Engine.swing = 0f
+                                        InstState.grooveSwing[1] = if (p.swing > 0f) p.swing else -1f
                                     }
-                                    hint("DRUM: ${p.name}" + if (p.swing > 0f) " · Swing ${50 + (p.swing * 25).toInt()} %" else "")
+                                    hint("DRUM: ${p.name}" + if (p.swing > 0f) " · Drums mit Swing ${50 + (p.swing * 25).toInt()} %" else "")
                                 }.show()
                         }
                     }
