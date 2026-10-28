@@ -7462,6 +7462,7 @@ class PadView(context: Context) : View(context) {
                 val r = ((y - kbPiano.top) / (kbPiano.height() / rows)).toInt().coerceIn(0, rows - 1)
                 when {
                     r < VISIBLE_PADS -> if (Engine.hasLoop(r)) Engine.toggleMute(r)
+                    r >= Engine.ARR_INST && x > kbPiano.right - kbPiano.width() * 0.38f -> { openInstFromSong(r - Engine.ARR_INST); return true }
                     r >= Engine.ARR_INST -> (r - Engine.ARR_INST).let { i -> InstState.setInstOn(i, !InstState.instOn(i)) }
                 }
                 performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
@@ -7492,6 +7493,55 @@ class PadView(context: Context) : View(context) {
         Engine.setArrCell(cell.first, cell.second, v)
     }
 
+    /** Noten-Vorschau je Instrument und Pattern (wird alle ~0,3 s neu gelesen). */
+    private val notePrev = Array(InstState.INSTS) { arrayOfNulls<FloatArray>(InstState.PATS) }
+    private var notePrevAt = 0L
+
+    /** Pro Schritt: −1 = nichts, sonst 0..1 (Tonhöhe bzw. Drum-Art). */
+    private fun cellNotes(inst: Int, p: Int): FloatArray? {
+        val now = System.nanoTime()
+        if (now - notePrevAt > 300_000_000L) {
+            notePrevAt = now
+            for (i in 0 until InstState.INSTS) for (q in 0 until InstState.PATS) {
+                val pat = InstState.patFor(i, q)
+                notePrev[i][q] = if (pat == null || !pat.hasNotes(i)) null else FloatArray(pat.len) { k ->
+                    when (i) {
+                        1 -> { var v = -1f; for (d in pat.ints.indices.reversed()) if (pat.ints[d][k] > 0) v = d / 10f; v }
+                        else -> if (pat.bools[0][k]) ((pat.ints[0][k] + 12).coerceIn(0, 48) / 48f) else -1f
+                    }
+                }
+            }
+        }
+        return notePrev.getOrNull(inst)?.getOrNull(p)
+    }
+
+    private fun drawCellNotes(canvas: Canvas, inst: Int, p: Int, bar: Int, r: RectF) {
+        val n = cellNotes(inst, p) ?: return
+        if (r.width() < dp(8f) || r.height() < dp(6f)) return
+        val bars = max(1, n.size / 16)
+        val off = (bar % bars) * 16
+        val sw = r.width() / 16f
+        fillPaint.color = Color.argb(200, 20, 20, 26)
+        for (k in 0 until 16) {
+            val v = n.getOrNull(off + k) ?: break
+            if (v < 0f) continue
+            val x = r.left + k * sw
+            val y = r.bottom - dp(1.5f) - v * (r.height() - dp(4f))
+            canvas.drawRect(x + sw * 0.15f, y - dp(1.4f), x + sw * 0.85f, y, fillPaint)
+        }
+    }
+
+    /** Instrument-Editor direkt aus der Song-Matrix öffnen (Spur [inst]: 0 ACID, 1 DRUM, 2.. SYNTH). */
+    private fun openInstFromSong(inst: Int) {
+        when (inst) {
+            0 -> instEd.open(1)
+            1 -> instEd.open(2)
+            else -> { InstState.synCur = (inst - 2).coerceIn(0, InstState.SYN_TRACKS - 1); instEd.open(3) }
+        }
+        hint("✎ ${InstState.instNames[inst]} · Pattern ${InstState.patLetter(InstState.curPat[inst])} – oben A–D wechselt das Pattern, ✕ zurück zum Song")
+        invalidate()
+    }
+
     private fun drawSong(canvas: Canvas, cols: IntArray) {
         smallBtn(canvas, mxMode, if (autoView) "▦ SPUREN" else "〰 AUTOM.", autoView, cols)
         if (autoView) {
@@ -7520,10 +7570,20 @@ class PadView(context: Context) : View(context) {
             fillPaint.color = if (on) blend(cols[0], cols[2], 0.45f) else blend(cols[0], cols[1], 0.08f)
             canvas.drawRoundRect(tmpRect, dp(4f), dp(4f), fillPaint)
             textPaint.textAlign = Paint.Align.LEFT
-            textPaint.textSize = min(dp(10.5f), rowH * 0.6f)
             textPaint.color = if (on) Color.WHITE else alpha(cols[1], 0.75f)
-            canvas.drawText(songRowName(r), tmpRect.left + dp(5f), tmpRect.centerY() + textPaint.textSize * 0.36f, textPaint)
+            val nameW = tmpRect.width() * (if (r >= Engine.ARR_INST) 0.6f else 0.95f) - dp(6f)
+            val nm = fitLabel(textPaint, songRowName(r), nameW, min(dp(10.5f), rowH * 0.6f), dp(6f))
+            canvas.drawText(nm, tmpRect.left + dp(5f), tmpRect.centerY() + textPaint.textSize * 0.36f, textPaint)
+            textPaint.textSize = min(dp(10.5f), rowH * 0.6f)
             textPaint.textAlign = Paint.Align.CENTER
+            if (r >= Engine.ARR_INST) {
+                // ✎: Noten-Editor dieses Instruments öffnen
+                val ex = tmpRect.right - tmpRect.width() * 0.19f
+                fillPaint.color = alpha(cols[2], 0.85f)
+                canvas.drawRoundRect(ex - tmpRect.width() * 0.17f, tmpRect.top + dp(1f), tmpRect.right - dp(1f), tmpRect.bottom - dp(1f), dp(3f), dp(3f), fillPaint)
+                textPaint.color = Color.WHITE
+                canvas.drawText("✎", ex, tmpRect.centerY() + textPaint.textSize * 0.36f, textPaint)
+            }
         }
         fillPaint.color = Color.rgb(24, 25, 31)
         canvas.drawRect(g, fillPaint)
@@ -7550,6 +7610,8 @@ class PadView(context: Context) : View(context) {
                 if (r >= Engine.ARR_INST) {
                     fillPaint.color = PAT_COLS[(v - 1).coerceIn(0, 3)]
                     canvas.drawRoundRect(tmpRect, dp(3f), dp(3f), fillPaint)
+                    // gesetzte Noten dieses Takts als kleine Striche (Höhe = Tonhöhe, bei Drums: Kick unten)
+                    drawCellNotes(canvas, r - Engine.ARR_INST, v - 1, bar, tmpRect)
                     // gleiches Pattern wie im Takt davor: nur dünn verbinden, Buchstabe beim Wechsel
                     val prev = if (bar > 0) Engine.arrCell(r, bar - 1) else 0
                     if (prev != v && tmpRect.width() > dp(7f)) {
