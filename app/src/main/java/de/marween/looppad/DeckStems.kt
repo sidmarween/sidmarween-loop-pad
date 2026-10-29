@@ -232,6 +232,14 @@ object DeckStems {
         private val re = FloatArray(LN)
         private val im = FloatArray(LN)
         private val gainBin = FloatArray(LN / 2 + 1)
+        // Aufteilung für Quantum Warp: Anteil Gesang+Melodie („oben“); unten = Gesamt − oben
+        private val topBin = FloatArray(LN / 2 + 1)
+        private val reT = FloatArray(LN)
+        private val imT = FloatArray(LN)
+        private val accTL = FloatArray(2 * LN)
+        private val accTR = FloatArray(2 * LN)
+        private val outTL = FloatArray(LHOP)
+        private val outTR = FloatArray(LHOP)
         /** Geglättete Regler (wirken pro Rahmen, ~5 ms). */
         private val g = floatArrayOf(1f, 1f, 1f, 1f)
         private val cosT = FloatArray(LN / 2)
@@ -257,7 +265,9 @@ object DeckStems {
          * [p0]/[p1]: Quellposition am Anfang/Ende des Blocks, [pf]: Tonhöhen-Faktor (Ausgabe/Quelle),
          * [target]: Reglerstände (VOC, MEL, BASS, DRUMS) 0..1.
          */
-        fun process(l: FloatArray, r: FloatArray, n: Int, p0: Double, p1: Double, pf: Double, sr: Int, mask: Mask?, target: FloatArray) {
+        fun process(l: FloatArray, r: FloatArray, n: Int, p0: Double, p1: Double, pf: Double, sr: Int, mask: Mask?, target: FloatArray,
+                    topL: FloatArray? = null, topR: FloatArray? = null) {
+            val split = topL != null && topR != null
             for (i in 0 until n) {
                 inL[rover] = l[i]
                 inR[rover] = r[i]
@@ -265,22 +275,41 @@ object DeckStems {
                 val oi = rover - FIFO
                 l[i] = outL[oi]
                 r[i] = outR[oi]
+                if (split) { topL!![i] = outTL[oi]; topR!![i] = outTR[oi] }
                 rover++
                 if (rover >= LN) {
                     rover = FIFO
-                    frame(pf, sr, mask, target)
+                    frame(pf, sr, mask, target, split)
                 }
             }
         }
 
-        private fun frame(pf: Double, sr: Int, mask: Mask?, target: FloatArray) {
+        /** Rück-FFT (Spektrum schon konjugiert) und in die Akkus addieren. */
+        private fun inverse(re: FloatArray, im: FloatArray, aL: FloatArray, aR: FloatArray) {
+            for (i in 0 until LN) {
+                val j = rev[i]
+                if (i < j) {
+                    var t = re[i]; re[i] = re[j]; re[j] = t
+                    t = im[i]; im[i] = im[j]; im[j] = t
+                }
+            }
+            fftCore(re, im)
+            val sc = 0.5f / LN
+            for (i in 0 until LN) {
+                val w = win[i] * sc
+                aL[i] += re[i] * w
+                aR[i] -= im[i] * w
+            }
+        }
+
+        private fun frame(pf: Double, sr: Int, mask: Mask?, target: FloatArray, split: Boolean = false) {
             var unity = true
             for (s in 0..3) {
                 g[s] += (target[s] - g[s]) * 0.35f
                 if (abs1(target[s] - g[s]) < 0.002f) g[s] = target[s]
                 if (g[s] < 0.999f) unity = false
             }
-            if (unity || mask == null) {
+            if ((unity || mask == null) && !split) {
                 // durchlassen (gleiche Verzögerung)
                 for (i in 0 until LN) {
                     val w = win[i] * win[i] * 0.5f
@@ -289,49 +318,54 @@ object DeckStems {
                 }
             } else {
                 // Karte an der Quellposition der Rahmen-Mitte
-                val pc = inPos[LN / 2]
-                val fi = (pc / mask.hop + mask.off + 0.5).toInt().coerceIn(0, mask.frames - 1)
-                val base = fi * mask.nb * 3
-                val md = mask.data
-                val binHz = sr.toDouble() / LN / max(0.25, pf)
-                var lastBand = -1
-                var gb = 1f
-                for (k in 0..LN / 2) {
-                    val b = mask.band(k * binHz)
-                    if (b != lastBand) {
-                        lastBand = b
-                        val o = base + b * 3
-                        val d = (md[o].toInt() and 255) / 255f
-                        val bs = (md[o + 1].toInt() and 255) / 255f
-                        val v = (md[o + 2].toInt() and 255) / 255f
-                        val m = max(0f, 1f - d - bs - v)
-                        gb = g[DRUMS] * d + g[BASS] * bs + g[VOC] * v + g[MEL] * m
+                if (mask == null) {
+                    // ohne Stems-Karte: Frequenzweiche (unten < ~150 Hz, oben > ~300 Hz)
+                    val binHz = sr.toDouble() / LN
+                    for (k in 0..LN / 2) {
+                        gainBin[k] = 1f
+                        val f = k * binHz
+                        topBin[k] = ((f - 150.0) / 150.0).coerceIn(0.0, 1.0).toFloat()
                     }
-                    gainBin[k] = gb
+                } else {
+                    val pc = inPos[LN / 2]
+                    val fi = (pc / mask.hop + mask.off + 0.5).toInt().coerceIn(0, mask.frames - 1)
+                    val base = fi * mask.nb * 3
+                    val md = mask.data
+                    val binHz = sr.toDouble() / LN / max(0.25, pf)
+                    var lastBand = -1
+                    var gb = 1f
+                    var gt = 0f
+                    for (k in 0..LN / 2) {
+                        val b = mask.band(k * binHz)
+                        if (b != lastBand) {
+                            lastBand = b
+                            val o = base + b * 3
+                            val d = (md[o].toInt() and 255) / 255f
+                            val bs = (md[o + 1].toInt() and 255) / 255f
+                            val v = (md[o + 2].toInt() and 255) / 255f
+                            val m = max(0f, 1f - d - bs - v)
+                            gb = g[DRUMS] * d + g[BASS] * bs + g[VOC] * v + g[MEL] * m
+                            gt = g[VOC] * v + g[MEL] * m
+                        }
+                        gainBin[k] = gb
+                        topBin[k] = gt
+                    }
                 }
                 for (i in 0 until LN) { re[rev[i]] = inL[i] * win[i]; im[rev[i]] = inR[i] * win[i] }
                 fftCore(re, im)
                 // reelle, symmetrische Verstärkung → L (Real) und R (Imaginär) bleiben getrennt
+                if (split) for (k in 0 until LN) {
+                    val gk = topBin[if (k <= LN / 2) k else LN - k]
+                    reT[k] = re[k] * gk
+                    imT[k] = -im[k] * gk
+                }
                 for (k in 0 until LN) {
                     val gk = gainBin[if (k <= LN / 2) k else LN - k]
                     re[k] *= gk
                     im[k] = -im[k] * gk   // konjugieren für die Rück-FFT
                 }
-                // Bit-Umkehr für die Rück-FFT
-                for (i in 0 until LN) {
-                    val j = rev[i]
-                    if (i < j) {
-                        var t = re[i]; re[i] = re[j]; re[j] = t
-                        t = im[i]; im[i] = im[j]; im[j] = t
-                    }
-                }
-                fftCore(re, im)
-                val sc = 0.5f / LN
-                for (i in 0 until LN) {
-                    val w = win[i] * sc
-                    accL[i] += re[i] * w
-                    accR[i] -= im[i] * w
-                }
+                inverse(re, im, accL, accR)
+                if (split) inverse(reT, imT, accTL, accTR)
             }
             System.arraycopy(accL, 0, outL, 0, LHOP)
             System.arraycopy(accR, 0, outR, 0, LHOP)
@@ -339,6 +373,12 @@ object DeckStems {
             System.arraycopy(accR, LHOP, accR, 0, LN)
             java.util.Arrays.fill(accL, LN, 2 * LN, 0f)
             java.util.Arrays.fill(accR, LN, 2 * LN, 0f)
+            System.arraycopy(accTL, 0, outTL, 0, LHOP)
+            System.arraycopy(accTR, 0, outTR, 0, LHOP)
+            System.arraycopy(accTL, LHOP, accTL, 0, LN)
+            System.arraycopy(accTR, LHOP, accTR, 0, LN)
+            java.util.Arrays.fill(accTL, LN, 2 * LN, 0f)
+            java.util.Arrays.fill(accTR, LN, 2 * LN, 0f)
             System.arraycopy(inL, LHOP, inL, 0, FIFO)
             System.arraycopy(inR, LHOP, inR, 0, FIFO)
             System.arraycopy(inPos, LHOP, inPos, 0, FIFO)

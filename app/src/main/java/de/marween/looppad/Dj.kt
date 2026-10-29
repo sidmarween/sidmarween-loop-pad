@@ -208,6 +208,18 @@ object Dj {
         internal val lpL = Biquad(); internal val lpR = Biquad()
         internal val hpL = Biquad(); internal val hpR = Biquad()
         internal val fL = Biquad(); internal val fR = Biquad()
+        // Quantum Warp (eigener Deck-Effekt, siehe [QuantumWarp])
+        internal var qw: QuantumWarp? = null
+        internal var topL = FloatArray(0)
+        internal var topR = FloatArray(0)
+        internal var qwFree = 0.0
+        @Volatile var qwOn = false
+        @Volatile var qwX = 0f
+        @Volatile var qwY = 0f
+        @Volatile var qwTwo = false
+        @Volatile var qwX2 = 0.5f
+        fun qwState(): Int = qw?.state ?: QuantumWarp.IDLE
+        fun qwPull(): Float = qw?.pullProgress ?: -1f
         internal var fxL: Fx? = null
         internal var fxR: Fx? = null
         internal var bufL = FloatArray(0)
@@ -281,7 +293,27 @@ object Dj {
                     moved > 1e-4 -> moved / base * Keys.factor(d.keyShift.toDouble())
                     else -> 1.0
                 }
-                d.stemLive.process(bl, br, n, p0, d.pos, pf, sr, d.stemMask, d.stemGain)
+                val qwSel = d.fxType == QWARP
+                if (qwSel && d.topL.size < n) { d.topL = FloatArray(n); d.topR = FloatArray(n) }
+                d.stemLive.process(bl, br, n, p0, d.pos, pf, sr, d.stemMask, d.stemGain, if (qwSel) d.topL else null, if (qwSel) d.topR else null)
+                if (qwSel) {
+                    val q = d.qw ?: QuantumWarp(sr).also { d.qw = it }
+                    val beatLen = if (d.bpm > 0f) sr * 60.0 / max(40f, d.effBpm()) else sr * 0.5
+                    val bp0: Double
+                    val step: Double
+                    if (d.bpm > 0f) {
+                        val heard = p0 - DeckStems.LAT * (d.srcRate.toDouble() / sr) * d.ratio
+                        bp0 = beatIndex(d, heard) - d.barOffset
+                        val mv = (d.pos - p0) / max(1, n)
+                        step = if (mv > 1e-4) mv / d.beatFrames() else 1.0 / beatLen
+                    } else {
+                        bp0 = d.qwFree
+                        step = 1.0 / beatLen
+                        d.qwFree += n * step
+                    }
+                    val on = d.qwOn || d.fxOn
+                    q.process(bl, br, d.topL, d.topR, n, bp0, step, beatLen, on, d.qwX, d.qwY, d.qwTwo && d.qwOn, d.qwX2)
+                }
             }
             // Filter-Sweep im Takt (BUILD hoch / SWEEP zu)
             if (d.sweepMode != 0 && d.bpm > 0f) {
@@ -334,7 +366,7 @@ object Dj {
             }
             // Effekt je Deck (ein Regler: 0 = aus)
             val amt = if (d.fxAmt > 0.02f) d.fxAmt else if (d.fxOn) d.fxLevel else 0f
-            if (amt > 0.02f && d.fxType >= 0) {
+            if (amt > 0.02f && d.fxType in 0 until Fx.COUNT) {
                 if (d.fxL == null) {
                     d.fxL = Fx(sr)
                     d.fxR = Fx(sr)
@@ -1855,9 +1887,14 @@ object Dj {
         return "${s / 60}:${(s % 60).toString().padStart(2, '0')}"
     }
 
+    /** Deck-Effekt „Quantum Warp“ (kein Fx-Typ, eigener Signalweg mit Stems). */
+    const val QWARP = 1000
+
+    fun fxName(t: Int): String = if (t == QWARP) "QUANTUM" else Fx.NAMES[t.coerceIn(0, Fx.COUNT - 1)]
+
     /** Für die Deck-Effekte: kleine Auswahl gut passender Effekte. */
     val FX_CHOICES: IntArray by lazy {
         val want = arrayOf("DELAY", "TAPE ECHO", "SPACE ECHO", "REVERB", "FLANGER", "PHASER", "STUTTER", "LOOPER", "SLICER", "REVERSE", "CRUSH", "FILTER", "GRAIN DLY", "FREEZE", "TREMOLO")
-        want.mapNotNull { n -> Fx.NAMES.indexOf(n).takeIf { it >= 0 } }.toIntArray()
+        (want.mapNotNull { n -> Fx.NAMES.indexOf(n).takeIf { it >= 0 } } + QWARP).toIntArray()
     }
 }

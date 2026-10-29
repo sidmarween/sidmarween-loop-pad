@@ -623,10 +623,10 @@ class DjView(context: Context) : View(context) {
         val kv = floatArrayOf(dk.hi, dk.mid, dk.lo, dk.filter)
         val kl = arrayOf("HI", "MID", "LOW", "FILTER")
         if (!padsBig) for (i in 0..3) drawKnob(c, knobs[i], i, kv[i], kl[i] + " " + "AB"[focus], focusCol)
-        val fxName = Fx.NAMES[dk.fxType.coerceIn(0, Fx.COUNT - 1)]
+        val fxName = Dj.fxName(dk.fxType)
         if (!padsBig) {
             drawTop(c, tops[0], 0, "DECK " + "AB"[focus], true, focusCol)
-            drawTop(c, tops[1], 1, fxName, dk.fxAmt > 0.02f, s.accent)
+            drawTop(c, tops[1], 1, fxName, if (dk.fxType == Dj.QWARP) dk.qwOn || dk.qwState() != QuantumWarp.IDLE else dk.fxAmt > 0.02f, s.accent)
             drawTop(c, tops[2], 2, "PADS ⌃", false, s.accent)
         }
         if (!padsBig) for (k in 0..1) {
@@ -1817,6 +1817,40 @@ class DjView(context: Context) : View(context) {
                 glowRect(c, r, rad, s.accent, dp(2f))
             }
         }
+        val dq = Dj.decks[focus]
+        if (dq.fxType == Dj.QWARP) {
+            // Achsen und Beschriftung
+            stroke.strokeWidth = dp(1f)
+            stroke.color = alpha(col, 0.55f)
+            c.drawLine(r.left + dp(6f), r.centerY(), r.right - dp(6f), r.centerY(), stroke)
+            text.color = alpha(col, 0.9f)
+            val ts = dp(7f)
+            text.textSize = ts
+            text.textAlign = Paint.Align.CENTER
+            c.drawText("↑ SHIMMER", r.centerX(), r.top + ts + dp(3f), text)
+            c.drawText("↓ INDUSTRIAL", r.centerX(), r.bottom - dp(4f), text)
+            text.textAlign = Paint.Align.LEFT
+            c.drawText("ECHO", r.left + dp(4f), r.centerY() - dp(3f), text)
+            text.textAlign = Paint.Align.RIGHT
+            c.drawText("FREEZE", r.right - dp(4f), r.centerY() - dp(3f), text)
+            text.textAlign = Paint.Align.CENTER
+            // Gravity Release: Ring zieht sich bis zur Eins zusammen
+            val pp = dq.qwPull()
+            if (pp >= 0f) {
+                stroke.strokeWidth = dp(2f)
+                stroke.color = alpha(Color.WHITE, 0.4f + 0.5f * pp)
+                c.drawCircle(r.centerX(), r.centerY(), (1f - pp) * r.width() * 0.45f + dp(3f), stroke)
+            }
+            if (xy2Active && dq.qwTwo) {
+                val px = r.left + xy2X * r.width()
+                val py = r.bottom - xy2Y * r.height()
+                stroke.strokeWidth = dp(2f)
+                stroke.color = Color.WHITE
+                c.drawCircle(px, py, dp(9f), stroke)
+                text.color = Color.WHITE
+                c.drawText("REV", px, py - dp(12f), text)
+            }
+        }
         // Finger / Haltepunkt
         if (xyActive || xyHold) {
             val px = r.left + xyX * r.width()
@@ -1830,7 +1864,11 @@ class DjView(context: Context) : View(context) {
             c.drawCircle(px, py, dp(4f), fill)
         }
         text.color = alpha(s.ink, 0.75f)
-        c.drawText(fitLabel(text, if (xyHold) "FX ${"AB"[focus]} · HOLD" else "FX ${"AB"[focus]}", r.width(), dp(8.5f), dp(6.5f)), r.centerX(), r.bottom + dp(10f), text)
+        val qh = if (dq.fxType == Dj.QWARP) qwHint(dq) else null
+        if (qh != null) {
+            text.color = s.accent
+            c.drawText(fitLabel(text, qh, r.width() + dp(40f), dp(8.5f), dp(5.5f)), r.centerX(), r.bottom + dp(10f), text)
+        } else c.drawText(fitLabel(text, if (xyHold) "FX ${"AB"[focus]} · HOLD" else "FX ${"AB"[focus]}", r.width(), dp(8.5f), dp(6.5f)), r.centerX(), r.bottom + dp(10f), text)
     }
 
     private fun grid(c: Canvas, r: RectF, n: Int, col: Int, glow: Boolean) {
@@ -2502,6 +2540,15 @@ class DjView(context: Context) : View(context) {
             return
         }
         if (hit(xy, x, y, dp(6f))) {
+            // Quantum Warp: zweiter Finger auf der XY-Fläche
+            if (ptrs.values.any { it.kind == K.XY && it.sub == 0 }) {
+                val dd = Dj.decks[focus]
+                if (dd.fxType == Dj.QWARP && ptrs.values.none { it.kind == K.XY && it.sub == 1 }) {
+                    ptrs[id] = Ptr(K.XY, 0, 1, x, y, now)
+                    setXy2(x, y)
+                }
+                return
+            }
             if (doubleTap(13)) {
                 xyHold = !xyHold
                 onHint?.invoke(if (xyHold) "FX gehalten – nochmal doppelt tippen löst" else "FX-Halten aus")
@@ -2535,7 +2582,7 @@ class DjView(context: Context) : View(context) {
                 dd.fader = (dd.fader - dy / (vol[p.idx].height() - dp(20f))).coerceIn(0f, 1f)
             }
             K.XF -> Dj.xfade = (Dj.xfade + dx / (xfader.width() - dp(20f))).coerceIn(0f, 1f)
-            K.XY -> setXy(x, y)
+            K.XY -> if (p.sub == 1) setXy2(x, y) else setXy(x, y)
             K.WAVE -> {
                 val dd = Dj.decks[p.idx]
                 val fpp = secondsVisible * dd.srcRate / lanes[p.idx].width()
@@ -2575,10 +2622,15 @@ class DjView(context: Context) : View(context) {
             }
             K.WAVE -> Dj.scratchEnd(Dj.decks[p.idx])
             K.XY -> {
-                xyActive = false
                 val dd = Dj.decks[focus]
-                if (dd.fxOn) dd.fxLevel = max(0.05f, dd.fxAmt)
-                if (!xyHold) dd.fxAmt = 0f
+                if (p.sub == 1) {
+                    dd.qwTwo = false
+                    xy2Active = false
+                } else {
+                    xyActive = false
+                    if (dd.fxOn) dd.fxLevel = max(0.05f, dd.fxAmt)
+                    if (!xyHold) { dd.fxAmt = 0f; dd.qwOn = false; dd.qwTwo = false }
+                }
             }
             K.TOP -> topTap(p.idx)
             else -> {}
@@ -2598,6 +2650,44 @@ class DjView(context: Context) : View(context) {
         val dd = Dj.decks[focus]
         dd.fxX = xyX
         dd.fxAmt = max(0.05f, xyY)
+        // Quantum Warp: Y mit Mitte = normal (kleine Rast-Zone)
+        val yc = xyY * 2f - 1f
+        dd.qwX = xyX
+        dd.qwY = if (abs(yc) < 0.06f) 0f else (yc - 0.06f * Math.signum(yc)) / 0.94f
+        dd.qwOn = true
+    }
+
+    private var xy2Active = false
+    private var xy2X = 0.5f
+    private var xy2Y = 0.5f
+
+    private fun setXy2(x: Float, y: Float) {
+        xy2X = ((x - xy.left) / xy.width()).coerceIn(0f, 1f)
+        xy2Y = ((xy.bottom - y) / xy.height()).coerceIn(0f, 1f)
+        xy2Active = true
+        val dd = Dj.decks[focus]
+        dd.qwX2 = xy2X
+        dd.qwTwo = true
+    }
+
+    /** Auto-Drop-Sync: nächster Abschnitt (Drop/Break/Outro/Build-up) in ≤ 8 Takten → Vorschlag für die Achsen. */
+    private fun qwHint(d: Dj.Deck): String? {
+        if (d.parts.isEmpty() || d.bpm <= 0f) return null
+        val bar = Dj.barAt(d, d.pos)
+        for (p in d.parts) {
+            val dist = p.bar0 - bar
+            if (dist <= 0.0 || dist > 8.0) continue
+            val nb = kotlin.math.ceil(dist).toInt()
+            val t = if (nb == 1) "1 Takt" else "$nb Takten"
+            return when (p.kind) {
+                SongParts.DROP -> "DROP in $t: ↓ runterziehen, auf der Eins loslassen"
+                SongParts.BREAK -> "BREAK in $t: ↑ hoch in den Shimmer"
+                SongParts.OUTRO -> "OUTRO in $t: → rechts einfrieren, dann loslassen"
+                SongParts.BUILD -> "BUILD-UP in $t: ← Echo langsam nach rechts schieben"
+                else -> null
+            }
+        }
+        return null
     }
 
     private fun seekOverview(k: Int, x: Float) {
@@ -2611,7 +2701,7 @@ class DjView(context: Context) : View(context) {
         haptic()
         when (i) {
             0 -> {
-                if (!xyHold) Dj.decks[focus].fxAmt = 0f
+                if (!xyHold) { Dj.decks[focus].fxAmt = 0f; Dj.decks[focus].qwOn = false; Dj.decks[focus].qwTwo = false }
                 focus = 1 - focus
                 onHint?.invoke("Regler und XY steuern jetzt Deck ${"AB"[focus]}")
             }
@@ -2620,7 +2710,7 @@ class DjView(context: Context) : View(context) {
                 val ch = Dj.FX_CHOICES
                 val idx = ch.indexOf(dd.fxType)
                 dd.fxType = ch[(idx + 1) % ch.size]
-                onHint?.invoke("Effekt Deck ${"AB"[focus]}: ${Fx.NAMES[dd.fxType]} – auf der XY-Fläche spielen")
+                onHint?.invoke("Effekt Deck ${"AB"[focus]}: ${Dj.fxName(dd.fxType)} – ${if (dd.fxType == Dj.QWARP) "X: Echo → Freeze · hoch: Shimmer · runter: Industrial · 2. Finger: Gesang rückwärts" else "auf der XY-Fläche spielen"}")
             }
             2 -> setPadsBig(true)
         }
@@ -2679,7 +2769,7 @@ class DjView(context: Context) : View(context) {
             3 -> if (down) dd.cue = !dd.cue
             4 -> if (!down) {
                 dd.fxOn = !dd.fxOn
-                onHint?.invoke(if (dd.fxOn) "FX ${"AB"[k]} an: ${Fx.NAMES[dd.fxType]} – XY-Fläche regelt ihn, lange drücken wählt den Effekt" else "FX ${"AB"[k]} aus")
+                onHint?.invoke(if (dd.fxOn) "FX ${"AB"[k]} an: ${Dj.fxName(dd.fxType)} – XY-Fläche regelt ihn, lange drücken wählt den Effekt" else "FX ${"AB"[k]} aus")
             }
         }
     }
@@ -2845,7 +2935,7 @@ class DjView(context: Context) : View(context) {
         val dd = Dj.decks[k]
         val ch = Dj.FX_CHOICES
         dd.fxType = ch[(ch.indexOf(dd.fxType) + 1) % ch.size]
-        onHint?.invoke("Effekt Kanal ${"AB"[k]}: ${Fx.NAMES[dd.fxType]}")
+        onHint?.invoke("Effekt Kanal ${"AB"[k]}: ${Dj.fxName(dd.fxType)}")
     }
 
     private fun hotPress(k: Int, h: Int) {
