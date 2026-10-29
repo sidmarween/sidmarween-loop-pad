@@ -811,7 +811,12 @@ class MainActivity : Activity() {
         val list = TrackDb.all().filter { !it.missing }.sortedBy { it.title.lowercase() }
         if (list.isEmpty()) { showMusicLibrary(); return }
         val labels = list.map { t ->
-            t.title + "\n   " + (if (t.analyzed && t.bpm > 0f) String.format(Locale.GERMANY, "%.1f BPM · %s · %s", t.bpm, Keys.camelot(t.key), Dj.fmt(t.seconds)) else "noch nicht analysiert")
+            t.title + "\n   " + when {
+                t.analyzed && t.bpm > 0f -> String.format(Locale.GERMANY, "%.1f BPM · %s · %s", t.bpm, Keys.camelot(t.key), Dj.fmt(t.seconds))
+                t.bpm > 0f -> String.format(Locale.GERMANY, "%.1f BPM · Tonart/Energie folgen", t.bpm)
+                t.missing -> "⚠ Analyse fehlgeschlagen – „Analysieren“ versucht es nochmal"
+                else -> "noch nicht analysiert"
+            }
         }.toTypedArray()
         ui().setTitle("Pad ${p + 1} · aus der Sammlung (${list.size})")
             .setItems(labels) { _, w -> loadPadFromCollection(p, list[w]) }
@@ -840,6 +845,8 @@ class MainActivity : Activity() {
                 } else {
                     val desc = clipToPad(p, data, rate, t.title)
                     runOnUiThread { hint("Pad ${p + 1}: ${t.title} · $desc") }
+                    // Analyse in die Sammlung übernehmen (sonst steht der Song dort weiter als „nicht analysiert“)
+                    if (!t.analyzed) collectFromPad(t, data, rate)
                 }
             } } catch (e: OutOfMemoryError) {
                 runOnUiThread { toast("Song zu lang für den Speicher") }
@@ -849,6 +856,26 @@ class MainActivity : Activity() {
                 runOnUiThread { toast("Laden fehlgeschlagen: ${e.message ?: e}") }
             }
         }.start()
+    }
+
+    /**
+     * Ein Sammlungs-Song wurde aufs Pad geladen und dabei analysiert: Tempo, erster Schlag sowie Tonart/Lautheit/Energie
+     * in der Sammlung speichern. Gerechnet auf einer verkleinerten Kopie (¼ Abtastrate) – spart Speicher.
+     */
+    private fun collectFromPad(t: TrackDb.Track, data: FloatArray, rate: Int) {
+        try {
+            val info = cachedInfo(beatKey(t.title, data)) ?: return
+            t.bpm = info.bpm
+            t.grid = info.offset.toDouble() / rate
+            t.barOffset = 0; t.phraseOff = 0
+            if (t.cue < 0) t.cue = t.grid
+            val f = 4
+            val n = data.size / f
+            val sh = ShortArray(n) { i -> var a = 0f; for (k in 0 until f) a += data[i * f + k]; ((a / f).coerceIn(-1f, 1f) * 32767f).toInt().toShort() }
+            TrackDb.analyzeData(this, t, sh, 1, n, rate / f, true)
+            TrackDb.save(this)
+            colRefresh?.invoke()
+        } catch (ignored: Throwable) {}
     }
 
     /** Lade-Fortschritt am Pad anzeigen, solange [block] läuft. */
@@ -4214,6 +4241,9 @@ class MainActivity : Activity() {
 
     private fun showCollection(k: Int) {
         TrackDb.load(this)
+        // offene Songs automatisch im Hintergrund analysieren (z. B. früher direkt ins Deck geladene)
+        if (!colBatch && TrackDb.all().any { !it.analyzed && !it.missing }) startBatchAnalysis(false)
+        TrackDb.load(this)
         val prefs = getSharedPreferences("marvpad", MODE_PRIVATE)
         colSort = prefs.getInt("colSort", 0)
         val dens = resources.displayMetrics.density
@@ -5506,10 +5536,12 @@ class MainActivity : Activity() {
     }
 
     /** Ordner-Analyse: alle noch nicht analysierten Tracks nacheinander im Hintergrund. */
-    private fun startBatchAnalysis() {
+    private fun startBatchAnalysis(retryFailed: Boolean = true) {
         if (colBatch) return
         colBatch = true
+        if (retryFailed) for (t in TrackDb.all()) if (!t.analyzed) t.missing = false
         Thread {
+            android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND)
             var done = 0
             try {
                 while (colBatch) {
