@@ -228,7 +228,10 @@ object Warp {
      * Wie oben, aber die Quelle wird nur stückweise gelesen (8 Takte) – sie kann ein Ausschnitt sein oder
      * auf dem Handy-Speicher liegen. So braucht ein Song beim Dehnen nur den Platz für das Ergebnis.
      */
-    fun stretchBeatsLong(x: PcmSource, outLen: Int, sr: Int, bars: Float, pre: FloatArray? = null): FloatArray {
+    /** Abbruch eines veralteten Dehn-Auftrags (neuer Auftrag läuft schon). */
+    class Cancelled : RuntimeException()
+
+    fun stretchBeatsLong(x: PcmSource, outLen: Int, sr: Int, bars: Float, pre: FloatArray? = null, cancel: (() -> Boolean)? = null): FloatArray {
         val n = x.size
         fun whole(): FloatArray = if (x is ArraySource && x.whole) x.a else x.copy(0, n)
         if (n < sr * 60 || bars < 16f || outLen <= 1) return stretchBeats(whole(), outLen, sr, bars, pre)
@@ -238,6 +241,7 @@ object Warp {
         var b0 = 0f
         val ramp = max(16, sr / 1000)
         while (b0 < bars - 1e-3f) {
+            if (cancel?.invoke() == true) throw Cancelled()
             val b1 = min(bars, b0 + chunk)
             val s0 = (b0 / bars * n).toInt()
             val s1 = min(n, (b1 / bars * n).toInt())

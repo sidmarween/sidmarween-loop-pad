@@ -112,6 +112,7 @@ class MainActivity : Activity() {
         Engine.onBouncedInst = { pad, names ->
             runOnUiThread { toast("Bounce → Pad ${pad + 1} · ausgeschaltet: $names (im Reiter Instrumente wieder AN)") }
         }
+        Engine.onWarn = { msg -> runOnUiThread { Toast.makeText(this, msg, Toast.LENGTH_LONG).show() } }
         Engine.onFxBaked = { pad ->
             runOnUiThread { toast("Pad ${pad + 1}: XY-Effekt ist schon mit aufgenommen – das Pad läuft jetzt am Effekt vorbei, damit er nicht doppelt wirkt (Pad-Menü ⋯ → 🎛 XY-Effekt schaltet es zurück)") }
         }

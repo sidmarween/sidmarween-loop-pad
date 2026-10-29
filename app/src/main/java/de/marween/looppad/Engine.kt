@@ -3470,6 +3470,8 @@ object Engine {
     var onBounced: ((Int, List<Int>) -> Unit)? = null
     /** Wave-Aufnahme mit eingerechnetem XY-Effekt: Pad läuft jetzt am Effekt vorbei. */
     var onFxBaked: ((Int) -> Unit)? = null
+    /** Hinweis an die Oberfläche (aus Hintergrund-Threads). */
+    @Volatile var onWarn: ((String) -> Unit)? = null
     // ---------------------------------------------------------------- Crossfader (Mischpult)
 
     /** Crossfader zwischen zwei Pads: A links, B rechts (-1 = frei), Stellung 0 = nur A … 1 = nur B. */
@@ -5267,24 +5269,39 @@ object Engine {
     @Volatile private var warpGen = 0
 
     /** Nach einem Tempowechsel alle Loops neu dehnen (im Hintergrund, Tonhöhe bleibt). */
+    private val rewarpLock = Any()
+
     private fun scheduleRewarp() {
         val gen = ++warpGen
         Thread {
             try { Thread.sleep(180) } catch (ignored: InterruptedException) {}
             if (gen != warpGen) return@Thread
+            // immer nur EIN Dehn-Auftrag gleichzeitig (lange Songs brauchen viel Speicher)
+            synchronized(rewarpLock) {
+                try { rewarpAll(gen) } catch (ignored: Warp.Cancelled) {
+                } catch (e: OutOfMemoryError) {
+                    System.gc()
+                    onWarn?.invoke("Zu wenig Speicher, um den Song im neuen Tempo zu dehnen – er läuft im alten Tempo weiter. Tipp: kürzeren Ausschnitt laden oder andere Pads leeren.")
+                } catch (ignored: Throwable) {}
+            }
+        }.also { it.priority = Thread.MIN_PRIORITY + 1 }.start()
+    }
+
+    private fun rewarpAll(gen: Int) {
+        run {
             for (p in 0 until PADS) {
-                if (gen != warpGen) return@Thread
+                if (gen != warpGen) return
                 val l = loops.get(p) ?: continue
                 val src = l.srcRef ?: continue
                 if (l.oneShot || l.slices != null || l.warpBars <= 0f) continue
                 if (takes.get(p) != null) continue
                 val m = masterLen
-                if (m <= 0L) return@Thread
+                if (m <= 0L) return
                 val target = max(64L, (l.warpBars * m).toLong()).toInt()
                 if (target == l.data.size) continue
-                val data = Warp.stretchBeatsLong(src, target, sampleRate, l.warpBars, l.srcPre)
+                val data = Warp.stretchBeatsLong(src, target, sampleRate, l.warpBars, l.srcPre) { gen != warpGen }
                 seamFix(data)
-                if (gen != warpGen) return@Thread
+                if (gen != warpGen) return
                 val nl = cloneLoop(l, data)
                 nl.muted = l.muted
                 nl.pendAt = l.pendAt
@@ -5300,7 +5317,7 @@ object Engine {
                 nl.start = curBar - barIdx * m
                 if (!loops.compareAndSet(p, l, nl)) continue
             }
-        }.start()
+        }
     }
 }
 
