@@ -1851,12 +1851,12 @@ class MainActivity : Activity() {
                                 dd.loading = true
                                 Thread {
                                     try {
-                                        val t = deckDecode(dd) { Dj.decode(this, Uri.fromFile(f)) }
+                                        val t = deckDecode(dd) { Dj.decode(this, Uri.fromFile(f)) { b, fr, c, r -> Dj.preview(dd, b, c, fr, r, f.nameWithoutExtension) } }
                                         Dj.load(dd, t, f.nameWithoutExtension, null)
                                         runOnUiThread { hint("Deck A: ${f.nameWithoutExtension}"); switchMode(true) }
                                     } catch (e: Throwable) {
                                         runOnUiThread { toast("Laden fehlgeschlagen: ${e.message ?: e}") }
-                                    } finally { dd.loading = false; dd.loadProg = -1f }
+                                    } finally { dd.loading = false; dd.partial = false; dd.loadProg = -1f }
                                 }.start()
                             }
                             else -> confirm("Set löschen?", f.name) { f.delete() }
@@ -5577,7 +5577,7 @@ class MainActivity : Activity() {
         hint("Deck ${"AB"[k]}: lade ${t.title} …")
         Thread {
             try {
-                val tr = deckDecode(dd) { Dj.decode(this, Uri.parse(t.uri)) }
+                val tr = deckDecode(dd) { Dj.decode(this, Uri.parse(t.uri)) { b, fr, c, r -> Dj.preview(dd, b, c, fr, r, t.title) } }
                 Dj.load(dd, tr, t.title, if (t.bpm > 0f) t.bpm else Warp.bpmFromName(t.title))
                 val r = dd.srcRate.toDouble()
                 if (t.analyzed || t.bpm > 0f) {
@@ -5588,7 +5588,9 @@ class MainActivity : Activity() {
                 if (t.key >= 0) { dd.keyGen++; dd.key = t.key; dd.keyConf = t.keyConf }
                 // Song-Struktur zum gespeicherten Raster neu einteilen
                 if (t.analyzed || t.bpm > 0f) try { Dj.analyzeParts(dd) } catch (ignored: Throwable) {}
-                if (t.cue >= 0) { dd.cuePoint = t.cue * r; dd.seekTo = dd.cuePoint } else { dd.cuePoint = dd.grid; dd.seekTo = dd.grid }
+                // lief schon beim Vorhören: nicht zurückspringen
+                if (dd.keptPlay) { if (t.cue >= 0) dd.cuePoint = t.cue * r }
+                else if (t.cue >= 0) { dd.cuePoint = t.cue * r; dd.seekTo = dd.cuePoint } else { dd.cuePoint = dd.grid; dd.seekTo = dd.grid }
                 for (h in dd.hot.indices) dd.hot[h] = if (h < t.hot.size && t.hot[h] >= 0) t.hot[h] * r else -1.0
                 dd.colId = t.id
                 t.missing = false
@@ -5625,7 +5627,7 @@ class MainActivity : Activity() {
                 t.missing = true
                 runOnUiThread { toast("Laden fehlgeschlagen: ${e.message ?: e}") }
             } finally {
-                dd.loading = false; dd.loadProg = -1f
+                dd.loading = false; dd.partial = false; dd.loadProg = -1f
             }
         }.start()
     }
@@ -5850,7 +5852,7 @@ class MainActivity : Activity() {
         hint("Deck ${"AB"[k]}: lade $name …")
         Thread {
             try {
-                val t = deckDecode(dd) { Dj.decode(this, uri) }
+                val t = deckDecode(dd) { Dj.decode(this, uri) { b, fr, c, r -> Dj.preview(dd, b, c, fr, r, name.substringBeforeLast('.')) } }
                 Dj.load(dd, t, name.substringBeforeLast('.'), Warp.bpmFromName(name))
                 runOnUiThread { hint(String.format(Locale.GERMANY, "Deck %s: %s · %.1f BPM · %s", "AB"[k], name, dd.bpm, Dj.fmt(dd.seconds()))) }
             } catch (e: OutOfMemoryError) {
@@ -5858,7 +5860,7 @@ class MainActivity : Activity() {
             } catch (e: Throwable) {
                 runOnUiThread { toast("Laden fehlgeschlagen: ${e.message ?: e}") }
             } finally {
-                dd.loading = false; dd.loadProg = -1f
+                dd.loading = false; dd.partial = false; dd.loadProg = -1f
             }
         }.start()
     }

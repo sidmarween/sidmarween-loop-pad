@@ -83,6 +83,11 @@ object Dj {
         @Volatile var lufs = Float.NaN
         @Volatile var agFactor = 1f
         @Volatile var loading = false
+        /** Track lädt noch, der Anfang ist aber schon spielbar (Vorhören). */
+        @Volatile var partial = false
+        /** Beim Fertigladen lief das Deck schon – nicht mehr springen. */
+        @Volatile var keptPlay = false
+        internal var waveFrames = 0
         /** Lade-Fortschritt 0..1, -1 = lädt nicht. */
         @Volatile var loadProg = -1f
         /** Eintrag der DJ-Bibliothek (für das Speichern geänderter Cue-Punkte). */
@@ -1051,7 +1056,7 @@ object Dj {
     class Track(val data: ShortArray, val ch: Int, val len: Int, val rate: Int)
 
     /** Dekodiert eine Audiodatei (MP3, WAV, M4A, OGG …) als 16-Bit-Stereo in Originalrate. */
-    fun decode(context: Context, uri: Uri): Track {
+    fun decode(context: Context, uri: Uri, onPartial: ((ShortArray, Int, Int, Int) -> Unit)? = null): Track {
         val ex = MediaExtractor()
         var codec: MediaCodec? = null
         try {
@@ -1077,6 +1082,7 @@ object Dj {
             var buf = ShortArray(cap * outCh)
             var frames = 0
             var floatPcm = false
+            var nextPart = -1
             val c = MediaCodec.createDecoderByType(fmt.getString(MediaFormat.KEY_MIME)!!)
             codec = c
             c.configure(fmt, null, null, 0)
@@ -1126,6 +1132,7 @@ object Dj {
                                 if (frames + take > cap) {
                                     cap = min(maxFrames.toInt(), max(frames + take, cap + cap / 2 + rate))
                                     buf = buf.copyOf(cap * outCh)
+                                    if (nextPart > 0) nextPart = 1
                                 }
                                 sb!!.get(buf, frames * outCh, take * outCh)
                                 frames += take
@@ -1135,6 +1142,7 @@ object Dj {
                             if (frames >= cap) {
                                 cap = min(maxFrames.toInt(), cap + cap / 2 + rate)
                                 buf = buf.copyOf(cap * outCh)
+                                if (nextPart > 0) nextPart = 1
                             }
                             for (k in 0 until outCh) {
                                 val chn = min(k, inCh - 1)
@@ -1145,6 +1153,14 @@ object Dj {
                             frames++
                         }
                         if (frames >= maxFrames) outputDone = true
+                        // Vorhören: ab 4 s dekodiertem Audio spielbar, danach alle 3 s länger
+                        if (onPartial != null) {
+                            if (nextPart < 0) nextPart = rate * 4
+                            if (frames >= nextPart) {
+                                try { onPartial(buf, frames, outCh, rate) } catch (ignored: Throwable) {}
+                                nextPart = frames + rate * 3
+                            }
+                        }
                     }
                     c.releaseOutputBuffer(oi, false)
                     if ((info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0) outputDone = true
@@ -1264,30 +1280,97 @@ object Dj {
     }
 
     /** Track ins Deck laden: Wellenform, Tempo und Beat-Raster bestimmen. */
+    /**
+     * Vorhören während des Ladens: der schon dekodierte Anfang ist spielbar (ohne Tempo/Raster – die
+     * kommen mit der Analyse nach dem Laden). Wird vom Decoder-Thread mehrmals aufgerufen.
+     */
+    fun preview(d: Deck, data: ShortArray, ch: Int, frames: Int, rate: Int, title: String) {
+        if (!d.loading) return
+        if (!d.partial) {
+            val w = waveOf(data, ch, frames, rate)
+            d.playing = false
+            d.sync = false
+            d.loopOn = false
+            d.data = null
+            d.ch = ch
+            d.len = frames
+            d.srcRate = rate
+            d.lows = w.lows; d.mids = w.mids; d.highs = w.highs; d.peaks = w.peaks
+            d.title = title
+            d.bpm = 0f
+            d.grid = 0.0
+            d.barOffset = 0
+            d.parts = emptyList()
+            d.cuePoint = 0.0
+            for (k in d.hot.indices) d.hot[k] = -1.0
+            d.pos = 0.0
+            d.seekTo = 0.0
+            d.pitch = 0f
+            d.libId = null
+            d.colId = null
+            d.key = -1
+            d.keyConf = 0f
+            d.keyShift = 0
+            d.gReset = true
+            d.rollBeats = 0f
+            d.slipTrack = false
+            d.lufs = w.lufs
+            d.agFactor = agOf(w.lufs)
+            d.stemMask = null
+            d.stemGen++
+            d.stemProg = -1f
+            d.aiGen++
+            d.aiProg = -1f
+            for (s in 0..3) d.stemGain[s] = 1f
+            d.waveFrames = frames
+            d.keptPlay = false
+            d.partial = true
+            d.data = data
+        } else {
+            if (d.data !== data) d.data = data      // Puffer wurde vergrößert (Inhalt gleich)
+            d.len = frames
+            if (frames >= d.waveFrames * 2) {
+                val w = waveOf(data, ch, frames, rate)
+                d.lows = w.lows; d.mids = w.mids; d.highs = w.highs; d.peaks = w.peaks
+                d.waveFrames = frames
+            }
+        }
+    }
+
     fun load(d: Deck, t: Track, title: String, nameBpm: Float?) {
         val w = waveOf(t.data, t.ch, t.len, t.rate)
         val det = detectBpm(w.onset, w.fps)
         val bpm = nameBpm ?: det.first
         val grid = findGrid(w.onset, w.fps, bpm) * (t.rate / w.fps)
-        d.playing = false
+        // lief schon im Vorhören? Dann ohne Unterbrechung weiter (Position, Pitch, Cue bleiben)
+        val keep = d.partial && d.data != null
+        val keepPlay = keep && d.playing
+        d.partial = false
+        d.keptPlay = keep && (keepPlay || d.pos > t.rate * 0.5)
+        if (!keep) d.playing = false
         d.sync = false
         d.loopOn = false
-        d.data = null
+        if (!keep) d.data = null
+        else d.data = t.data
         d.ch = t.ch
         d.len = t.len
         d.srcRate = t.rate
-        d.peaks = w.peaks
         d.lows = w.lows
         d.mids = w.mids
         d.highs = w.highs
+        d.peaks = w.peaks
         d.title = title
         d.bpm = bpm
         d.grid = grid
-        d.cuePoint = grid
         for (k in d.hot.indices) d.hot[k] = -1.0
-        d.pos = grid
-        d.seekTo = grid
-        d.pitch = 0f
+        if (d.keptPlay) {
+            if (d.cuePoint <= 0.0) d.cuePoint = grid
+        } else {
+            d.cuePoint = grid
+            d.pos = grid
+            d.seekTo = grid
+            d.pitch = 0f
+        }
         d.libId = null
         d.colId = null
         d.key = -1

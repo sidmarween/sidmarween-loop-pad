@@ -1023,20 +1023,21 @@ class DjView(context: Context) : View(context) {
         c.drawText("AB"[k].toString(), ln.left + dp(2f), ln.top + dp(11f), mono)
         mono.color = ink
         val title = when {
+            dd.loading && dd.partial && dd.loaded() -> "▶ ${dd.title} · lädt ${(max(0f, dd.loadProg) * 100).toInt()} % – schon spielbar"
             dd.loading -> if (dd.loadProg >= 0f) "Lädt … ${(dd.loadProg * 100).toInt()} %" + (if (dd.loadProg >= 0.86f) " · Analyse" else "") else "Lädt …"
             dd.loaded() -> dd.title
             else -> "⏏ antippen: Track laden (MP3/WAV)"
         }
         val info = if (dd.loaded()) {
             val rem = (dd.len - dd.pos) / dd.srcRate / max(0.01, dd.ratio)
-            String.format(Locale.GERMANY, "%.1f  −%s", dd.effBpm(), Dj.fmt(rem))
+            if (dd.bpm <= 0f) "—  " + Dj.fmt(dd.pos / dd.srcRate) else String.format(Locale.GERMANY, "%.1f  −%s", dd.effBpm(), Dj.fmt(rem))
         } else ""
         mono.textAlign = Paint.Align.RIGHT
         c.drawText(info, ln.right - dp(2f), ln.top + dp(11f), mono)
         if (dd.loading && dd.loadProg >= 0f) {
             // Ladebalken quer über die Wellenform-Fläche
             fill.shader = null
-            val by = wave.centerY()
+            val by = if (dd.partial) wave.bottom - dp(5f) else wave.centerY()
             fill.color = Color.argb(60, 255, 255, 255)
             c.drawRoundRect(wave.left + dp(10f), by - dp(4f), wave.right - dp(10f), by + dp(4f), dp(4f), dp(4f), fill)
             fill.color = col
