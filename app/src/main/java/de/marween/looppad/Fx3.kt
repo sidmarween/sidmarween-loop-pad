@@ -93,9 +93,81 @@ class Fx3(private val sr: Int) {
     private fun hRead(pos: Double): Float {
         val i0 = floor(pos).toLong()
         val fr = (pos - i0).toFloat()
-        val a = hist[(i0 and hMask.toLong()).toInt()]
-        val b = hist[((i0 + 1) and hMask.toLong()).toInt()]
-        return a + (b - a) * fr
+        val m = hMask.toLong()
+        return FxDsp.hermite(hist[((i0 - 1) and m).toInt()], hist[(i0 and m).toInt()], hist[((i0 + 1) and m).toInt()], hist[((i0 + 2) and m).toInt()], fr)
+    }
+
+    // ------------------------------------------------------------------ GROOVE GRAVITY
+
+    /** Aktuelle Verzögerung (Samples) gegenüber dem Original – 0 = genau im Takt. */
+    private var gvD = 0.0
+    private var gvWasTouch = false
+    private var gvRelD = 0.0
+    private var gvRelLeft = 0.0
+    private var gvRelTotal = 0.0
+    private var gvWave = false
+    private var gvPhase = 0.0
+
+    /**
+     * Der laufende Track wird zeitlich verformt (wie eine Platte, an der man zieht), aber nur bis zur [GRENZE]:
+     *  - Y unten „BREMSE“: solange der Finger liegt, läuft die Zeit langsamer (X = wie stark) – die Verzögerung wächst
+     *    bis zur Grenze und bleibt dort.
+     *  - Y oben „WELLE“: die Zeit schwingt innerhalb jedes Schlags/Takts (zieht zurück, holt auf) – auf den Schlägen
+     *    selbst stimmt sie immer.
+     * Loslassen: die Verzögerung wird so abgebaut, dass sie genau auf dem nächsten Schlag bzw. Takt wieder 0 ist.
+     */
+    private fun gravity(buf: FloatArray, n: Int, frame0: Long, touching: Boolean, mix: Float, p1: Float, p2: Float, sx: Float, sy: Float, bar: Long, ms: Long) {
+        val beat = bar / 4.0
+        val limit = Fx.GRAV_LIMITS[min(4, (p1 * 5f).toInt())] * beat
+        val retUnit = if (p2 < 0.5f) beat else bar.toDouble()
+        val wave = sy >= 0.5f
+        val g = sx.toDouble()
+        // Welle: Periode = ein Schlag (kleine Grenze) bis ein Takt (große Grenze); Form wird mit Y spitzer
+        val period = if (limit <= beat) beat else bar.toDouble()
+        // Welle nie so stark, dass die Zeit rückwärts liefe (Steigung begrenzen)
+        val waveLimit = min(limit, period * 0.22)
+        val sharp = 1.0 + (sy - 0.5) * 2.0 * 3.0
+        for (i in 0 until n) {
+            val f = frame0 + i
+            val x = buf[i]
+            hist[(hW and hMask.toLong()).toInt()] = x
+            hW++
+            if (touching) {
+                gvWasTouch = true
+                gvRelLeft = 0.0
+                gvWave = wave
+                if (wave) {
+                    // Welle im Raster: 0 auf jeder Periodengrenze, dazwischen zurückgezogen
+                    val ph = Math.floorMod(f - ms, period.toLong().coerceAtLeast(1)).toDouble() / period
+                    gvPhase = ph
+                    val shape = Math.pow(sin(PI * ph), sharp.coerceAtLeast(0.5))
+                    val target = g * waveLimit * shape
+                    gvD += (target - gvD) * 0.002     // weich hinein
+                } else {
+                    // Bremse: Zeit läuft um bis zu 50 % langsamer, Verzögerung wächst bis zur Grenze
+                    val slow = 0.5 * g * (1.0 - gvD / max(1.0, limit)).coerceIn(0.0, 1.0)
+                    gvD = min(limit, gvD + slow)
+                }
+            } else if (gvD > 0.0) {
+                if (gvWasTouch) {
+                    // Rückkehr planen: bis zur nächsten Schlag-/Taktgrenze, die weit genug weg ist (max. 3× schneller)
+                    gvWasTouch = false
+                    val pos = Math.floorMod(f - ms, retUnit.toLong().coerceAtLeast(1)).toDouble()
+                    var left = retUnit - pos
+                    while (left < gvD * 0.5) left += retUnit
+                    gvRelD = gvD; gvRelLeft = left; gvRelTotal = left
+                }
+                if (gvRelLeft > 0) {
+                    gvRelLeft -= 1.0
+                    // sanft (S-Kurve) auf genau 0 an der Grenze
+                    val t = 1.0 - gvRelLeft / gvRelTotal
+                    gvD = gvRelD * (1.0 - t * t * (3 - 2 * t))
+                    if (gvRelLeft <= 0) gvD = 0.0
+                } else gvD = 0.0
+            }
+            val y = if (gvD <= 1e-6) x else hRead(hW - 1 - gvD)
+            buf[i] = x + (y - x) * mix
+        }
     }
 
     fun process(
@@ -106,7 +178,7 @@ class Fx3(private val sr: Int) {
         wasTouching = touching
         val target = if (touching) 1f else 0f
         val eRate = 1f / (0.008f * sr)
-        val tails = type == Fx.TAPEECHO || type == Fx.SPACEECHO || type == Fx.HARMONIZER
+        val tails = type == Fx.TAPEECHO || type == Fx.SPACEECHO || type == Fx.HARMONIZER || (type == Fx.GRAVITY && gvD > 0.01)
         if (!tails && !touching && engage < 1e-4f) {
             engage = 0f
             for (i in 0 until n) { hist[(hW and hMask.toLong()).toInt()] = buf[i]; hW++ }
@@ -123,6 +195,7 @@ class Fx3(private val sr: Int) {
             Fx.HARMONIZER -> harmonizer(buf, n, target, eRate, mix, p1, p2, sx, sy)
             Fx.AUTOTUNE -> autotune(buf, n, target, eRate, mix, p1, p2, sx, sy)
             Fx.ROBOT -> robot(buf, n, target, eRate, mix, p1, p2, sx, sy)
+            Fx.GRAVITY -> gravity(buf, n, frame0, touching, mix, p1, p2, sx, sy, bar, ms)
             Fx.MUTATION -> {
                 if (mutDry.size < n) mutDry = FloatArray(n)
                 System.arraycopy(buf, 0, mutDry, 0, n)
