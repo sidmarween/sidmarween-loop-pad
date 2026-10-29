@@ -43,6 +43,10 @@ class Fx3(private val sr: Int) {
     /** Federhall-artiger kleiner Plate-Hall für das Space-Echo. */
     private val verb = Plate(sr, 0.4f)
 
+    // Beat Mutation
+    private val mut = BeatMutation(sr)
+    private var mutDry = FloatArray(0)
+
     // Looper
     private var loop = FloatArray(0)
     private var loopLen = 0
@@ -79,6 +83,7 @@ class Fx3(private val sr: Int) {
         gate = 0f
         java.util.Arrays.fill(cb, 0f)
         ratio = 1.0; ratioT = 1.0; detHz = 0f
+        mut.reset()
     }
 
     private fun stepEngage(target: Float, rate: Float) {
@@ -105,6 +110,8 @@ class Fx3(private val sr: Int) {
         if (!tails && !touching && engage < 1e-4f) {
             engage = 0f
             for (i in 0 until n) { hist[(hW and hMask.toLong()).toInt()] = buf[i]; hW++ }
+            // Beat Mutation hört auch inaktiv mit (Takt-Analyse), damit es beim Antippen sofort losgeht
+            if (type == Fx.MUTATION) mut.feed(buf, n, frame0, bar, ms)
             return
         }
         when (type) {
@@ -116,6 +123,16 @@ class Fx3(private val sr: Int) {
             Fx.HARMONIZER -> harmonizer(buf, n, target, eRate, mix, p1, p2, sx, sy)
             Fx.AUTOTUNE -> autotune(buf, n, target, eRate, mix, p1, p2, sx, sy)
             Fx.ROBOT -> robot(buf, n, target, eRate, mix, p1, p2, sx, sy)
+            Fx.MUTATION -> {
+                if (mutDry.size < n) mutDry = FloatArray(n)
+                System.arraycopy(buf, 0, mutDry, 0, n)
+                mut.process(buf, n, frame0, bar, ms, sx, sy, p1, p2)
+                for (i in 0 until n) {
+                    stepEngage(target, eRate)
+                    val d = mutDry[i]
+                    buf[i] = d + (buf[i] - d) * engage * mix
+                }
+            }
         }
     }
 

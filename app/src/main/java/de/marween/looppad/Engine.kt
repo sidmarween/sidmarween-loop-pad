@@ -564,6 +564,9 @@ object Engine {
 
     private fun swingOffset(bar: Long): Long = (swing * 0.5f * bar / STEPS).toLong()
     private fun seqStart(): Long = if (masterLen > 0L) masterStart else seqOrigin
+
+    /** Taktlänge für taktsynchrone Effekte: Master-Loop, sonst das laufende Instrumenten-Raster (0 = keins). */
+    private fun fxBarLen(): Long = if (masterLen > 0L) masterLen else if (seqPlaying) seqBar() else 0L
     private fun stepFrame(origin: Long, bar: Long, n: Long): Long = origin + Math.floorDiv(n * bar, STEPS.toLong())
 
     /** ▶ – startet Loops, Sequenzer und Instrumente gemeinsam auf der Eins. */
@@ -2844,7 +2847,7 @@ object Engine {
                             val fx = pfxInst[MIC_CHAIN][sl] ?: continue
                             if (ty < 0) continue
                             val pr = pfxPar[MIC_CHAIN][sl]
-                            fx.process(monBuf, block, w, ty, pr[0], pr[1], true, pr[2], pr[3], pr[4], masterLen, masterStart, micP)
+                            fx.process(monBuf, block, w, ty, pr[0], pr[1], true, pr[2], pr[3], pr[4], fxBarLen(), seqStart(), micP)
                         }
                     }
                     var mp = 0f
@@ -2872,7 +2875,7 @@ object Engine {
                     val fx = pfxInst[p][sl] ?: continue
                     if (t < 0) continue
                     val pr = pfxPar[p][sl]
-                    fx.process(pb, block, w, t, pr[0], pr[1], true, pr[2], pr[3], pr[4], masterLen, masterStart, micP)
+                    fx.process(pb, block, w, t, pr[0], pr[1], true, pr[2], pr[3], pr[4], fxBarLen(), seqStart(), micP)
                 }
                 // Crossfader: Verstärkung über den Block rampen (kein Knistern beim schnellen Schieben)
                 if (scNow && scPads) for (i in 0 until block) pb[i] *= scEnv[i]
@@ -2939,7 +2942,7 @@ object Engine {
                     val kn = if (s == es) knobs else slotKnobs[s]
                     chain[s].process(
                         bus, block, w, slotType[s], effX, effY, effTouch,
-                        kn[0], kn[1], kn[2], masterLen, masterStart, mic
+                        kn[0], kn[1], kn[2], fxBarLen(), seqStart(), mic
                     )
                 }
             }
