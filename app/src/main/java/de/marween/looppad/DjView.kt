@@ -637,7 +637,7 @@ class DjView(context: Context) : View(context) {
             val blink = !dd.playing && dd.loaded() && (SystemClock.uptimeMillis() / 400) % 2 == 0L
             drawSide(c, side[k][0], "▶ ‖", dd.playing || blink, col)
             drawSide(c, side[k][1], "CUE", cuePreview[k], col)
-            drawSide(c, side[k][2], "SYNC", dd.sync, col)
+            drawSide(c, side[k][2], "SYNC", dd.sync || dd.syncPending, col)
             drawSide(c, side[k][3], "🎧", dd.cue, col)
             drawSide(c, side[k][4], "FX", dd.fxOn || dd.fxAmt > 0.02f, col)
             // Pitch-Anzeige
@@ -2763,6 +2763,12 @@ class DjView(context: Context) : View(context) {
                 }
             }
             2 -> if (down) {
+                if (dd.bpm <= 0f && dd.partial) {
+                    // Track lädt noch: SYNC vormerken, greift sobald Tempo und Raster da sind
+                    dd.syncPending = !dd.syncPending
+                    onHint?.invoke(if (dd.syncPending) "SYNC ${"AB"[k]} vorgemerkt – rastet ein, sobald der Track fertig geladen ist" else "SYNC ${"AB"[k]} aus")
+                    return
+                }
                 if (dd.bpm <= 0f) { onHint?.invoke("Kein Tempo erkannt"); return }
                 Dj.toggleSync(dd)
                 onHint?.invoke(if (!dd.sync && !dd.syncReq) "SYNC ${"AB"[k]} aus" else "SYNC ${"AB"[k]}: Tempo und Takt folgen dem Master (${String.format(Locale.GERMANY, "%.1f", max(Engine.currentBpm(), dd.bpm))} BPM)")

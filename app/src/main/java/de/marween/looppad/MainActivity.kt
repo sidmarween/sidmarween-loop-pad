@@ -5586,6 +5586,8 @@ class MainActivity : Activity() {
                     dd.phraseOff = t.phraseOff
                 }
                 if (t.key >= 0) { dd.keyGen++; dd.key = t.key; dd.keyConf = t.keyConf }
+                // vorgemerktes SYNC mit dem gespeicherten Raster neu einrasten
+                if (dd.sync || dd.syncReq) dd.syncReq = true
                 // Song-Struktur zum gespeicherten Raster neu einteilen
                 if (t.analyzed || t.bpm > 0f) try { Dj.analyzeParts(dd) } catch (ignored: Throwable) {}
                 // lief schon beim Vorhören: nicht zurückspringen

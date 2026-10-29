@@ -87,6 +87,8 @@ object Dj {
         @Volatile var partial = false
         /** Beim Fertigladen lief das Deck schon – nicht mehr springen. */
         @Volatile var keptPlay = false
+        /** SYNC wurde während des Vorhörens gedrückt → nach dem Laden einrasten. */
+        @Volatile var syncPending = false
         internal var waveFrames = 0
         /** Lade-Fortschritt 0..1, -1 = lädt nicht. */
         @Volatile var loadProg = -1f
@@ -1041,6 +1043,7 @@ object Dj {
     }
 
     fun toggleSync(d: Deck) {
+        if (d.partial && d.bpm <= 0f) { d.syncPending = !d.syncPending; return }
         if (!d.loaded() || d.bpm <= 0f) return
         if (d.sync) {
             // Tempo beibehalten: Pitch-Fader auf das aktuelle Verhältnis stellen
@@ -1324,6 +1327,7 @@ object Dj {
             for (s in 0..3) d.stemGain[s] = 1f
             d.waveFrames = frames
             d.keptPlay = false
+            d.syncPending = false
             d.partial = true
             d.data = data
         } else {
@@ -1390,6 +1394,8 @@ object Dj {
         d.data = t.data
         analyzePhrase(d)
         detectKeyAsync(d)
+        // während des Vorhörens SYNC gedrückt → jetzt einrasten (Tempo + Phase)
+        if (keep && d.syncPending && bpm > 0f) { d.syncPending = false; d.syncReq = true } else d.syncPending = false
         if (d === decks[0] || d === decks[1]) {
             stemsAsync(d)
             onDeckLoaded?.invoke(d)
