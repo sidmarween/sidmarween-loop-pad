@@ -355,6 +355,10 @@ object Midi {
                     onHint?.invoke("Pad ${p + 1} ← ${noteName(d1)} ($d1)")
                     return
                 }
+                if (Harmonizer.takesMidi()) {
+                    if (on) Harmonizer.noteOn(d1) else Harmonizer.noteOff(d1)
+                    return
+                }
                 if (keysChannel > 0 && ch == keysChannel && keysChannel != channel) {
                     keys(d1, on, d2)
                     return

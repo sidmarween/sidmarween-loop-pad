@@ -669,6 +669,19 @@ object Engine {
         )
     }
 
+    private var micTmp = FloatArray(0)
+    /** Die zuletzt aufgenommenen [n] Mikrofon-Proben (für Live-Effekte wie den Harmonizer). */
+    private fun micLatest(n: Int): FloatArray {
+        if (micTmp.size < n) micTmp = FloatArray(n * 2)
+        val c = captured
+        val rs = ring.size
+        for (i in 0 until n) {
+            val f = c - n + i
+            micTmp[i] = if (f >= 0 && rs > 0) ring[(f % rs).toInt()] else 0f
+        }
+        return micTmp
+    }
+
     fun masterFrames(): Long = masterLen
     fun masterStartFrame(): Long = masterStart
 
@@ -2970,6 +2983,11 @@ object Engine {
                 val ml = masterLen
                 val bar0 = if (ml > 0L) (w - masterStart).toDouble() / ml else -1.0
                 Atmos.render(mL, mR, block, sampleRate, bar0, if (ml > 0L) 1.0 / ml else 0.0, vol)
+            }
+            // Vocal-Harmonizer (Deck-Gesang oder Mikrofon)
+            if (Harmonizer.on || Harmonizer.meter > 0f || Harmonizer.source != 3) {
+                val mic = if (Harmonizer.on && Harmonizer.source == 3) micLatest(block) else null
+                Harmonizer.render(mL, mR, block, sampleRate, mic, vol)
             }
             MasterBus.process(mL, mR, block, sampleRate)
             // Schutz-Limiter: Spitzen (z. B. zwei Decks gleichzeitig) sanft absenken statt hart zu clippen

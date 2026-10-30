@@ -301,8 +301,11 @@ object Dj {
                     else -> 1.0
                 }
                 val qwSel = d.fxType == QWARP
-                if (qwSel && d.topL.size < n) { d.topL = FloatArray(n); d.topR = FloatArray(n) }
-                d.stemLive.process(bl, br, n, p0, d.pos, pf, sr, d.stemMask, d.stemGain, if (qwSel) d.topL else null, if (qwSel) d.topR else null)
+                val harm = Harmonizer.wantsDeck(d.idx)
+                val split = qwSel || harm
+                if (split && d.topL.size < n) { d.topL = FloatArray(n); d.topR = FloatArray(n) }
+                d.stemLive.process(bl, br, n, p0, d.pos, pf, sr, d.stemMask, d.stemGain, if (split) d.topL else null, if (split) d.topR else null, harm)
+                if (harm) Harmonizer.feedDeck(d.idx, d.topL, d.topR, n)
                 if (qwSel) {
                     val q = d.qw ?: QuantumWarp(sr).also { d.qw = it }
                     val beatLen = if (d.bpm > 0f) sr * 60.0 / max(40f, d.effBpm()) else sr * 0.5

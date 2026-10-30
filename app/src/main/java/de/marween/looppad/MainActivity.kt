@@ -2491,6 +2491,7 @@ class MainActivity : Activity() {
                 add("✂ Slicer: Song-Abschnitt auf 16 Pads zerlegen") { if (djMode) switchMode(false); if (Slicer.data == null) pickSlicerSource() else pads.openSlicer() }
                 add("👻 Ghost-Producer: Genre-Patterns als Live-Remix") { openGhost() }
                 add("🌌 ATMOS: Klangteppich & Drones (Übergänge, Intros)") { openAtmos() }
+                add("🎤 Vocal-Harmonizer: Chor aus dem Deck-Gesang") { if (djMode) dj.openHarm() else pads.openHarm(); hint("▶ AN, dann Akkord-Pads halten – der Gesang des Decks wird zum Chor · XY: Formant und Tuning") }
                 add("🪄 Ein-Tipp-Remix: aus einem Song ein neues Arrangement") { if (djMode) switchMode(false); pickRemixPad() }
                 add(if (Engine.scOn) "〽 Sidechain-Pumpen: AN" else "〽 Sidechain-Pumpen (Kick drückt Bass & Flächen)") { showSidechain() }
                 add((if (InstState.liveAmt > 0f) "🌱 Lebendige Patterns: " + LIVE_NAMES[liveIdx()] else "🌱 Lebendige Patterns (Variationen & Fills)") + " …") { showLivePatterns() }

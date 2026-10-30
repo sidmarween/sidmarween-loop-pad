@@ -266,7 +266,8 @@ object DeckStems {
          * [target]: Reglerstände (VOC, MEL, BASS, DRUMS) 0..1.
          */
         fun process(l: FloatArray, r: FloatArray, n: Int, p0: Double, p1: Double, pf: Double, sr: Int, mask: Mask?, target: FloatArray,
-                    topL: FloatArray? = null, topR: FloatArray? = null) {
+                    topL: FloatArray? = null, topR: FloatArray? = null, topVoc: Boolean = false) {
+            vocOnly = topVoc
             val split = topL != null && topR != null
             for (i in 0 until n) {
                 inL[rover] = l[i]
@@ -302,6 +303,9 @@ object DeckStems {
             }
         }
 
+        /** Aufteilung liefert nur den Gesang (ungeregelt, für den Harmonizer) statt Gesang + Melodie. */
+        private var vocOnly = false
+
         private fun frame(pf: Double, sr: Int, mask: Mask?, target: FloatArray, split: Boolean = false) {
             var unity = true
             for (s in 0..3) {
@@ -324,7 +328,8 @@ object DeckStems {
                     for (k in 0..LN / 2) {
                         gainBin[k] = 1f
                         val f = k * binHz
-                        topBin[k] = ((f - 150.0) / 150.0).coerceIn(0.0, 1.0).toFloat()
+                        topBin[k] = if (vocOnly) (((f - 180.0) / 120.0).coerceIn(0.0, 1.0) * ((6000.0 - f) / 2000.0).coerceIn(0.0, 1.0)).toFloat()
+                        else ((f - 150.0) / 150.0).coerceIn(0.0, 1.0).toFloat()
                     }
                 } else {
                     val pc = inPos[LN / 2]
@@ -345,7 +350,7 @@ object DeckStems {
                             val v = (md[o + 2].toInt() and 255) / 255f
                             val m = max(0f, 1f - d - bs - v)
                             gb = g[DRUMS] * d + g[BASS] * bs + g[VOC] * v + g[MEL] * m
-                            gt = g[VOC] * v + g[MEL] * m
+                            gt = if (vocOnly) v else g[VOC] * v + g[MEL] * m
                         }
                         gainBin[k] = gb
                         topBin[k] = gt
