@@ -142,6 +142,8 @@ class DjView(context: Context) : View(context) {
     /** Ghost-Producer (Genre-Patterns als Live-Remix über den Track). */
     val ghost = GhostPanel(this).also { g -> g.onHint = { m -> onHint?.invoke(m) } }
     fun openGhost() { ghost.open(); invalidate() }
+    val atmos = AtmosPanel(this).also { a -> a.onHint = { m -> onHint?.invoke(m) } }
+    fun openAtmos() { atmos.open(); invalidate() }
     var onTempo: (() -> Unit)? = null
     var onPadsMode: (() -> Unit)? = null
     var onHint: ((String) -> Unit)? = null
@@ -599,6 +601,11 @@ class DjView(context: Context) : View(context) {
     override fun onDraw(c: Canvas) {
         if (panel.width() <= 0f) layoutAll()
         GhostLoop.poll()
+        if (atmos.isOpen) {
+            c.drawColor(skin.bg)
+            atmos.draw(c, RectF(dp(6f), insetTop + dp(6f), width - dp(6f), height - insetBottom - dp(6f)), skin.accent)
+            return
+        }
         if (ghost.isOpen) {
             c.drawColor(skin.bg)
             ghost.draw(c, RectF(dp(6f), insetTop + dp(6f), width - dp(6f), height - insetBottom - dp(6f)), skin.accent)
@@ -2383,6 +2390,11 @@ class DjView(context: Context) : View(context) {
     @SuppressLint("ClickableViewAccessibility")
     override fun onTouchEvent(e: MotionEvent): Boolean {
         if (e.actionMasked == MotionEvent.ACTION_DOWN) try { requestUnbufferedDispatch(e) } catch (ignored: Throwable) {}
+        if (atmos.isOpen) {
+            atmos.touch(e)
+            invalidate()
+            return true
+        }
         if (ghost.isOpen) {
             ghost.touch(e)
             invalidate()

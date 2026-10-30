@@ -2490,6 +2490,7 @@ class MainActivity : Activity() {
                 }
                 add("✂ Slicer: Song-Abschnitt auf 16 Pads zerlegen") { if (djMode) switchMode(false); if (Slicer.data == null) pickSlicerSource() else pads.openSlicer() }
                 add("👻 Ghost-Producer: Genre-Patterns als Live-Remix") { openGhost() }
+                add("🌌 ATMOS: Klangteppich & Drones (Übergänge, Intros)") { openAtmos() }
                 add("🪄 Ein-Tipp-Remix: aus einem Song ein neues Arrangement") { if (djMode) switchMode(false); pickRemixPad() }
                 add(if (Engine.scOn) "〽 Sidechain-Pumpen: AN" else "〽 Sidechain-Pumpen (Kick drückt Bass & Flächen)") { showSidechain() }
                 add((if (InstState.liveAmt > 0f) "🌱 Lebendige Patterns: " + LIVE_NAMES[liveIdx()] else "🌱 Lebendige Patterns (Variationen & Fills)") + " …") { showLivePatterns() }
@@ -3419,6 +3420,16 @@ class MainActivity : Activity() {
     }
 
     // ================================================================ Ghost-Producer
+
+    private fun openAtmos() {
+        val a = if (djMode) dj.atmos else pads.atmos
+        a.onPickFile = {
+            val i = Intent(Intent.ACTION_OPEN_DOCUMENT).apply { addCategory(Intent.CATEGORY_OPENABLE); type = "audio/*" }
+            try { startActivityForResult(i, REQ_ATMOS_FILE) } catch (e: Exception) { toast("Kein Dateimanager gefunden") }
+        }
+        if (djMode) dj.openAtmos() else pads.openAtmos()
+        hint("▶ EINBLENDEN startet den Teppich in der Tonart des Decks · XY: Filter (links/rechts) und Raum (hoch/runter)")
+    }
 
     private fun openGhost() {
         val g = if (djMode) dj.ghost else pads.ghost
@@ -6440,6 +6451,22 @@ class MainActivity : Activity() {
             if (uris.isNotEmpty()) importLibraryUris(uris)
             return
         }
+        if (requestCode == REQ_ATMOS_FILE) {
+            val u = data?.data
+            if (resultCode != RESULT_OK || u == null) return
+            val name = (displayName(u) ?: "Audio").substringBeforeLast('.')
+            Thread {
+                try {
+                    val x = AudioFiles.decode(this, u, Engine.sampleRate, 12)
+                    Atmos.setSnip(x, null, Engine.sampleRate)
+                    if (Atmos.blend < 0.2f) Atmos.blend = 0.6f
+                    runOnUiThread { hint("🌌 $name ist jetzt die Körner-Quelle") }
+                } catch (e: Throwable) {
+                    runOnUiThread { toast("Datei konnte nicht geladen werden: ${e.message ?: e}") }
+                }
+            }.start()
+            return
+        }
         if (requestCode == REQ_GHOST_LOOP) {
             val u = data?.data
             if (resultCode != RESULT_OK || u == null) return
@@ -6868,6 +6895,7 @@ class MainActivity : Activity() {
         private const val REQ_CLOUD_FILES = 27
         private const val REQ_BACKUP = 28
         private const val REQ_RESTORE = 29
+        private const val REQ_ATMOS_FILE = 47
         /** Ziel eines Cloud-Imports: Pad 0..n, die Sammlung oder ein Deck (CLOUD_DECK + 0/1). */
         private const val CLOUD_COLLECTION = -1
         private const val CLOUD_DECK = 1000

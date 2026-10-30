@@ -2964,6 +2964,13 @@ object Engine {
                 mL[i] = (if (djOn) m + djL[i] else m) * vol
                 mR[i] = (if (djOn) m + djR[i] else m) * vol
             }
+            // ATMOS: Mitschnitt (für „Schnipsel einfangen“) und Klangteppich dazu
+            Atmos.feed(mL, mR, block, sampleRate)
+            if (Atmos.active()) {
+                val ml = masterLen
+                val bar0 = if (ml > 0L) (w - masterStart).toDouble() / ml else -1.0
+                Atmos.render(mL, mR, block, sampleRate, bar0, if (ml > 0L) 1.0 / ml else 0.0, vol)
+            }
             MasterBus.process(mL, mR, block, sampleRate)
             // Schutz-Limiter: Spitzen (z. B. zwei Decks gleichzeitig) sanft absenken statt hart zu clippen
             safety.process(mL, mR, block)
