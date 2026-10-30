@@ -936,6 +936,7 @@ class PadView(context: Context) : View(context) {
         drawFooter(canvas)
         if (kbPad >= 0) drawKeyboard(canvas)
         if (edPad >= 0) drawEditor(canvas, dt)
+        if (songEd.isOpen) songEd.draw(canvas, RectF(dp(4f), insetTop + dp(4f), width - dp(4f), height - insetBottom - dp(4f)), overlayColors()[2])
         if (instEd.isOpen) instEd.draw(canvas, RectF(dp(6f), insetTop + dp(6f), width - dp(6f), height - insetBottom - dp(6f)), overlayColors())
         if (slicer.isOpen) slicer.draw(canvas, RectF(dp(6f), insetTop + dp(6f), width - dp(6f), height - insetBottom - dp(6f)), overlayColors()[2])
         if (station.isOpen) station.draw(canvas, RectF(dp(6f), insetTop + dp(6f), width - dp(6f), height - insetBottom - dp(6f)), overlayColors()[2])
@@ -1142,7 +1143,7 @@ class PadView(context: Context) : View(context) {
     /** MASTER-Knopf oben: leuchtet, wenn die Kette aktiv ist; Balken zeigt die Limiter-Reduktion. */
     private fun drawMasterButton(canvas: Canvas) {
         val r = masterBtn
-        if (r.width() <= 0f || kbPad >= 0 || edPad >= 0 || instEd.isOpen || slicer.isOpen || station.isOpen || launcher.isOpen || ghost.isOpen || atmos.isOpen || harm.isOpen || euclid.isOpen) return
+        if (r.width() <= 0f || kbPad >= 0 || edPad >= 0 || instEd.isOpen || slicer.isOpen || station.isOpen || launcher.isOpen || ghost.isOpen || atmos.isOpen || harm.isOpen || euclid.isOpen || songEd.isOpen) return
         val cols = overlayColors()
         val active = MasterBus.anyOn()
         val rr = dp(8f)
@@ -1506,7 +1507,7 @@ class PadView(context: Context) : View(context) {
         strokePaint.strokeCap = Paint.Cap.BUTT
     }
 
-    private fun focusBlocked(): Boolean = kbPad >= 0 || edPad >= 0 || instEd.isOpen || masterPanel.isOpen || slicer.isOpen || station.isOpen || launcher.isOpen || ghost.isOpen || atmos.isOpen || harm.isOpen || euclid.isOpen
+    private fun focusBlocked(): Boolean = kbPad >= 0 || edPad >= 0 || instEd.isOpen || masterPanel.isOpen || slicer.isOpen || station.isOpen || launcher.isOpen || ghost.isOpen || atmos.isOpen || harm.isOpen || euclid.isOpen || songEd.isOpen
 
     private fun sectionRect(sec: Int, out: RectF) {
         when (sec) {
@@ -4226,6 +4227,11 @@ class PadView(context: Context) : View(context) {
         }
         if (ghost.isOpen) {
             ghost.touch(e)
+            invalidate()
+            return true
+        }
+        if (songEd.isOpen && !instEd.isOpen) {
+            songEd.touch(e)
             invalidate()
             return true
         }
@@ -9272,6 +9278,11 @@ class PadView(context: Context) : View(context) {
     fun openHarm() { closeFocus(); harm.open(); invalidate() }
     val euclid = EuclidPanel(this).also { it.onHint = { m -> hint(m) } }
     fun openEuclid() { closeFocus(); euclid.open(); invalidate() }
+    val songEd = SongEditor(this).also { se ->
+        se.onHint = { m -> hint(m) }
+        se.onOpenInst = { inst, pat -> InstState.selectPat(inst, pat); openInstFromSong(inst) }
+    }
+    fun openSongEditor() { closeFocus(); songEd.open(); invalidate() }
 
     /** Tonleiter für die Piano-Roll wählen. */
     var onInstScale: (() -> Unit)? = null

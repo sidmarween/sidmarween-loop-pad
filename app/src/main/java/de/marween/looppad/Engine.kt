@@ -3843,7 +3843,7 @@ object Engine {
             if (!l.oneShot) l.start = start
         }
         sceneBarCount = 0
-        arrBar = 0
+        arrBar = if (songMode) playFromBar.coerceIn(0, max(0, songBars - 1)) else 0
         arrBarStart = start
         arrApplyNow = true
         seqPlaying = true
@@ -3866,6 +3866,11 @@ object Engine {
     }
 
     fun transportStop() {
+        if (songRec) {
+            // laufender Takt zählt mit (auch wenn er nicht zu Ende gespielt wurde)
+            if (seqPlaying) { arrCaptureBar(arrBar, 12); recLastBar = max(recLastBar, arrBar) }
+            songRecStop()
+        }
         val now = System.nanoTime()
         for (p in 0 until PADS) {
             val t = takes.get(p) ?: continue
@@ -4628,7 +4633,7 @@ object Engine {
         if (!seqPlaying) return
         if (arrApplyNow) {
             arrApplyNow = false
-            if (songMode) applyArr(0)
+            if (songMode && !songRec) applyArr(arrBar)
         }
         val bar = seqBar()
         if (bar <= 0L) return
@@ -4637,13 +4642,19 @@ object Engine {
         if (k <= 0L) return
         val f = origin + k * bar
         if (f >= w + block) return
+        val prevBar = arrBar
         arrBar = (arrBar + 1) % max(1, songBars)
         arrBarStart = f
         // Szenen-Launcher: vorgemerkte Zeile auf der Eins starten
         val lq = launchQueued
         if (lq != LAUNCH_NONE && !songMode) applyLaunch(lq)
         if (songMode) {
-            applyArr(arrBar)
+            if (songRec) {
+                // Song-Aufnahme: was im abgelaufenen Takt lief, wird zu diesem Takt im Arrangement
+                arrCaptureBar(prevBar, 12)
+                recLastBar = max(recLastBar, prevBar)
+                if (arrBar == 0) songRecStop()
+            } else applyArr(arrBar)
             return
         }
         sceneBarCount++
@@ -4704,6 +4715,149 @@ object Engine {
     val arrScene = IntArray(ARR_MAX) { -1 }
     @Volatile var songMode = false
     @Volatile var songBars = 16
+    /** ▶ im Song-Modus startet ab diesem Takt. */
+    @Volatile var playFromBar = 0
+    /** Song-Aufnahme: jeder gespielte Takt wird ins Arrangement geschrieben (Pads, Instrumente, Extras, FX-XY). */
+    @Volatile var songRec = false
+        private set
+    @Volatile private var recLastBar = -1
+    /** Zusatz-Spuren im Song: ATMOS, EUKLID, HARMONIZER (an/aus je Takt). */
+    const val ARR_X = 3
+    val arrX = Array(ARR_X) { BooleanArray(ARR_MAX) }
+    val ARR_X_NAMES = arrayOf("ATMOS", "EUKLID", "HARMONIZER")
+    /** Abschnitte: ab diesem Takt beginnt Abschnitt k ([SECTION_NAMES]), -1 = keiner. */
+    val arrSection = IntArray(ARR_MAX) { -1 }
+    val SECTION_NAMES = arrayOf("INTRO", "HAUPTTEIL", "AUFBAU", "DROP", "BREAK", "BRIDGE", "ENDING")
+
+    private fun xOn(k: Int): Boolean = when (k) { 0 -> Atmos.on; 1 -> Euclid.on; else -> Harmonizer.on }
+    private fun setXOn(k: Int, v: Boolean) { when (k) { 0 -> Atmos.on = v; 1 -> Euclid.on = v; else -> Harmonizer.on = v } }
+
+    /** Song-Aufnahme starten: ab Takt [from], Song-Modus an, Transport von vorn. */
+    fun songRecStart(from: Int) {
+        if (seqPlaying) transportStop()
+        songMode = true
+        playFromBar = from.coerceIn(0, ARR_MAX - 1)
+        recLastBar = playFromBar - 1
+        songBars = ARR_MAX
+        songRec = true
+        autoRec = true
+        transportPlay(true)
+    }
+
+    fun songRecStop() {
+        if (!songRec) return
+        songRec = false
+        autoRec = false
+        val last = max(recLastBar, playFromBar)
+        songBars = (((last + 1) + 3) / 4 * 4).coerceIn(4, ARR_MAX)
+    }
+
+    /** Spur [t] im Song-Editor: 0..11 Pads, 12.. Instrumente, dann Extras, dann Automations-Spuren. */
+    val TRK_PADS = 12
+    val TRK_INST: Int get() = ARR_INST
+    val TRK_X: Int get() = ARR_INST + InstState.INSTS
+    val TRK_AUTO: Int get() = TRK_X + ARR_X
+    val TRK_COUNT: Int get() = TRK_AUTO + AUTO_LANES
+
+    /** Zellwert einer Spur in einem Takt (Automation: 1, wenn dort Punkte liegen). */
+    fun trkCell(t: Int, bar: Int): Int = when {
+        bar !in 0 until ARR_MAX -> 0
+        t < TRK_X -> arrCell(t, bar)
+        t < TRK_AUTO -> if (arrX[t - TRK_X][bar]) 1 else 0
+        t < TRK_COUNT -> { val a = auto[t - TRK_AUTO]; if ((0 until AUTO_RES).any { !a[bar * AUTO_RES + it].isNaN() }) 1 else 0 }
+        else -> 0
+    }
+
+    fun trkSet(t: Int, bar: Int, v: Int) {
+        if (bar !in 0 until ARR_MAX) return
+        when {
+            t < TRK_X -> setArrCell(t, bar, v)
+            t < TRK_AUTO -> arrX[t - TRK_X][bar] = v > 0
+            t < TRK_COUNT -> if (v <= 0) java.util.Arrays.fill(auto[t - TRK_AUTO], bar * AUTO_RES, (bar + 1) * AUTO_RES, Float.NaN)
+        }
+    }
+
+    /** Ausschnitt (Spuren × Takte) – für Kopieren/Verschieben im Song-Editor. */
+    class Region(val t0: Int, val t1: Int, val bars: Int, val cells: Array<IntArray>, val autoPts: Array<FloatArray?>, val sections: IntArray)
+
+    fun regionCopy(t0: Int, t1: Int, b0: Int, b1: Int): Region {
+        val nb = (b1 - b0 + 1).coerceAtLeast(1)
+        val cells = Array(t1 - t0 + 1) { i -> IntArray(nb) { trkCell(t0 + i, b0 + it) } }
+        val ap = Array(t1 - t0 + 1) { i ->
+            val t = t0 + i
+            if (t in TRK_AUTO until TRK_COUNT) auto[t - TRK_AUTO].copyOfRange(b0 * AUTO_RES, min(ARR_MAX, b0 + nb) * AUTO_RES) else null
+        }
+        val sec = IntArray(nb) { arrSection.getOrElse(b0 + it) { -1 } }
+        return Region(t0, t1, nb, cells, ap, sec)
+    }
+
+    fun regionClear(t0: Int, t1: Int, b0: Int, b1: Int) {
+        for (t in t0..t1) for (b in b0..b1) {
+            if (t in TRK_AUTO until TRK_COUNT) { if (b in 0 until ARR_MAX) java.util.Arrays.fill(auto[t - TRK_AUTO], b * AUTO_RES, (b + 1) * AUTO_RES, Float.NaN) }
+            else trkSet(t, b, 0)
+        }
+    }
+
+    /** Ausschnitt ab Takt [at] einsetzen (gleiche Spuren). [withSections]: Abschnitts-Marken mitnehmen. */
+    fun regionPaste(r: Region, at: Int, withSections: Boolean) {
+        for (i in r.cells.indices) {
+            val t = r.t0 + i
+            for (k in 0 until r.bars) {
+                val b = at + k
+                if (b !in 0 until ARR_MAX) continue
+                if (t in TRK_AUTO until TRK_COUNT) {
+                    val src = r.autoPts[i] ?: continue
+                    for (q in 0 until AUTO_RES) { val si = k * AUTO_RES + q; if (si < src.size) auto[t - TRK_AUTO][b * AUTO_RES + q] = src[si] }
+                } else trkSet(t, b, r.cells[i][k])
+            }
+        }
+        if (withSections) for (k in 0 until r.bars) { val b = at + k; if (b in 0 until ARR_MAX && r.sections[k] >= 0) arrSection[b] = r.sections[k] }
+        val end = at + r.bars
+        if (end > songBars) songBars = ((end + 3) / 4 * 4).coerceIn(1, ARR_MAX)
+    }
+
+    /** Takte einfügen (alles ab [at] rutscht um [n] nach hinten) bzw. löschen (n < 0). */
+    fun barsInsert(at: Int, n: Int) {
+        if (n == 0 || at !in 0 until ARR_MAX) return
+        val all = regionCopy(0, TRK_COUNT - 1, at, ARR_MAX - 1)
+        val secs = arrSection.copyOf()
+        regionClear(0, TRK_COUNT - 1, at, ARR_MAX - 1)
+        for (b in at until ARR_MAX) arrSection[b] = -1
+        val dst = if (n > 0) at + n else at
+        val skip = if (n < 0) -n else 0
+        val r = Region(all.t0, all.t1, all.bars - skip, Array(all.cells.size) { all.cells[it].copyOfRange(skip, all.bars) },
+            Array(all.autoPts.size) { all.autoPts[it]?.let { a -> a.copyOfRange(min(a.size, skip * AUTO_RES), a.size) } }, all.sections.copyOfRange(skip, all.bars))
+        regionPaste(r, dst, false)
+        for (b in at until ARR_MAX) { val sb = b - dst + skip + at; arrSection[b] = if (b >= dst && sb in at until ARR_MAX) secs[sb] else -1 }
+        songBars = (songBars + n).coerceIn(1, ARR_MAX)
+    }
+
+    /** Spitzen einer Pad-Aufnahme in [n] Abschnitten (für die Wellenform im Song-Editor). */
+    fun padPeaks(p: Int, n: Int): FloatArray? {
+        val d = loops.get(p)?.data ?: return null
+        if (d.isEmpty() || n <= 0) return null
+        val out = FloatArray(n)
+        val step = max(1, d.size / n / 64)
+        for (k in 0 until n) {
+            val a = (k.toLong() * d.size / n).toInt(); val e = ((k + 1).toLong() * d.size / n).toInt()
+            var m = 0f
+            var i = a
+            while (i < e) { val v = abs(d[i]); if (v > m) m = v; i += step }
+            out[k] = m
+        }
+        return out
+    }
+
+    /** Länge einer Pad-Aufnahme in Takten (Loops) bzw. der Noten-Spur (One-Shots). */
+    fun padBars(p: Int): Float {
+        val l = loops.get(p) ?: return 1f
+        if (l.oneShot) return rollBars[p].toFloat()
+        val m = masterLen
+        return if (m > 0L) max(0.25f, l.data.size.toFloat() / m) else max(1f, l.bars)
+    }
+
+    /** Sequenzer-Schritt (erster Takt) belegt? */
+    fun seqHit(p: Int, step: Int): Boolean = p in 0 until PADS && step in 0 until STEPS && seq[p][step] > 0f
     @Volatile private var arrBar = 0
     @Volatile private var arrBarStart = 0L
 
@@ -4890,6 +5044,8 @@ object Engine {
         val sc = arrScene[bar]
         if (sc in 0 until SCENES && sc != curScene && scenes[sc] != null) switchScene(sc)
         for (r in 0 until min(12, PADS)) loops.get(r)?.muted = !arr[r][bar]
+        // Zusatz-Instrumente nur steuern, wenn ihre Spur im Song benutzt wird
+        for (k in 0 until ARR_X) if (arrX[k].any { it }) { val v = arrX[k][bar]; if (xOn(k) != v) setXOn(k, v) }
         var switched = false
         for (i in 0 until InstState.INSTS) {
             val v = arrPat[i][bar]
@@ -4905,6 +5061,7 @@ object Engine {
     /** Aktuelle Lage (was gerade läuft) in einen Takt schreiben. */
     fun arrCaptureBar(bar: Int, pads: Int) {
         if (bar !in 0 until ARR_MAX) return
+        for (k in 0 until ARR_X) arrX[k][bar] = xOn(k)
         for (r in 0 until min(12, pads)) {
             val l = loops.get(r)
             arr[r][bar] = l != null && !l.muted
@@ -4942,6 +5099,8 @@ object Engine {
         for (l in 0 until AUTO_LANES) autoClearLane(l)
         for (row in arrPat) java.util.Arrays.fill(row, 0)
         java.util.Arrays.fill(arrScene, -1)
+        for (row in arrX) java.util.Arrays.fill(row, false)
+        java.util.Arrays.fill(arrSection, -1)
     }
 
     fun arrToJson(): org.json.JSONObject {
@@ -4955,6 +5114,8 @@ object Engine {
         j.put("pats", org.json.JSONArray().apply { for (row in arrPat) put(String(CharArray(ARR_MAX) { '0' + row[it] })) })
         j.put("auto", autoToJson())
         j.put("launch", launchToJson())
+        j.put("x", org.json.JSONArray().apply { for (row in arrX) put(String(CharArray(ARR_MAX) { if (row[it]) '1' else '0' })) })
+        j.put("sections", org.json.JSONArray().apply { arrSection.forEach { put(it) } })
         return j
     }
 
@@ -4975,6 +5136,8 @@ object Engine {
         j.optJSONArray("scenes")?.let { a -> for (b in 0 until min(ARR_MAX, a.length())) arrScene[b] = a.optInt(b, -1) }
         autoFromJson(j.optJSONArray("auto"))
         launchFromJson(j.optJSONArray("launch"))
+        j.optJSONArray("x")?.let { a -> for (k in 0 until min(ARR_X, a.length())) { val str = a.optString(k); for (b in 0 until min(ARR_MAX, str.length)) arrX[k][b] = str[b] == '1' } }
+        j.optJSONArray("sections")?.let { a -> for (b in 0 until min(ARR_MAX, a.length())) arrSection[b] = a.optInt(b, -1) }
         val pa = j.optJSONArray("pats")
         if (pa != null) {
             for (i in 0 until min(InstState.INSTS, pa.length())) {
