@@ -97,6 +97,7 @@ class MainActivity : Activity() {
             }.start()
         }
         pads.onTempo = { showTempo() }
+        pads.onInstMore = { showMoreInstruments() }
         val prefs = getSharedPreferences("marvpad", MODE_PRIVATE)
         prefs.getString("padSource", null)?.split(",")?.forEachIndexed { i, v ->
             if (i < Engine.PADS) Engine.padSource[i] = v.toIntOrNull() ?: 0
@@ -1870,6 +1871,38 @@ class MainActivity : Activity() {
 
     // ================================================================ ACID/DRUM: Presets
 
+    /** Die neuen Instrumente: ATMOS, Vocal-Harmonizer, Euklid und Chiptune (Klänge im SYNTH). */
+    private fun showMoreInstruments() {
+        fun st(on: Boolean) = if (on) "  ● läuft" else ""
+        val items = arrayOf(
+            "🌌 ATMOS · Klangteppich & Drones" + st(Atmos.on),
+            "🎤 VOCAL-HARMONIZER · Chor aus dem Gesang" + st(Harmonizer.on),
+            "⬡ EUKLID · generative Polyrhythmen" + st(Euclid.on),
+            "👾 CHIPTUNE · 8-Bit-Klänge im SYNTH (Presets)"
+        )
+        ui().setTitle("🎹 Weitere Instrumente")
+            .setItems(items) { _, w ->
+                when (w) {
+                    0 -> openAtmos()
+                    1 -> { if (djMode) dj.openHarm() else pads.openHarm(); hint("▶ AN, dann Akkord-Pads halten – der Gesang des Decks wird zum Chor · XY: Formant und Tuning") }
+                    2 -> { if (djMode) dj.openEuclid() else pads.openEuclid(); hint("▶ START – läuft im Takt des Decks · drei Regler: Schläge, Taktlänge, Morphing") }
+                    else -> {
+                        if (djMode) switchMode(false)
+                        pads.openSynthEditor()
+                        val list = InstPresets.SYNTHS.filter { it.genre == "Chiptune" }
+                        ui().setTitle("👾 Chiptune-Presets")
+                            .setItems(list.map { "${it.name} · ${it.bpm} BPM" }.toTypedArray()) { _, i ->
+                                val p = list[i]
+                                Engine.pushPatternUndo("SYNTH Preset")
+                                InstPresets.applySynth(p)
+                                presetTempo(p.bpm)
+                                hint("👾 ${p.name} – Knopf KLANG wechselt NES ▢ / NES △ / NOISE / SID · ▶ startet")
+                            }.show()
+                    }
+                }
+            }.show()
+    }
+
     private fun showSynthPresets() {
         val genres = InstPresets.SYNTHS.map { it.genre }.distinct()
         val items = listOf("🎲 Zufallsmelodie", "🎼 Akkordfolge erzeugen (Pop, House, Trance …)") + genres.map { g -> "$g (${InstPresets.SYNTHS.count { it.genre == g }})" } + listOf("📥 Eigene MIDI-Datei laden …")
@@ -2522,6 +2555,7 @@ class MainActivity : Activity() {
             }
             3 -> {
                 add(if (djMode) "▦ Zurück zum Pad-Modus" else "🎧 DJ-Modus starten (zwei Decks, Crossfader)") { switchMode(!djMode) }
+                add("🎹 Instrumente zum Set: ATMOS · Harmonizer · Euklid · Chiptune") { showMoreInstruments() }
                 if (djMode) {
                     val djLand = prefs.getBoolean("djLand", true)
                     add(if (Dj.gigMode) "🎤 GIG-MODUS AN – beenden" else "🎤 GIG-MODUS starten (Schutz, Bildschirm an, Nicht stören)") { if (Dj.gigMode) stopGig() else showGigCheck() }

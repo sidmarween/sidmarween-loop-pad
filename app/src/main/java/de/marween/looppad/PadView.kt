@@ -4445,9 +4445,13 @@ class PadView(context: Context) : View(context) {
                         // Instrumente öffnen direkt den großen Editor (keine Mini-Ansicht mehr in der Pad-Ansicht)
                         if (xyMode != 0) { instRelease(); xyMode = 0 }
                         if (t == 1) {
-                            instSel = 1 + instSegAt(x)
-                            instEd.open(instSel)
-                            lessonInstOpened = true
+                            val seg = instSegAt(x)
+                            if (seg == 3) onInstMore?.invoke()
+                            else {
+                                instSel = 1 + seg
+                                instEd.open(instSel)
+                                lessonInstOpened = true
+                            }
                         }
                         performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
                         burst(x, y, overlayColors()[2], 14, 180f)
@@ -9506,11 +9510,14 @@ class PadView(context: Context) : View(context) {
     }
     /** Zuletzt gewähltes Instrument (1 = ACID, 2 = DRUM, 3 = SYNTH). */
     private var instSel = 1
-    private val instSegNames = arrayOf("303", "909", "SYNTH")
+    private val instSegNames = arrayOf("303", "909", "SYNTH", "MEHR")
+    /** „🎹 MEHR“: ATMOS, Harmonizer, Euklid, Chiptune (MainActivity zeigt die Auswahl). */
+    var onInstMore: (() -> Unit)? = null
+    fun openSynthEditor() { closeFocus(); instSel = 3; instEd.open(3); invalidate() }
 
     private fun instSegAt(x: Float): Int {
         val r = modeRects[1]
-        return (((x - r.left) / r.width()) * 3).toInt().coerceIn(0, 2)
+        return (((x - r.left) / r.width()) * 4).toInt().coerceIn(0, 3)
     }
 
     private fun instRunning(k: Int): Boolean {
@@ -9563,8 +9570,8 @@ class PadView(context: Context) : View(context) {
             }
             return
         }
-        val sw = r.width() / 3f
-        for (k in 0 until 3) {
+        val sw = r.width() / 4f
+        for (k in 0 until 4) {
             val on = false
             tmpRect.set(r.left + k * sw + dp(1.5f), r.top + dp(1.5f), r.left + (k + 1) * sw - dp(1.5f), r.bottom - dp(1.5f))
             val rr2 = tmpRect.height() / 2f
@@ -9573,9 +9580,9 @@ class PadView(context: Context) : View(context) {
                 canvas.drawRoundRect(tmpRect, rr2, rr2, fillPaint)
             }
             textPaint.color = if (on) Color.WHITE else alpha(cols[1], 0.8f)
-            val lb = fitLabel(textPaint, "🎹 " + instSegNames[k], tmpRect.width() - dp(14f), dp(11f), dp(7f))
+            val lb = fitLabel(textPaint, (if (k == 3) "＋ " else "🎹 ") + instSegNames[k], tmpRect.width() - dp(12f), dp(11f), dp(6.5f))
             canvas.drawText(lb, tmpRect.centerX() - dp(3f), tmpRect.centerY() + textPaint.textSize * 0.36f, textPaint)
-            if (instRunning(k + 1)) {
+            if (if (k == 3) Atmos.on || Harmonizer.on || Euclid.on else instRunning(k + 1)) {
                 dotPaint.color = if (on) Color.WHITE else cols[2]
                 canvas.drawCircle(tmpRect.right - dp(8f), tmpRect.centerY(), dp(2.6f), dotPaint)
             }
@@ -9585,7 +9592,7 @@ class PadView(context: Context) : View(context) {
         canvas.drawRoundRect(r, rr, rr, strokePaint)
         // Trennstriche zwischen den drei Instrumenten
         strokePaint.strokeWidth = dp(1f)
-        for (k in 1..2) canvas.drawLine(r.left + k * sw, r.top + dp(5f), r.left + k * sw, r.bottom - dp(5f), strokePaint)
+        for (k in 1..3) canvas.drawLine(r.left + k * sw, r.top + dp(5f), r.left + k * sw, r.bottom - dp(5f), strokePaint)
     }
 
     /** Für die Lektion: wurde ein Instrument-Editor geöffnet? */
