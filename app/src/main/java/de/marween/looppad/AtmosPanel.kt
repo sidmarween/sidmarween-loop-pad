@@ -36,6 +36,7 @@ class AtmosPanel(private val host: View) {
     private val box = RectF()
     private val bClose = RectF(); private val bOn = RectF(); private val bGrab = RectF(); private val bFile = RectF()
     private val bKey = RectF(); private val bWander = RectF()
+    private val bPreset = RectF(); private val bTimbre = RectF(); private val bChord = RectF()
     private val xy = RectF()
     private val sliders = Array(6) { RectF() }
     private val SL_NAMES = arrayOf("LAUTSTÄRKE", "FM ↔ KÖRNER", "BEWEGUNG", "DICHTE", "SHIMMER", "EIN/AUS-BLENDE")
@@ -75,8 +76,14 @@ class AtmosPanel(private val host: View) {
         val gw = (box.width() - 2 * pad - (n - 1) * dp(6f)) / n
         val rs = arrayOf(bOn, bGrab, bFile, bKey, bWander)
         for (i in 0 until n) rs[i].set(box.left + pad + i * (gw + dp(6f)), row1, box.left + pad + i * (gw + dp(6f)) + gw, row1 + bh)
+        // Vorlage · Klang · Akkord-Art
+        val row2 = row1 + bh + dp(6f)
+        val w2 = box.width() - 2 * pad
+        bPreset.set(box.left + pad, row2, box.left + pad + w2 * 0.46f, row2 + bh)
+        bTimbre.set(bPreset.right + dp(6f), row2, bPreset.right + dp(6f) + w2 * 0.26f, row2 + bh)
+        bChord.set(bTimbre.right + dp(6f), row2, box.right - pad, row2 + bh)
         // Regler: zwei Reihen à 3
-        val sTop = row1 + bh + dp(10f)
+        val sTop = row2 + bh + dp(8f)
         val sh = dp(38f)
         val sw = (box.width() - 2 * pad - 2 * dp(6f)) / 3
         for (i in 0 until 6) {
@@ -130,6 +137,9 @@ class AtmosPanel(private val host: View) {
         btn(c, bFile, "📂 DATEI", false, col2)
         btn(c, bKey, "TONART: " + if (Atmos.keyAuto) "AUTO" else Keys.name(Atmos.keyManual), !Atmos.keyAuto, col)
         btn(c, bWander, if (Atmos.wander) "AKKORD WANDERT" else "AKKORD STEHT", Atmos.wander, col)
+        btn(c, bPreset, "◀  " + (if (Atmos.presetIdx >= 0) Atmos.PRESETS[Atmos.presetIdx].name else "VORLAGE WÄHLEN") + "  ▶", Atmos.presetIdx >= 0, col2)
+        btn(c, bTimbre, "KLANG: " + Atmos.TIMBRES[Atmos.timbre], false, col)
+        btn(c, bChord, Atmos.CHORDSETS[Atmos.chordSet], Atmos.chordSet != 0, col)
         // Regler
         for (i in 0 until 6) {
             val r = sliders[i]
@@ -255,6 +265,14 @@ class AtmosPanel(private val host: View) {
                 if (k < 0) Atmos.keyAuto = true else { Atmos.keyAuto = false; Atmos.keyManual = k }
                 onHint?.invoke(if (Atmos.keyAuto) "Tonart folgt dem laufenden Deck (sonst A-Moll)" else "Tonart fest: ${Keys.name(k)}")
             }
+            bPreset.contains(x, y) -> {
+                haptic()
+                val cur = Atmos.presetIdx
+                Atmos.applyPreset(if (cur < 0) 0 else if (x < bPreset.centerX()) cur - 1 else cur + 1)
+                onHint?.invoke("Vorlage ${Atmos.presetIdx + 1}/${Atmos.PRESETS.size}: ${Atmos.PRESETS[Atmos.presetIdx].name}" + if (Atmos.blend == 0f && Atmos.PRESETS[Atmos.presetIdx].blend > 0.3f) " – mit 📼 SCHNIPSEL kommen die Körner dazu" else "")
+            }
+            bTimbre.contains(x, y) -> { haptic(); Atmos.timbre = (Atmos.timbre + 1) % Atmos.TIMBRES.size; onHint?.invoke("Klang: ${Atmos.TIMBRES[Atmos.timbre]}") }
+            bChord.contains(x, y) -> { haptic(); Atmos.chordSet = (Atmos.chordSet + 1) % Atmos.CHORDSETS.size; onHint?.invoke("Akkorde: ${Atmos.CHORDSETS[Atmos.chordSet]}") }
             bWander.contains(x, y) -> {
                 Atmos.wander = !Atmos.wander; haptic()
                 onHint?.invoke(if (Atmos.wander) "Akkord wechselt alle 8 Takte (bleibt in der Tonart)" else "Akkord bleibt auf dem Grundton – reine Drone")

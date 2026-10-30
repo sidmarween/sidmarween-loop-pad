@@ -30,6 +30,7 @@ class HarmonizerPanel(private val host: View) {
     private val box = RectF()
     private val bClose = RectF(); private val bOn = RectF(); private val bSrc = RectF(); private val bLead = RectF()
     private val bMute = RectF(); private val bOct = RectF(); private val bLatch = RectF()
+    private val bPreset = RectF(); private val bAuto = RectF()
     private val sliders = Array(3) { RectF() }
     private val SL = arrayOf("LAUTSTÄRKE", "HALL", "BREITE / CHOR")
     private val xy = RectF()
@@ -59,7 +60,11 @@ class HarmonizerPanel(private val host: View) {
         val bs = arrayOf(bOn, bSrc, bLead, bMute, bOct, bLatch)
         val gw = (box.width() - 2 * pad - 5 * dp(5f)) / 6
         for (i in 0 until 6) bs[i].set(box.left + pad + i * (gw + dp(5f)), r1, box.left + pad + i * (gw + dp(5f)) + gw, r1 + bh)
-        val r2 = r1 + bh + dp(6f)
+        val rp = r1 + bh + dp(6f)
+        val w2 = box.width() - 2 * pad
+        bPreset.set(box.left + pad, rp, box.left + pad + w2 * 0.56f, rp + bh)
+        bAuto.set(bPreset.right + dp(6f), rp, box.right - pad, rp + bh)
+        val r2 = rp + bh + dp(6f)
         val sw = (box.width() - 2 * pad - 2 * dp(6f)) / 3
         for (i in 0 until 3) sliders[i].set(box.left + pad + i * (sw + dp(6f)), r2, box.left + pad + i * (sw + dp(6f)) + sw, r2 + dp(30f))
         val kH = min(dp(84f), box.height() * 0.16f)
@@ -145,6 +150,8 @@ class HarmonizerPanel(private val host: View) {
         btn(c, bMute, "ORIGINAL " + if (Harmonizer.muteOrig) "STUMM" else "AN", Harmonizer.muteOrig, col)
         btn(c, bOct, "OKTAVE " + when (Harmonizer.octave) { -1 -> "−1"; 1 -> "+1"; else -> "0" }, Harmonizer.octave != 0, col2)
         btn(c, bLatch, "HALTEN", latch, col2)
+        btn(c, bPreset, "◀  " + (if (Harmonizer.presetIdx >= 0) Harmonizer.PRESETS[Harmonizer.presetIdx].name else "VORLAGE WÄHLEN") + "  ▶", Harmonizer.presetIdx >= 0, col2)
+        btn(c, bAuto, "AUTO: " + Harmonizer.AUTO_NAMES[Harmonizer.autoMode], Harmonizer.autoMode != 0, col)
         val sv = floatArrayOf(Harmonizer.level, Harmonizer.space, Harmonizer.width)
         for (i in 0 until 3) {
             val r = sliders[i]
@@ -296,6 +303,17 @@ class HarmonizerPanel(private val host: View) {
             }
             bLead.contains(x, y) -> { Harmonizer.leadTune = !Harmonizer.leadTune; haptic(); onHint?.invoke(if (Harmonizer.leadTune) "Hauptstimme läuft getunt mit (Formant wie eingestellt) – tipp ORIGINAL STUMM für reinen Effekt-Gesang" else "Lead-Tune aus") }
             bMute.contains(x, y) -> { Harmonizer.muteOrig = !Harmonizer.muteOrig; haptic(); onHint?.invoke(if (Harmonizer.muteOrig) "Original-Gesang im Deck stumm, solange der Harmonizer läuft" else "Original-Gesang hörbar") }
+            bPreset.contains(x, y) -> {
+                haptic()
+                val cur = Harmonizer.presetIdx
+                Harmonizer.applyPreset(if (cur < 0) 0 else if (x < bPreset.centerX()) cur - 1 else cur + 1)
+                onHint?.invoke("Vorlage ${Harmonizer.presetIdx + 1}/${Harmonizer.PRESETS.size}: ${Harmonizer.PRESETS[Harmonizer.presetIdx].name}")
+            }
+            bAuto.contains(x, y) -> {
+                haptic()
+                Harmonizer.autoMode = (Harmonizer.autoMode + 1) % Harmonizer.AUTO_NAMES.size
+                onHint?.invoke("Ohne gedrückte Noten singt der Chor: ${Harmonizer.AUTO_NAMES[Harmonizer.autoMode]}")
+            }
             bOct.contains(x, y) -> { Harmonizer.octave = when (Harmonizer.octave) { 0 -> 1; 1 -> -1; else -> 0 }; haptic() }
             bLatch.contains(x, y) -> {
                 latch = !latch; haptic()

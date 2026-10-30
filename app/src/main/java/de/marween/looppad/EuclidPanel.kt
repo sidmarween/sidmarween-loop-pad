@@ -27,6 +27,7 @@ class EuclidPanel(private val host: View) {
 
     private val box = RectF()
     private val bClose = RectF(); private val bOn = RectF(); private val bPoly = RectF(); private val bNew = RectF()
+    private val bPreset = RectF(); private val bKit = RectF()
     private val rings = Array(4) { RectF() }
     private val sliders = Array(4) { RectF() }
     private val SL = arrayOf("SCHLÄGE PRO TAKT", "TAKTLÄNGE / KOMPLEXITÄT", "MORPHING", "LAUTSTÄRKE")
@@ -45,10 +46,14 @@ class EuclidPanel(private val host: View) {
         val gw = (box.width() - 2 * pad - 2 * dp(6f)) / 3
         val bs = arrayOf(bOn, bPoly, bNew)
         for (i in 0 until 3) bs[i].set(box.left + pad + i * (gw + dp(6f)), r1, box.left + pad + i * (gw + dp(6f)) + gw, r1 + bh)
-        val sh = dp(46f)
+        val r2 = r1 + bh + dp(6f)
+        val w2 = box.width() - 2 * pad
+        bPreset.set(box.left + pad, r2, box.left + pad + w2 * 0.58f, r2 + bh)
+        bKit.set(bPreset.right + dp(6f), r2, box.right - pad, r2 + bh)
+        val sh = dp(42f)
         val sTop = box.bottom - pad - 4 * sh - 3 * dp(6f)
         for (i in 0 until 4) sliders[i].set(box.left + pad, sTop + i * (sh + dp(6f)), box.right - pad, sTop + i * (sh + dp(6f)) + sh)
-        val top = r1 + bh + dp(10f)
+        val top = r2 + bh + dp(8f)
         val h = sTop - dp(10f) - top
         val cell = min((box.width() - 2 * pad) / 2, h / 2)
         val ox = box.centerX() - cell
@@ -91,6 +96,8 @@ class EuclidPanel(private val host: View) {
         btn(c, bOn, if (Euclid.on) "■ STOPP" else "▶ START", Euclid.on, Color.rgb(140, 230, 170))
         btn(c, bPoly, if (Euclid.poly) "POLYRHYTHMUS (gestreckt)" else "POLYMETER (1/16)", Euclid.poly, COLS[2])
         btn(c, bNew, "🎲 NEU WÜRFELN", false, COLS[1])
+        btn(c, bPreset, "◀  " + (if (Euclid.presetIdx >= 0) Euclid.PRESETS[Euclid.presetIdx].name else "VORLAGE WÄHLEN") + "  ▶", Euclid.presetIdx >= 0, COLS[3])
+        btn(c, bKit, "KLANG: " + Euclid.KITS[Euclid.kit].name, false, COLS[0])
         for (l in 0 until 4) drawRing(c, l)
         for (i in 0 until 4) {
             val r = sliders[i]
@@ -174,6 +181,13 @@ class EuclidPanel(private val host: View) {
                         onHint?.invoke(if (Euclid.poly) "RIM und PLUCK verteilen ihre Schritte über den ganzen Takt (z. B. 5 gegen 4)" else "Alle Spuren im 1/16-Raster – Spuren mit anderer Länge verschieben sich gegen den Takt")
                     }
                     bNew.contains(x, y) -> { Euclid.regenerate(); haptic() }
+                    bPreset.contains(x, y) -> {
+                        haptic()
+                        val cur = Euclid.presetIdx
+                        Euclid.applyPreset(if (cur < 0) 0 else if (x < bPreset.centerX()) cur - 1 else cur + 1)
+                        onHint?.invoke("Vorlage ${Euclid.presetIdx + 1}/${Euclid.PRESETS.size}: ${Euclid.PRESETS[Euclid.presetIdx].name}")
+                    }
+                    bKit.contains(x, y) -> { haptic(); Euclid.kit = (Euclid.kit + 1) % Euclid.KITS.size; onHint?.invoke("Klang: ${Euclid.KITS[Euclid.kit].name}") }
                     else -> for (k in 0 until 4) if (rings[k].contains(x, y)) { Euclid.laneOn[k] = !Euclid.laneOn[k]; haptic() }
                 }
             }

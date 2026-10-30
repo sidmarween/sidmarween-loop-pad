@@ -253,7 +253,7 @@ object InstState {
     var synDetune: Float get() = syn.detune; set(v) { syn.detune = v }
     var synEnv: Float get() = syn.env; set(v) { syn.env = v }
     var synCutMod: Float get() = syn.cutMod; set(v) { syn.cutMod = v }
-    val synWaveNames = arrayOf("SAW", "SQR", "SUPER", "PLUCK", "GLOCKE", "NES ▢", "NES △", "NOISE", "SID")
+    val synWaveNames = arrayOf("SAW", "SQR", "SUPER", "PLUCK", "GLOCKE", "NES ▢", "NES △", "NOISE", "SID", "GB-WAVE", "FM-CHIP")
     /** Chiptune-Klänge (Klang-Nr. ≥ 5): Akkorde laufen als schnelles Chip-Arpeggio, Lautstärke in 16 Stufen. */
     fun synIsChip(w: Int) = w >= 5
     val synChordNames = arrayOf("EINZELN", "DUR", "MOLL", "SUS4", "DUR7", "MOLL7", "OKTAVE", "VERM.")
@@ -1521,6 +1521,31 @@ class PolySynth(private val sr: Int, private val t: InstState.SynTrack) {
                         p += blep(v.ph[0], dt); p -= blep((v.ph[0] - dc + 1.0) % 1.0, dt)
                         o = (p - (2 * dc - 1)) * 0.7
                     }
+                    9 -> {
+                        // Game-Boy-Wave-Kanal: 32 Schritte à 4 Bit, Form über DETUNE (Säge, Rechteck-Mix, Sinus-artig, „Buzz“)
+                        v.ph[0] += f / sr; if (v.ph[0] >= 1.0) v.ph[0] -= 1.0
+                        val k = (v.ph[0] * 32).toInt().coerceIn(0, 31)
+                        val tbl = (spread * 3.999f).toInt()
+                        val raw = when (tbl) {
+                            0 -> k / 31.0 * 2 - 1
+                            1 -> (if (k < 16) 0.7 else -0.7) + (k % 16) / 15.0 * 0.6 - 0.3
+                            2 -> kotlin.math.sin(2 * PI * k / 32.0)
+                            else -> if (k % 8 < 3) 1.0 else -0.6
+                        }
+                        o = kotlin.math.round((raw + 1) * 7.5) / 7.5 - 1.0
+                        o *= 0.8
+                    }
+                    10 -> {
+                        // FM-Chip (2 Operatoren mit Rückkopplung, wie OPL/Mega Drive): Index folgt der Filter-Hüllkurve
+                        val ratio = if (spread < 0.5f) 1.0 else 2.0
+                        v.mph += f * ratio / sr; if (v.mph >= 1.0) v.mph -= 1.0
+                        val fbk = v.nz.toDouble() * (0.2 + st.res * 0.9)
+                        val mod = kotlin.math.sin(2 * PI * v.mph + fbk)
+                        v.nz = mod.toFloat()
+                        val idx = 0.4 + (st.env * 4.0) * v.fenv + st.cutNow() * 1.2
+                        v.ph[0] += f / sr; if (v.ph[0] >= 1.0) v.ph[0] -= 1.0
+                        o = kotlin.math.sin(2 * PI * v.ph[0] + idx * mod) * 0.75
+                    }
                     6 -> {
                         // NES-Dreieck: 32 Stufen (4 Bit)
                         v.ph[0] += f / sr; if (v.ph[0] >= 1.0) v.ph[0] -= 1.0
@@ -1576,7 +1601,7 @@ class PolySynth(private val sr: Int, private val t: InstState.SynTrack) {
                     }
                 }
                 var s = o.toFloat()
-                if (wave != 4 && !(chip && wave != 8 && st.cutNow() > 0.97f)) {
+                if (wave != 4 && wave != 10 && !(chip && wave != 8 && st.cutNow() > 0.97f)) {
                     val oct = st.cutNow() * 7.5f + st.env * 4.5f * v.fenv + st.cutMod * 2.5f
                     val fc = min(0.42f * sr, 60f * 2f.pow(oct))
                     val g = (2.0 * kotlin.math.sin(PI * fc / sr)).toFloat().coerceAtMost(1.1f)

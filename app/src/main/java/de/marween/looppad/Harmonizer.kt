@@ -40,6 +40,38 @@ object Harmonizer {
     @Volatile var muteOrig = false
     /** Gehaltene Noten (MIDI-Nummern, Bitfeld über 128) – UI- und MIDI-Thread schreiben. */
     private val held = java.util.concurrent.ConcurrentHashMap<Int, Int>()
+    /** Stimmen ohne gehaltene Noten: siehe [AUTO_NAMES]. */
+    @Volatile var autoMode = 0
+    val AUTO_NAMES = arrayOf("TERZ + QUINTE", "OKTAVEN", "QUINTEN (POWER)", "GOSPEL (4-stimmig)", "DOUBLER (breit)", "NUR TERZ", "TERZ+QUINTE DARUNTER", "ENGEL (hoch)")
+
+    /** Vorlagen: Name, Formant X, Tuning Y, Oktave, Auto-Stimmen, Lead-Tune, Original stumm, Hall, Breite */
+    class Preset(val name: String, val x: Float, val y: Float, val oct: Int, val auto: Int, val lead: Boolean, val mute: Boolean, val space: Float, val width: Float)
+    val PRESETS = listOf(
+        Preset("Natürlicher Chor", 0.5f, 0.2f, 0, 0, false, false, 0.35f, 0.6f),
+        Preset("Gospel-Chor", 0.52f, 0.35f, 0, 3, false, false, 0.45f, 0.75f),
+        Preset("Engelschor", 0.68f, 0.3f, 0, 7, false, false, 0.85f, 0.9f),
+        Preset("Tiefer Männerchor", 0.18f, 0.3f, -1, 0, false, false, 0.5f, 0.7f),
+        Preset("Mönche (Oktave tief, Quinten)", 0.25f, 0.55f, -1, 2, false, false, 0.75f, 0.5f),
+        Preset("Doubler (breiter Lead)", 0.5f, 0.15f, 0, 4, false, false, 0.2f, 1f),
+        Preset("Hyperpop-Lead", 0.85f, 0.82f, 0, 5, true, true, 0.3f, 0.6f),
+        Preset("Chipmunk", 1f, 0.6f, 1, 5, true, true, 0.2f, 0.4f),
+        Preset("Roboter-Chor", 0.45f, 0.95f, 0, 0, false, false, 0.35f, 0.7f),
+        Preset("Daft-Vocoder (Lead)", 0.38f, 0.97f, 0, 4, true, true, 0.25f, 0.5f),
+        Preset("Monster (tief, hart)", 0f, 0.8f, -1, 1, true, true, 0.4f, 0.4f),
+        Preset("EDM-Quinten-Stack", 0.55f, 0.7f, 0, 2, true, false, 0.5f, 0.8f),
+        Preset("Harmonie darunter", 0.45f, 0.3f, 0, 6, false, false, 0.35f, 0.6f),
+        Preset("Hall-Geister (nur Effekt)", 0.6f, 0.4f, 1, 7, false, true, 1f, 1f)
+    )
+    @Volatile var presetIdx = -1
+        private set
+
+    fun applyPreset(i: Int) {
+        val k = Math.floorMod(i, PRESETS.size)
+        val p = PRESETS[k]
+        presetIdx = k
+        x = p.x; y = p.y; octave = p.oct; autoMode = p.auto; leadTune = p.lead; muteOrig = p.mute; space = p.space; width = p.width
+    }
+
     /** MIDI-Noten an den Chor statt an die Instrumente. */
     @Volatile var midiIn = true
 
@@ -373,10 +405,21 @@ object Harmonizer {
                     tg[k++] = m + oct
                 }
             } else {
-                // Auto: Terz und Quinte darüber (in der Tonart), dazu eine Sexte darunter
-                tg[0] = diatonic(mq, 2, sc) + oct
-                tg[1] = diatonic(mq, 4, sc) + oct
-                tg[2] = diatonic(mq, -3, sc) + oct
+                // Auto-Stimmen (ohne gehaltene Noten), je nach [autoMode] – alles in der Tonart
+                when (autoMode) {
+                    1 -> { tg[0] = mq - 12 + oct; tg[1] = mq + 12 + oct }                                        // Oktaven
+                    2 -> { tg[0] = mq + 7 + oct; tg[1] = mq - 5 + oct; tg[2] = mq - 12 + oct }                    // Quinten (Power)
+                    3 -> { tg[0] = diatonic(mq, -2, sc) + oct; tg[1] = diatonic(mq, 2, sc) + oct; tg[2] = diatonic(mq, 4, sc) + oct; tg[3] = diatonic(mq, 5, sc) + oct } // Gospel
+                    4 -> { tg[0] = mq + oct; tg[1] = mq + oct }                                                   // Doubler (Unisono, breit)
+                    5 -> { tg[0] = diatonic(mq, 2, sc) + oct }                                                    // nur Terz darüber
+                    6 -> { tg[0] = diatonic(mq, -2, sc) + oct; tg[1] = diatonic(mq, -4, sc) + oct }               // Terz + Quinte darunter
+                    7 -> { tg[0] = mq + 12 + oct; tg[1] = diatonic(mq, 4, sc) + 12 + oct; tg[2] = mq + 24 + oct } // Engel (hoch)
+                    else -> {
+                        tg[0] = diatonic(mq, 2, sc) + oct
+                        tg[1] = diatonic(mq, 4, sc) + oct
+                        tg[2] = diatonic(mq, -3, sc) + oct
+                    }
+                }
             }
             if (leadTune) tg[4] = mq + oct
         }
