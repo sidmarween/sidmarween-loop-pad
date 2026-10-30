@@ -2986,7 +2986,8 @@ object Engine {
             }
             // EUKLID: generative Polyrhythmen im Master-Raster
             Euclid.tick()
-            if (Euclid.active()) Euclid.render(mL, mR, block, sampleRate, w, masterStart, masterLen, vol)
+            // gleiches Raster wie Sequenzer/909/303 (auch ohne Master-Tempo)
+            if (Euclid.active()) Euclid.render(mL, mR, block, sampleRate, w, seqStart(), seqBar(), vol, swingOffset(seqBar()))
             // Vocal-Harmonizer (Deck-Gesang oder Mikrofon)
             if (Harmonizer.on || Harmonizer.meter > 0f || Harmonizer.source != 3) {
                 val mic = if (Harmonizer.on && Harmonizer.source == 3) micLatest(block) else null

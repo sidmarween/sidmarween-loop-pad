@@ -203,11 +203,17 @@ object Euclid {
     fun active(): Boolean = on || perc.any { it.on } || strs.any { it.on }
 
     /** In den Master mischen. [ms]/[ml] = Master-Start und -Taktlänge (Ausgabe-Proben), [w] = Ausgabe-Frame des Blocks. */
-    fun render(oL: FloatArray, oR: FloatArray, n: Int, sr: Int, w: Long, ms: Long, ml: Long, vol: Float) {
+    private val pendT = IntArray(4)
+    private val pendA = FloatArray(4)
+    private val pendAlt = BooleanArray(4)
+    private var swingFrames = 0
+
+    fun render(oL: FloatArray, oR: FloatArray, n: Int, sr: Int, w: Long, ms: Long, ml: Long, vol: Float, swing: Long = 0L) {
+        swingFrames = swing.toInt().coerceAtLeast(0)
         if (!ready || srN != sr) init(sr)
         curKey = key()
         val bar = if (ml > 0L) ml.toDouble() else sr * 2.0
-        val start = if (ml > 0L) ms else 0L
+        val start = ms
         val plate = pl!!
         val dt = 1.0 / sr
         val hpA = 0.86f
@@ -231,10 +237,14 @@ object Euclid {
                         // Morph: gelegentlich ein Geister-Schlag weglassen bzw. leiser
                         if (rnd.nextFloat() < morph * 0.12f && st != laneRot[l] % nn) continue
                         val a = acc[l][st] * laneVol[l]
-                        trigger(l, a, st == Math.floorMod(laneRot[l], nn) || acc[l][st] > 0.92f)
+                        val alt = st == Math.floorMod(laneRot[l], nn) || acc[l][st] > 0.92f
+                        // Swing wie beim Sequenzer: ungerade 1/16 (im Takt-Raster) später
+                        val swingIt = swingFrames > 0 && !(poly && l >= 2) && Math.floorMod(si, 2L) == 1L
+                        if (swingIt) { pendT[l] = swingFrames; pendA[l] = a; pendAlt[l] = alt } else trigger(l, a, alt)
                     }
                 }
             }
+            for (q in 0..3) if (pendT[q] > 0) { pendT[q]--; if (pendT[q] == 0) trigger(q, pendA[q], pendAlt[q]) }
             var l = 0f; var r = 0f
             // Perc (Conga/Tom): Sinus mit fallender Tonhöhe
             for (h in perc) {
