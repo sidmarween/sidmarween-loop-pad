@@ -4832,24 +4832,8 @@ object Engine {
         songBars = (songBars + n).coerceIn(1, ARR_MAX)
     }
 
-    /** Spitzen einer Pad-Aufnahme in [n] Abschnitten (für die Wellenform im Song-Editor). */
-    fun padPeaks(p: Int, n: Int): FloatArray? {
-        val d = loops.get(p)?.data ?: return null
-        if (d.isEmpty() || n <= 0) return null
-        val out = FloatArray(n)
-        val step = max(1, d.size / n / 64)
-        for (k in 0 until n) {
-            val a = (k.toLong() * d.size / n).toInt(); val e = ((k + 1).toLong() * d.size / n).toInt()
-            var m = 0f
-            var i = a
-            while (i < e) { val v = abs(d[i]); if (v > m) m = v; i += step }
-            out[k] = m
-        }
-        return out
-    }
-
     /** Länge einer Pad-Aufnahme in Takten (Loops) bzw. der Noten-Spur (One-Shots). */
-    fun padBars(p: Int): Float {
+    fun padBarsLen(p: Int): Float {
         val l = loops.get(p) ?: return 1f
         if (l.oneShot) return rollBars[p].toFloat()
         val m = masterLen

@@ -261,7 +261,7 @@ class SongEditor(private val host: View) {
         val id = Engine.padDataId(p)
         val c = peaksCache[p]
         if (c != null && c.first == id) return c.second
-        val bars = max(1, ceil(Engine.padBars(p).toDouble()).toInt())
+        val bars = max(1, ceil(Engine.padBarsLen(p).toDouble()).toInt())
         val pk = Engine.padPeaks(p, 48 * bars) ?: return null
         peaksCache[p] = id to pk
         return pk
@@ -294,7 +294,7 @@ class SongEditor(private val host: View) {
             val sub = when {
                 isInst(t) -> "Pattern " + InstState.patLetter(InstState.curPat[t - Engine.TRK_INST]) + " aktiv"
                 isAuto(t) -> "zeichnen mit ✎"
-                t < Engine.TRK_PADS && Engine.hasLoop(t) -> String.format(java.util.Locale.GERMANY, "%.1f Takte", Engine.padBars(t))
+                t < Engine.TRK_PADS && Engine.hasLoop(t) -> String.format(java.util.Locale.GERMANY, "%.1f Takte", Engine.padBarsLen(t))
                 else -> ""
             }
             c.drawText(fitLabel(text, sub, names.width() - dp(8f), dp(8f), dp(6f)), names.left + dp(6f), y0 + dp(27f), text)
@@ -382,7 +382,7 @@ class SongEditor(private val host: View) {
                     }
                 } else {
                     val pk = peaks(t) ?: return
-                    val lb = max(1, ceil(Engine.padBars(t).toDouble()).toInt())
+                    val lb = max(1, ceil(Engine.padBarsLen(t).toDouble()).toInt())
                     val per = pk.size / lb
                     val seg = Math.floorMod(bar, lb)
                     val n = min(per, max(4, (w / dp(2f)).toInt()))
