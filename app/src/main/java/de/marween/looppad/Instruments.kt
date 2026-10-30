@@ -164,7 +164,7 @@ object InstState {
         @Volatile var on = true
         @Volatile var fx = true
         @Volatile var oct = 0
-        /** 0 SAW, 1 SQUARE, 2 SUPERSAW, 3 PLUCK, 4 GLOCKE (FM) */
+        /** 0 SAW, 1 SQUARE, 2 SUPERSAW, 3 PLUCK, 4 GLOCKE (FM), 5 NES-Puls, 6 NES-Dreieck, 7 Noise, 8 SID-PWM */
         @Volatile var wave = 2
         /** 0 einzeln, 1 Dur, 2 Moll, 3 Sus4, 4 Dur7, 5 Moll7, 6 Oktave */
         @Volatile var chord = 0
@@ -253,7 +253,9 @@ object InstState {
     var synDetune: Float get() = syn.detune; set(v) { syn.detune = v }
     var synEnv: Float get() = syn.env; set(v) { syn.env = v }
     var synCutMod: Float get() = syn.cutMod; set(v) { syn.cutMod = v }
-    val synWaveNames = arrayOf("SAW", "SQR", "SUPER", "PLUCK", "GLOCKE")
+    val synWaveNames = arrayOf("SAW", "SQR", "SUPER", "PLUCK", "GLOCKE", "NES ▢", "NES △", "NOISE", "SID")
+    /** Chiptune-Klänge (Klang-Nr. ≥ 5): Akkorde laufen als schnelles Chip-Arpeggio, Lautstärke in 16 Stufen. */
+    fun synIsChip(w: Int) = w >= 5
     val synChordNames = arrayOf("EINZELN", "DUR", "MOLL", "SUS4", "DUR7", "MOLL7", "OKTAVE", "VERM.")
     /** Kurzname hinter dem Grundton (C, Cm, C7 …). */
     val chordSuffix = arrayOf("", "", "m", "sus4", "7", "m7", "8", "°")
@@ -1386,6 +1388,14 @@ class PolySynth(private val sr: Int, private val t: InstState.SynTrack) {
         var lp = 0f
         var bp = 0f
         var age = 0L
+        // Chiptune
+        var arpIv: IntArray? = null
+        var arpBase = 0
+        var arpIdx = -1
+        var n = 0L
+        var lfsr = 1
+        var nz = 0f
+        var vph = 0.0
     }
 
     private val queue = ArrayList<Ev>()
@@ -1412,7 +1422,10 @@ class PolySynth(private val sr: Int, private val t: InstState.SynTrack) {
             for (v in voices) if (v.active && v.tag == e.tag && v.gate) { v.gate = false; v.stage = 2 }
             return
         }
-        for (o in iv) {
+        val chip = t.wave >= 5
+        // Chiptune: Akkord als EINE Stimme, die die Töne schnell durchläuft (wie auf NES/Game Boy/C64)
+        val list = if (chip && iv.size > 1) intArrayOf(0) else iv
+        for (o in list) {
             var v = voices.firstOrNull { !it.active }
             if (v == null) v = voices.minByOrNull { if (it.gate) it.age + 1_000_000_000L else it.age }!!
             v.active = true
@@ -1424,6 +1437,11 @@ class PolySynth(private val sr: Int, private val t: InstState.SynTrack) {
             v.stage = 0
             v.fenv = 1f
             v.age = ++ageCtr
+            v.arpIv = if (chip && iv.size > 1) iv.copyOf() else null
+            v.arpBase = v.semi
+            v.arpIdx = -1
+            v.n = 0L
+            v.vph = 0.0
             if (v.env < 0.001f) {
                 for (k in v.ph.indices) v.ph[k] = Math.random()
                 v.mph = 0.0
@@ -1456,6 +1474,13 @@ class PolySynth(private val sr: Int, private val t: InstState.SynTrack) {
         val q = 1f - st.res * 0.92f
         val vol = st.volNow() * 0.32f
         val spread = st.detune
+        val chip = wave >= 5
+        // Chip-Arpeggio: 1/32 im Master-Tempo (ohne Tempo: 120 BPM)
+        val bpmNow = Engine.currentBpm().let { if (it in 40f..300f) it else 120f }
+        val arpTick = max(1L, (sr * 60.0 / bpmNow / 8.0).toLong())
+        // NES-Puls: Tastgrad 12,5 / 25 / 50 % · ab 75 % langsame PWM-Fahrt
+        val duty = when { spread < 0.25f -> 0.125; spread < 0.5f -> 0.25; spread < 0.75f -> 0.5; else -> -1.0 }
+        val pwmRate = 0.3 + spread * 3.0
         var ei = 0
         for (i in 0 until n) {
             while (ei < evs.size && (evs[ei].frame < 0 || evs[ei].frame <= w + i)) { apply(evs[ei]); ei++ }
@@ -1468,9 +1493,52 @@ class PolySynth(private val sr: Int, private val t: InstState.SynTrack) {
                     else -> { v.env *= relC; if (v.env < 1e-4f) { v.active = false; continue } }
                 }
                 v.fenv *= fDec
-                val f = v.freq
+                val ai = v.arpIv
+                if (ai != null) {
+                    val k = ((v.n / arpTick) % ai.size).toInt()
+                    if (k != v.arpIdx) { v.arpIdx = k; v.freq = hz(v.arpBase + ai[k]) }
+                }
+                v.n++
+                var f = v.freq
+                if (chip) {
+                    // verzögertes Vibrato (setzt nach ~0,3 s ein, wie in Tracker-Musik)
+                    val vd = ((v.n - sr * 0.3) / (sr * 0.4)).coerceIn(0.0, 1.0)
+                    if (vd > 0.0) {
+                        v.vph += 5.5 / sr
+                        f *= 1.0 + 0.006 * vd * kotlin.math.sin(2 * PI * v.vph)
+                    }
+                }
                 var o: Double
                 when (wave) {
+                    5, 8 -> {
+                        val dt = f / sr
+                        v.ph[0] += dt; if (v.ph[0] >= 1.0) v.ph[0] -= 1.0
+                        val dc = if (wave == 8 || duty < 0) {
+                            v.mph += pwmRate / sr; if (v.mph >= 1.0) v.mph -= 1.0
+                            0.5 + 0.42 * kotlin.math.sin(2 * PI * v.mph)
+                        } else duty
+                        var p = if (v.ph[0] < dc) 1.0 else -1.0
+                        p += blep(v.ph[0], dt); p -= blep((v.ph[0] - dc + 1.0) % 1.0, dt)
+                        o = (p - (2 * dc - 1)) * 0.7
+                    }
+                    6 -> {
+                        // NES-Dreieck: 32 Stufen (4 Bit)
+                        v.ph[0] += f / sr; if (v.ph[0] >= 1.0) v.ph[0] -= 1.0
+                        val tri = if (v.ph[0] < 0.5) v.ph[0] * 4 - 1 else 3 - v.ph[0] * 4
+                        o = kotlin.math.round(tri * 7.5) / 7.5 * 0.9
+                    }
+                    7 -> {
+                        // Rauschen aus einem 15-Bit-Schieberegister, Takt folgt der Tonhöhe; RES hoch = „kurzer“ metallischer Modus
+                        v.ph[0] += f * 8 / sr
+                        while (v.ph[0] >= 1.0) {
+                            v.ph[0] -= 1.0
+                            val tap = if (st.res > 0.5f) 6 else 1
+                            val bit = (v.lfsr xor (v.lfsr shr tap)) and 1
+                            v.lfsr = (v.lfsr shr 1) or (bit shl 14)
+                            v.nz = if (v.lfsr and 1 == 0) 0.6f else -0.6f
+                        }
+                        o = v.nz.toDouble()
+                    }
                     1 -> {
                         val dt = f / sr
                         v.ph[0] += dt; if (v.ph[0] >= 1.0) v.ph[0] -= 1.0
@@ -1508,7 +1576,7 @@ class PolySynth(private val sr: Int, private val t: InstState.SynTrack) {
                     }
                 }
                 var s = o.toFloat()
-                if (wave != 4) {
+                if (wave != 4 && !(chip && wave != 8 && st.cutNow() > 0.97f)) {
                     val oct = st.cutNow() * 7.5f + st.env * 4.5f * v.fenv + st.cutMod * 2.5f
                     val fc = min(0.42f * sr, 60f * 2f.pow(oct))
                     val g = (2.0 * kotlin.math.sin(PI * fc / sr)).toFloat().coerceAtMost(1.1f)
@@ -1518,7 +1586,9 @@ class PolySynth(private val sr: Int, private val t: InstState.SynTrack) {
                     v.bp += g * hp
                     s = v.lp
                 }
-                mix += s * v.env * v.vel
+                // Chip: Lautstärke in 16 Stufen wie auf dem Soundchip
+                val e = if (chip) kotlin.math.ceil(v.env * 15f) / 15f else v.env
+                mix += s * e * v.vel
             }
             out[i] += tanh(mix * vol * 1.2f)
         }
