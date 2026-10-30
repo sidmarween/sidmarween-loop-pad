@@ -132,6 +132,8 @@ object Warp {
         }
         // Ausschnitt aus einem Song (z. B. MP3): exaktes Tempo, ab dem ersten Schlag ganze Takte schneiden
         var bpm = auto
+        // lange Stücke: Tempo fein nachmessen (0,01 BPM Rundung ergibt über Minuten hörbare Drift)
+        if (dur > 45f) try { bpm = refineBpm(x, sr, first, bpm) } catch (ignored: Throwable) {}
         // Tempo auf die Oktave des Längen-Treffers bringen (falls vorhanden)
         if (fit != null) for (k in floatArrayOf(0.5f, 2f)) if (abs(ln((bpm * k / fit.first).toDouble())) < abs(ln((bpm / fit.first).toDouble()))) bpm *= k
         val usable = (x.size - first).toFloat() / sr
@@ -231,20 +233,166 @@ object Warp {
     /** Abbruch eines veralteten Dehn-Auftrags (neuer Auftrag läuft schon). */
     class Cancelled : RuntimeException()
 
+    /** Onset-Hüllkurve (Bass betont, 2,5-ms-Raster), stückweise aus der Quelle gelesen. Liefert Hüllkurve und Hop. */
+    fun onsetEnv(x: PcmSource, sr: Int): Pair<FloatArray, Int> {
+        val n = x.size
+        val hop = max(1, sr / 400)
+        val nf = n / hop
+        val lo = FloatArray(nf)
+        val hi = FloatArray(nf)
+        val aL = (1.0 - kotlin.math.exp(-2 * PI * 150.0 / sr)).toFloat()
+        val aH = (1.0 - kotlin.math.exp(-2 * PI * 3000.0 / sr)).toFloat()
+        var l = 0f
+        var h = 0f
+        val blk = hop * 4096
+        var o = 0
+        while (o < nf * hop) {
+            val e = min(nf * hop, o + blk)
+            val a = x.copy(o, e)
+            for (i in a.indices) {
+                val v = a[i]
+                l += aL * (v - l)
+                h += aH * (v - h)
+                val hv = v - h
+                val f = (o + i) / hop
+                lo[f] += l * l
+                hi[f] += hv * hv
+            }
+            o = e
+        }
+        val out = FloatArray(nf)
+        for ((env, w) in arrayOf(lo to 1f, hi to 0.4f)) {
+            var mean = 1e-12
+            for (v in env) mean += v
+            mean /= max(1, nf)
+            val sc = 1e3 / mean
+            var prev = ln(1.0 + sc * env.getOrElse(0) { 0f })
+            for (k in 0 until nf) {
+                val ev = ln(1.0 + sc * env[k])
+                out[k] += w * max(0.0, ev - prev).toFloat()
+                prev = ev
+            }
+        }
+        // leicht glätten (Anschläge bekommen eine kleine Breite → robustere Suche)
+        val sm = FloatArray(nf)
+        for (k in 0 until nf) sm[k] = 0.5f * out[k] + 0.25f * (out.getOrElse(k - 1) { 0f } + out.getOrElse(k + 1) { 0f })
+        return sm to hop
+    }
+
+    private fun envAt(e: FloatArray, t: Double): Float {
+        if (t < 0 || t >= e.size - 1) return 0f
+        val k = t.toInt()
+        val f = (t - k).toFloat()
+        return e[k] * (1 - f) + e[k + 1] * f
+    }
+
+    /**
+     * Feines Tempo eines Songs: Schlag-Kamm über die ganze Länge ab [first] (Frames), Suche ±0,4 % um [bpm].
+     * Über hunderte Schläge gemittelt ist das auf ~0,002 BPM genau (sonst driftet ein langer Song weg).
+     */
+    fun refineBpm(x: FloatArray, sr: Int, first: Int, bpm: Float): Float {
+        val (e, hop) = onsetEnv(ArraySource(x), sr)
+        val fps = sr.toDouble() / hop
+        val t0 = first.toDouble() / hop
+        val p0 = fps * 60.0 / bpm
+        val beats = ((e.size - t0) / p0).toInt() - 1
+        if (beats < 64) return bpm
+        var bestP = p0
+        var bestS = Double.NEGATIVE_INFINITY
+        var r = 0.996
+        while (r <= 1.004) {
+            val per = p0 * r
+            for (ph in -6..6) {
+                var sum = 0.0
+                var t = t0 + ph * 0.5
+                for (b in 0 until beats) { sum += envAt(e, t); t += per }
+                if (sum > bestS) { bestS = sum; bestP = per }
+            }
+            r += 0.00002
+        }
+        return (fps * 60.0 / bestP).toFloat()
+    }
+
+    /**
+     * Takt-Grenzen eines langen Stücks verfolgen (Quell-Samples, [bars]+1 Werte, letzte = Ende):
+     * Erwartung aus dem Tempo, dann je Takt die Kick/Schläge im Umkreis suchen und sanft nachführen.
+     * So bleiben auch leichte Tempo-Schwankungen und kleine Tempo-Fehler im Raster (keine Drift).
+     */
+    fun trackBars(x: PcmSource, sr: Int, bars: Int): DoubleArray {
+        val n = x.size
+        val b = DoubleArray(bars + 1) { it.toDouble() * n / bars }
+        if (bars < 4) return b
+        val (e, hop) = onsetEnv(x, sr)
+        val p0 = n.toDouble() / bars / hop                // Taktlänge in Hüllkurven-Frames
+        val q = p0 / 4
+        fun comb(t: Double): Double {
+            var s = 0.0
+            for (j in 0..3) s += envAt(e, t + j * q) * (if (j == 0) 1.5 else 1.0)
+            return s
+        }
+        // typische Kamm-Stärke auf dem linearen Raster (für die Vertrauens-Schwelle)
+        var avg = 0.0
+        for (k in 0 until bars) avg += comb(k * p0)
+        avg /= bars
+        val w = max(2, (p0 * 0.012).toInt())
+        var per = p0
+        var t = 0.0
+        val fb = DoubleArray(bars + 1)
+        for (k in 1..bars) {
+            val pred = t + per
+            var bestD = 0
+            var bestS = comb(pred)
+            for (d in -w..w) {
+                val sc = comb(pred + d) * (1.0 - 0.25 * abs(d) / w)
+                if (sc > bestS) { bestS = sc; bestD = d }
+            }
+            val nt = if (bestS > 0.6 * avg && k < bars) pred + 0.7 * bestD else pred
+            per += 0.15 * ((nt - t) - per)
+            per = per.coerceIn(p0 * 0.994, p0 * 1.006)
+            t = nt
+            fb[k] = t
+        }
+        // Ende muss das Quell-Ende sein: Abweichung über die letzten Takte verteilen
+        val endErr = n.toDouble() / hop - fb[bars]
+        val spread = 1
+        for (k in 1..bars) {
+            val g = (k - (bars - spread)).coerceAtLeast(0).toDouble() / spread
+            b[k] = (fb[k] + endErr * g) * hop
+        }
+        b[bars] = n.toDouble()
+        for (k in 1..bars) if (b[k] <= b[k - 1] + hop) b[k] = b[k - 1] + hop
+        return b
+    }
+
     fun stretchBeatsLong(x: PcmSource, outLen: Int, sr: Int, bars: Float, pre: FloatArray? = null, cancel: (() -> Boolean)? = null): FloatArray {
         val n = x.size
         fun whole(): FloatArray = if (x is ArraySource && x.whole) x.a else x.copy(0, n)
         if (n < sr * 60 || bars < 16f || outLen <= 1) return stretchBeats(whole(), outLen, sr, bars, pre)
-        if (abs(n.toDouble() / outLen - 1.0) < 0.0015) return seamEnd(if (n == outLen && x is ArraySource && x.whole) x.a else x.copy(0, outLen), pre, sr)
+        // Takt-Grenzen im Original verfolgen; liegen sie alle auf dem linearen Raster und stimmt die Länge,
+        // genügt eine Kopie – sonst wird jeder 8-Takt-Block einzeln aufs Raster gelegt
+        val ib = kotlin.math.floor(bars + 1e-3f).toInt()
+        val tb = trackBars(x, sr, max(1, ib))
+        var dev = 0.0
+        for (k in 0..ib) dev = max(dev, abs(tb[k] - k.toDouble() * n / ib))
+        if (n == outLen && dev < sr * 0.002) return seamEnd(if (x is ArraySource && x.whole) x.a else x.copy(0, outLen), pre, sr)
+        fun srcAt(bb: Float): Int {
+            if (bb >= bars - 1e-3f) return n
+            val k = bb.toInt()
+            if (k >= ib) return n
+            val f = bb - k
+            return (tb[k] + (tb[min(ib, k + 1)] - tb[k]) * f).toInt().coerceIn(0, n)
+        }
         val out = FloatArray(outLen)
-        val chunk = 8f
+        val chunk = 4f
         var b0 = 0f
         val ramp = max(16, sr / 1000)
         while (b0 < bars - 1e-3f) {
             if (cancel?.invoke() == true) throw Cancelled()
-            val b1 = min(bars, b0 + chunk)
-            val s0 = (b0 / bars * n).toInt()
-            val s1 = min(n, (b1 / bars * n).toInt())
+            var b1 = min(bars, b0 + chunk)
+            // der letzte Takt ist ein eigener Block (er nimmt den Rest bis zum Quell-Ende auf)
+            if (b0 < ib - 1 && b1 > ib - 1) b1 = (ib - 1).toFloat()
+            val s0 = srcAt(b0)
+            val s1 = srcAt(b1)
             val o0 = (b0.toDouble() / bars * outLen).toInt()
             val o1 = min(outLen, (b1.toDouble() / bars * outLen).toInt())
             if (s1 - s0 > 1 && o1 - o0 > 1) {
@@ -268,7 +416,8 @@ object Warp {
     fun stretchBeats(x: FloatArray, outLen: Int, sr: Int, bars: Float, pre: FloatArray? = null, seam: Boolean = true): FloatArray {
         val n = x.size
         if (outLen <= 1 || n < 2) return FloatArray(max(1, outLen))
-        if (abs(n.toDouble() / outLen - 1.0) < 0.0015) return fitLen(x, outLen).let { if (seam) seamEnd(it, pre, sr) else it }
+        // nur bei praktisch gleicher Länge kopieren (±2 ms) – sonst driftet ein langes Stück aus dem Raster
+        if (abs(n - outLen) < sr * 0.002) return fitLen(x, outLen).let { if (seam) seamEnd(it, pre, sr) else it }
         var slices = max(1, (bars * 16f).roundToInt()).coerceAtMost(4096)
         // Stücke nicht kürzer als ~45 ms (dann 1/8, 1/4 …)
         while (slices > 1 && n / slices < sr * 0.045) slices /= 2

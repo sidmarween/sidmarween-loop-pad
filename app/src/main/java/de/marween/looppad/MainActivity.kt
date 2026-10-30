@@ -763,7 +763,7 @@ class MainActivity : Activity() {
         val step = maxOf(1, data.size / 4096)
         var i = 0
         while (i < data.size) { h = h * 31 + (data[i] * 1000f).toInt(); i += step }
-        return "v2|" + (name ?: "?").trim() + "|" + data.size + "|" + java.lang.Long.toHexString(h)
+        return "v3|" + (name ?: "?").trim() + "|" + data.size + "|" + java.lang.Long.toHexString(h)
     }
 
     private fun cachedInfo(key: String): Warp.Info? = try {
