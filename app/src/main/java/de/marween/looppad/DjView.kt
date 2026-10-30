@@ -146,6 +146,8 @@ class DjView(context: Context) : View(context) {
     fun openAtmos() { atmos.open(); invalidate() }
     val harm = HarmonizerPanel(this).also { a -> a.onHint = { m -> onHint?.invoke(m) } }
     fun openHarm() { harm.open(); invalidate() }
+    val euclid = EuclidPanel(this).also { a -> a.onHint = { m -> onHint?.invoke(m) } }
+    fun openEuclid() { euclid.open(); invalidate() }
     var onTempo: (() -> Unit)? = null
     var onPadsMode: (() -> Unit)? = null
     var onHint: ((String) -> Unit)? = null
@@ -603,6 +605,11 @@ class DjView(context: Context) : View(context) {
     override fun onDraw(c: Canvas) {
         if (panel.width() <= 0f) layoutAll()
         GhostLoop.poll()
+        if (euclid.isOpen) {
+            c.drawColor(skin.bg)
+            euclid.draw(c, RectF(dp(6f), insetTop + dp(6f), width - dp(6f), height - insetBottom - dp(6f)), skin.accent)
+            return
+        }
         if (harm.isOpen) {
             c.drawColor(skin.bg)
             harm.draw(c, RectF(dp(6f), insetTop + dp(6f), width - dp(6f), height - insetBottom - dp(6f)), skin.accent)
@@ -2397,6 +2404,11 @@ class DjView(context: Context) : View(context) {
     @SuppressLint("ClickableViewAccessibility")
     override fun onTouchEvent(e: MotionEvent): Boolean {
         if (e.actionMasked == MotionEvent.ACTION_DOWN) try { requestUnbufferedDispatch(e) } catch (ignored: Throwable) {}
+        if (euclid.isOpen) {
+            euclid.touch(e)
+            invalidate()
+            return true
+        }
         if (harm.isOpen) {
             harm.touch(e)
             invalidate()

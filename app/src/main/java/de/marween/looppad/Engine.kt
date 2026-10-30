@@ -2984,6 +2984,9 @@ object Engine {
                 val bar0 = if (ml > 0L) (w - masterStart).toDouble() / ml else -1.0
                 Atmos.render(mL, mR, block, sampleRate, bar0, if (ml > 0L) 1.0 / ml else 0.0, vol)
             }
+            // EUKLID: generative Polyrhythmen im Master-Raster
+            Euclid.tick()
+            if (Euclid.active()) Euclid.render(mL, mR, block, sampleRate, w, masterStart, masterLen, vol)
             // Vocal-Harmonizer (Deck-Gesang oder Mikrofon)
             if (Harmonizer.on || Harmonizer.meter > 0f || Harmonizer.source != 3) {
                 val mic = if (Harmonizer.on && Harmonizer.source == 3) micLatest(block) else null

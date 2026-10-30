@@ -2491,6 +2491,7 @@ class MainActivity : Activity() {
                 add("✂ Slicer: Song-Abschnitt auf 16 Pads zerlegen") { if (djMode) switchMode(false); if (Slicer.data == null) pickSlicerSource() else pads.openSlicer() }
                 add("👻 Ghost-Producer: Genre-Patterns als Live-Remix") { openGhost() }
                 add("🌌 ATMOS: Klangteppich & Drones (Übergänge, Intros)") { openAtmos() }
+                add("⬡ EUKLID: generative Polyrhythmen (Perc, Hats, Rim, Pluck)") { if (djMode) dj.openEuclid() else pads.openEuclid(); hint("▶ START – läuft im Takt des Decks · drei Regler: Schläge, Taktlänge, Morphing") }
                 add("🎤 Vocal-Harmonizer: Chor aus dem Deck-Gesang") { if (djMode) dj.openHarm() else pads.openHarm(); hint("▶ AN, dann Akkord-Pads halten – der Gesang des Decks wird zum Chor · XY: Formant und Tuning") }
                 add("🪄 Ein-Tipp-Remix: aus einem Song ein neues Arrangement") { if (djMode) switchMode(false); pickRemixPad() }
                 add(if (Engine.scOn) "〽 Sidechain-Pumpen: AN" else "〽 Sidechain-Pumpen (Kick drückt Bass & Flächen)") { showSidechain() }
