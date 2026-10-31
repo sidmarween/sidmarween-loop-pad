@@ -2477,202 +2477,131 @@ class PadView(context: Context) : View(context) {
     private fun toggleMixView() {
         mixView = !mixView
         mixPtr.clear()
-        xfAssign = -1
         if (mixView) {
             sceneView = false
             func = F_NONE
-            if (mixSel < 0) mixSel = Engine.seqSelected
-            hint("MIX: Fader hoch/runter = Lautstärke · M = stumm · S = solo · Nummer = Pad wählen")
-        } else {
-            val p = mixSel
-            if (p in 0 until VISIBLE_PADS) {
-                if (Engine.isOneShot(p) && Engine.hasLoop(p)) Engine.seqSelected = p
-                flash[p] = 1f
-                val r = padRects[p]
-                burst(r.centerX(), r.centerY(), padAccent(p), 28, 300f)
-                shocks.add(Shock(RectF(r), 0f, padAccent(p)))
-                hint("Pad ${p + 1} ausgewählt")
-            }
+            // der alte Pad-Crossfader ist weg – nichts darf mehr leiser bleiben
+            Engine.xfA = -1; Engine.xfB = -1
+            hint("MIX: jede Quelle, die etwas spielt, als Kanal · großer Knopf = an/aus · Fader = Lautstärke")
         }
         performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
     }
 
-    // ---- Aufteilung: Kanalzüge (bei schmalem Bildschirm in 2 Reihen à 6) + Crossfader unten
-    private val xfRect = RectF()
-    private val xfBoxA = RectF()
-    private val xfBoxB = RectF()
-    private val xfTrack = RectF()
-    private val xfCurveBtn = RectF()
-    /** Zuordnen läuft: 0 = nächster Tipp auf eine Pad-Nummer wird A, 1 = B, -1 = aus. */
-    private var xfAssign = -1
-    private var xfLastTap = 0L
+    // ---- Kanäle: nur Quellen mit Inhalt (Pads, Instrumente mit Noten, laufende Zusatz-Instrumente)
+    private class MixCh(val kind: Int, val idx: Int)   // kind 0 Pad, 1 Instrument (0 ACID, 1 DRUM, 2.. SYNTH), 2 Extra (0 EUKLID, 1 ATMOS, 2 HARMONIZER)
 
-    private fun mixRows(): Int = if (mixRect.width() / VISIBLE_PADS < dp(46f)) 2 else 1
-
-    private fun mixLayout() {
-        val r = mixRect
-        val xh = min(dp(50f), r.height() * 0.2f)
-        xfRect.set(r.left + dp(6f), r.bottom - dp(6f) - xh, r.right - dp(6f), r.bottom - dp(6f))
-        val bw = min(dp(64f), xfRect.width() * 0.17f)
-        val cw = min(dp(62f), xfRect.width() * 0.16f)
-        xfBoxA.set(xfRect.left, xfRect.top, xfRect.left + bw, xfRect.bottom)
-        xfCurveBtn.set(xfRect.right - cw, xfRect.top, xfRect.right, xfRect.bottom)
-        xfBoxB.set(xfCurveBtn.left - dp(6f) - bw, xfRect.top, xfCurveBtn.left - dp(6f), xfRect.bottom)
-        xfTrack.set(xfBoxA.right + dp(14f), xfRect.top, xfBoxB.left - dp(14f), xfRect.bottom)
+    private fun mixChannels(): List<MixCh> {
+        val out = ArrayList<MixCh>()
+        for (i in listOf(1, 0, 2, 3, 4)) if (i < InstState.INSTS && InstState.instHasNotes(i)) out.add(MixCh(1, i))
+        for (k in 0 until 3) if (when (k) { 0 -> Euclid.on; 1 -> Atmos.on || Atmos.active(); else -> Harmonizer.on }) out.add(MixCh(2, k))
+        for (p in 0 until VISIBLE_PADS) if (Engine.hasLoop(p)) out.add(MixCh(0, p))
+        return out
     }
 
-    /** Fläche eines Kanalzugs. */
-    private fun mixStripRect(p: Int, out: RectF) {
-        val rows = mixRows()
-        val per = VISIBLE_PADS / rows
-        val row = p / per
-        val col = p % per
-        val top0 = mixRect.top + dp(4f)
-        val bottom0 = xfRect.top - dp(6f)
-        val rh = (bottom0 - top0) / rows
-        val sw = mixRect.width() / per
-        out.set(mixRect.left + col * sw + dp(1.5f), top0 + row * rh + (if (row > 0) dp(3f) else 0f), mixRect.left + (col + 1) * sw - dp(1.5f), top0 + (row + 1) * rh - (if (row < rows - 1) dp(3f) else 0f))
+    private fun chName(c: MixCh): String = when (c.kind) {
+        0 -> Engine.padName(c.idx)?.take(12) ?: "Pad ${c.idx + 1}"
+        1 -> when (c.idx) { 0 -> "BASS 303"; 1 -> "DRUMS 909"; else -> "SYNTH ${c.idx - 1}" }
+        else -> arrayOf("EUKLID", "ATMOS", "HARMONIZER")[c.idx]
     }
-
-    /** Teilt einen Kanalzug in Zonen: 0 = Nummer, 1 = Fader, 2 = Solo, 3 = Mute. */
-    private fun mixStrip(p: Int, out: Array<RectF>) {
-        mixStripRect(p, tmpStrip)
-        val l = tmpStrip.left
-        val r = tmpStrip.right
-        val top = tmpStrip.top
-        val bot = tmpStrip.bottom
-        val nh = dp(30f)
-        out[0].set(l, top, r, top + nh)
-        if (r - l >= dp(54f)) {
-            // breit: S und M rechts neben dem Fader (längerer Fader, größere Knöpfe)
-            val bw = (r - l) * 0.42f
-            val bh = min(dp(34f), (bot - out[0].bottom - dp(12f)) / 2f)
-            out[3].set(r - bw, bot - bh, r, bot)
-            out[2].set(r - bw, out[3].top - dp(5f) - bh, r, out[3].top - dp(5f))
-            out[1].set(l, out[0].bottom + dp(16f), r - bw - dp(4f), bot - dp(4f))
-        } else {
-            val bh = min(dp(26f), r - l).coerceAtLeast(dp(20f))
-            out[3].set(l, bot - bh, r, bot)
-            out[2].set(l, out[3].top - dp(4f) - bh, r, out[3].top - dp(4f))
-            out[1].set(l, out[0].bottom + dp(16f), r, out[2].top - dp(8f))
+    private fun chSub(c: MixCh): String = when (c.kind) {
+        0 -> "Pad ${c.idx + 1} · " + if (Engine.isOneShot(c.idx)) "⚡" else "∞ Loop"
+        1 -> "Instrument"
+        else -> "Generator"
+    }
+    private fun chIcon(c: MixCh): String = when (c.kind) {
+        0 -> if (Engine.isOneShot(c.idx)) "⚡" else "∿"
+        1 -> when (c.idx) { 0 -> "🔊"; 1 -> "🥁"; else -> "🎹" }
+        else -> arrayOf("⬡", "🌌", "🎤")[c.idx]
+    }
+    private fun chOn(c: MixCh): Boolean = when (c.kind) {
+        0 -> !Engine.isMuted(c.idx)
+        1 -> InstState.instOn(c.idx)
+        else -> when (c.idx) { 0 -> Euclid.on; 1 -> Atmos.on; else -> Harmonizer.on }
+    }
+    private fun chSetOn(c: MixCh, v: Boolean) {
+        when (c.kind) {
+            0 -> if (Engine.isMuted(c.idx) == v) Engine.toggleMute(c.idx)
+            1 -> { InstState.setInstOn(c.idx, v); if (v && !Engine.seqPlaying) Engine.transportPlay(false) }
+            else -> when (c.idx) { 0 -> Euclid.on = v; 1 -> Atmos.on = v; else -> Harmonizer.on = v }
         }
     }
-    private val tmpStrip = RectF()
+    /** Lautstärke 0..1.5 (1 = Normal). */
+    private fun chGain(c: MixCh): Float = when (c.kind) {
+        0 -> Engine.padGain(c.idx)
+        1 -> when (c.idx) { 0 -> InstState.acidVol / 0.75f; 1 -> InstState.drumVol / 0.8f; else -> InstState.synTracks[c.idx - 2].vol / 0.6f }
+        else -> when (c.idx) { 0 -> Euclid.level / 0.7f; 1 -> Atmos.level / 0.6f; else -> Harmonizer.level / 0.7f }
+    }.coerceIn(0f, 1.5f)
+    private fun chSetGain(c: MixCh, g0: Float) {
+        val g = g0.coerceIn(0f, 1.5f)
+        when (c.kind) {
+            0 -> Engine.setPadGain(c.idx, g)
+            1 -> when (c.idx) { 0 -> InstState.acidVol = (0.75f * g).coerceAtMost(1f); 1 -> InstState.drumVol = (0.8f * g).coerceAtMost(1f); else -> InstState.synTracks[c.idx - 2].vol = (0.6f * g).coerceAtMost(1f) }
+            else -> when (c.idx) { 0 -> Euclid.level = (0.7f * g).coerceAtMost(1f); 1 -> Atmos.level = (0.6f * g).coerceAtMost(1f); else -> Harmonizer.level = (0.7f * g).coerceAtMost(1f) }
+        }
+    }
+    /** Pegel 0..1 für die Anzeige. */
+    private fun chLevel(c: MixCh): Float = when (c.kind) {
+        0 -> if (chOn(c)) Engine.levels[c.idx] else 0f
+        1 -> if (chOn(c) && Engine.seqPlaying) 0.35f + 0.25f * (0.5f + 0.5f * sin(time * 9f + c.idx)) else 0f
+        else -> when (c.idx) { 0 -> if (Euclid.on) Euclid.laneFlash.maxOrNull() ?: 0f else 0f; 1 -> Atmos.meter; else -> Harmonizer.meter }
+    }
+    private fun chColor(c: MixCh): Int = when (c.kind) {
+        0 -> padAccent(c.idx)
+        1 -> intArrayOf(Color.rgb(90, 190, 255), Color.rgb(255, 150, 70), Color.rgb(200, 140, 255), Color.rgb(240, 120, 200), Color.rgb(120, 230, 140))[c.idx.coerceIn(0, 4)]
+        else -> intArrayOf(Color.rgb(255, 170, 90), Color.rgb(140, 170, 255), Color.rgb(255, 120, 190))[c.idx]
+    }
+
+    private var mixList: List<MixCh> = emptyList()
+    private val mixStrips = ArrayList<RectF>()
+    private val mixOnBtn = ArrayList<RectF>()
+    private val mixFader = ArrayList<RectF>()
+
+    private fun mixLayoutAll() {
+        mixList = mixChannels()
+        val n = mixList.size
+        mixStrips.clear(); mixOnBtn.clear(); mixFader.clear()
+        if (n == 0) return
+        val r = mixRect
+        val minW = dp(54f)
+        val perMax = max(1, ((r.width() - dp(8f)) / minW).toInt())
+        val rows = when { n <= perMax -> 1; n <= 2 * perMax -> 2; else -> 3 }
+        val per = (n + rows - 1) / rows
+        val sw = (r.width() - dp(8f)) / per
+        val rh = (r.height() - dp(8f)) / rows
+        for (k in 0 until n) {
+            val row = k / per; val col = k % per
+            val st = RectF(r.left + dp(4f) + col * sw + dp(2f), r.top + dp(4f) + row * rh + dp(2f), r.left + dp(4f) + (col + 1) * sw - dp(2f), r.top + dp(4f) + (row + 1) * rh - dp(2f))
+            mixStrips.add(st)
+            val bh = min(dp(46f), st.height() * 0.24f)
+            mixOnBtn.add(RectF(st.left + dp(3f), st.bottom - bh - dp(3f), st.right - dp(3f), st.bottom - dp(3f)))
+            mixFader.add(RectF(st.left + dp(6f), st.top + dp(40f), st.right - dp(6f), st.bottom - bh - dp(12f)))
+        }
+    }
 
     private fun mixDown(id: Int, x: Float, y: Float) {
-        mixLayout()
-        if (xfRect.contains(x, y) || (y >= xfRect.top - dp(4f) && y <= xfRect.bottom + dp(4f))) { xfDown(id, x); return }
-        var p = -1
-        for (i in 0 until VISIBLE_PADS) {
-            mixStripRect(i, tmpStrip)
-            tmpStrip.inset(-dp(2f), -dp(3f))
-            if (tmpStrip.contains(x, y)) { p = i; break }
-        }
-        if (p < 0) return
-        mixStrip(p, mixZones)
-        val zone = when {
-            y < mixZones[0].bottom + dp(6f) -> 0
-            RectF(mixZones[3]).apply { inset(-dp(3f), -dp(3f)) }.contains(x, y) -> 3
-            RectF(mixZones[2]).apply { inset(-dp(3f), -dp(3f)) }.contains(x, y) -> 2
-            mixZones[1].width() < tmpStrip.width() * 0.8f || y < mixZones[2].top - dp(2f) -> 1
-            else -> 1
+        mixLayoutAll()
+        val k = mixStrips.indexOfFirst { RectF(it).apply { inset(-dp(2f), -dp(2f)) }.contains(x, y) }
+        if (k < 0) return
+        val c = mixList[k]
+        performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+        if (RectF(mixOnBtn[k]).apply { inset(-dp(3f), -dp(3f)) }.contains(x, y) || y < mixFader[k].top - dp(4f)) {
+            val v = !chOn(c)
+            chSetOn(c, v)
+            burst(mixOnBtn[k].centerX(), mixOnBtn[k].centerY(), chColor(c), 14, 180f)
+            hint("${chName(c)} " + if (v) "an" else "aus")
+            return
         }
         val now = SystemClock.uptimeMillis()
-        val dbl = p == mixLastTapPad && zone == mixLastTapZone && now - mixLastTapMs < 320L
-        mixLastTapPad = p
-        mixLastTapZone = zone
-        mixLastTapMs = now
-        val has = Engine.hasLoop(p)
-        when (zone) {
-            0 -> {
-                if (xfAssign >= 0) {
-                    // Crossfader-Seite zuordnen
-                    if (xfAssign == 0) { Engine.xfA = p; if (Engine.xfB == p) Engine.xfB = -1 } else { Engine.xfB = p; if (Engine.xfA == p) Engine.xfA = -1 }
-                    hint("Crossfader ${if (xfAssign == 0) "A" else "B"} = Pad ${p + 1}" + if (Engine.xfActive()) " – schieben wechselt zwischen Pad ${Engine.xfA + 1} und Pad ${Engine.xfB + 1}" else " – jetzt die andere Seite wählen")
-                    xfAssign = if (!Engine.xfActive()) (if (Engine.xfA < 0) 0 else if (Engine.xfB < 0) 1 else -1) else -1
-                    burst(mixZones[0].centerX(), mixZones[0].centerY(), overlayColors()[2], 18, 200f)
-                    performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
-                    return
-                }
-                mixSel = p
-                if (Engine.isOneShot(p) && has) Engine.seqSelected = p
-                burst(mixZones[0].centerX(), mixZones[0].centerY(), padAccent(p), 14, 180f)
-                if (dbl && has) {
-                    mixView = false
-                    openKeyboard(p)
-                } else hint("Pad ${p + 1} ausgewählt" + if (has) " – doppelt tippen öffnet die Piano-Roll" else " (leer)")
-            }
-            1 -> {
-                if (!has) { hint("Pad ${p + 1} ist leer"); return }
-                if (dbl) {
-                    Engine.setPadGain(p, 1f)
-                    hint("Pad ${p + 1}: 0 dB")
-                }
-                mixPtr[id] = MixPtr(p, y, Engine.padGain(p), max(dp(40f), mixZones[1].height()))
-            }
-            2 -> {
-                Engine.toggleSolo(p)
-                burst(mixZones[2].centerX(), mixZones[2].centerY(), Color.rgb(255, 200, 40), 10, 140f)
-            }
-            else -> {
-                if (!has) { hint("Pad ${p + 1} ist leer"); return }
-                Engine.toggleMute(p)
-                burst(mixZones[3].centerX(), mixZones[3].centerY(), Color.rgb(90, 160, 255), 10, 140f)
-            }
-        }
-        performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
-    }
-
-    private fun xfDown(id: Int, x: Float) {
-        performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
-        when {
-            xfBoxA.contains(x, xfBoxA.centerY()) || xfBoxB.contains(x, xfBoxB.centerY()) -> {
-                val side = if (xfBoxA.contains(x, xfBoxA.centerY())) 0 else 1
-                if (xfAssign == side) {
-                    // nochmal tippen: Seite freigeben
-                    if (side == 0) Engine.xfA = -1 else Engine.xfB = -1
-                    xfAssign = -1
-                    hint("Crossfader ${if (side == 0) "A" else "B"} frei")
-                } else {
-                    xfAssign = side
-                    hint("Crossfader ${if (side == 0) "A (links)" else "B (rechts)"}: jetzt oben die Pad-NUMMER antippen · nochmal ${if (side == 0) "A" else "B"} = frei machen")
-                }
-            }
-            xfCurveBtn.contains(x, xfCurveBtn.centerY()) -> {
-                Engine.xfCurve = (Engine.xfCurve + 1) % 3
-                hint("Crossfader-Kurve: " + when (Engine.xfCurve) {
-                    0 -> "SANFT – gleich laut beim Überblenden"
-                    1 -> "LINEAR – gleichmäßig"
-                    else -> "SCHNITT – beide voll, harter Wechsel am Rand (Scratch)"
-                })
-            }
-            else -> {
-                if (!Engine.xfActive()) {
-                    hint("Crossfader: erst A und B antippen und je ein Pad zuordnen")
-                    xfAssign = if (Engine.xfA < 0) 0 else 1
-                    return
-                }
-                val now = SystemClock.uptimeMillis()
-                if (now - xfLastTap < 320L) { Engine.xfPos = 0.5f; hint("Crossfader Mitte") }
-                xfLastTap = now
-                xfSet(x)
-                mixPtr[id] = MixPtr(-2, 0f, 0f, 1f)
-            }
-        }
-    }
-
-    private fun xfSet(x: Float) {
-        var v = ((x - xfTrack.left) / max(1f, xfTrack.width())).coerceIn(0f, 1f)
-        if (abs(v - 0.5f) < 0.02f) v = 0.5f
-        Engine.xfPos = v
+        if (now - mixLastTapMs < 320L && mixLastTapPad == k) { chSetGain(c, 1f); hint("${chName(c)}: 0 dB") }
+        mixLastTapMs = now; mixLastTapPad = k
+        mixPtr[id] = MixPtr(k, y, chGain(c), max(dp(40f), mixFader[k].height()))
     }
 
     private fun mixMove(id: Int, x: Float, y: Float) {
         val m = mixPtr[id] ?: return
-        if (m.pad == -2) { xfSet(x); return }
+        val c = mixList.getOrNull(m.pad) ?: return
         val g = (m.startGain + (m.startY - y) / m.faderH * 1.5f).coerceIn(0f, 1.5f)
-        // rastet bei 0 dB leicht ein
-        Engine.setPadGain(m.pad, if (abs(g - 1f) < 0.025f) 1f else g)
+        chSetGain(c, if (abs(g - 1f) < 0.025f) 1f else g)
     }
 
     private fun gainDb(g: Float): String {
@@ -2692,7 +2621,6 @@ class PadView(context: Context) : View(context) {
         strokePaint.strokeWidth = dp(1.3f)
         strokePaint.color = if (on) cols[2] else alpha(cols[1], 0.6f)
         canvas.drawRoundRect(r, rr, rr, strokePaint)
-        // kleines Fader-Symbol
         val fg = if (on) cols[0] else cols[1]
         val iy0 = r.top + dp(7f)
         val iy1 = r.bottom - dp(15f)
@@ -2712,17 +2640,6 @@ class PadView(context: Context) : View(context) {
         canvas.drawText(if (on) "PADS" else "MIX", r.centerX(), r.bottom - dp(4f), textPaint)
     }
 
-    private fun mixButton(canvas: Canvas, zr: RectF, lab: String, on: Boolean, c: Int, enabled: Boolean, fg: Int) {
-        fillPaint.color = if (on) c else alpha(fg, 0.07f)
-        canvas.drawRoundRect(zr, dp(5f), dp(5f), fillPaint)
-        strokePaint.strokeWidth = dp(1f)
-        strokePaint.color = alpha(if (on) c else fg, if (enabled) 0.6f else 0.2f)
-        canvas.drawRoundRect(zr, dp(5f), dp(5f), strokePaint)
-        textPaint.textSize = min(dp(11f), zr.width() * 0.45f)
-        textPaint.color = if (on) Color.BLACK else alpha(fg, if (enabled) 0.85f else 0.3f)
-        canvas.drawText(lab, zr.centerX(), zr.centerY() + textPaint.textSize * 0.36f, textPaint)
-    }
-
     private fun drawMixer(canvas: Canvas) {
         val cols = overlayColors()
         val bg = cols[0]
@@ -2735,156 +2652,79 @@ class PadView(context: Context) : View(context) {
         strokePaint.strokeWidth = dp(1.2f)
         strokePaint.color = alpha(acc, 0.5f)
         canvas.drawRoundRect(mixRect, rr, rr, strokePaint)
-        val red = Color.rgb(255, 60, 80)
-        val blue = Color.rgb(90, 160, 255)
-        val yellow = Color.rgb(255, 200, 40)
         textPaint.textAlign = Paint.Align.CENTER
-        mixLayout()
-        for (p in 0 until VISIBLE_PADS) {
-            mixStrip(p, mixZones)
-            val has = Engine.hasLoop(p)
-            val col = padAccent(p)
-            val dim = if (has) 1f else 0.35f
-            val sel = p == mixSel
-            mixStripRect(p, tmpStrip)
-            fillPaint.color = alpha(fg, if (sel) 0.07f else 0.035f)
-            canvas.drawRoundRect(tmpStrip, dp(6f), dp(6f), fillPaint)
-            if (p == Engine.xfA || p == Engine.xfB) {
-                strokePaint.strokeWidth = dp(1.4f)
-                strokePaint.color = alpha(acc, 0.7f)
-                canvas.drawRoundRect(tmpStrip, dp(6f), dp(6f), strokePaint)
-            }
-            // Nummer / Auswahl
-            val t = mixZones[0]
-            fillPaint.color = if (sel) col else alpha(col, 0.18f * dim)
-            canvas.drawRoundRect(t, dp(5f), dp(5f), fillPaint)
-            strokePaint.strokeWidth = dp(if (sel) 2f else 1f)
-            strokePaint.color = if (sel) fg else alpha(col, 0.6f * dim)
-            canvas.drawRoundRect(t, dp(5f), dp(5f), strokePaint)
-            textPaint.textSize = min(dp(14f), t.width() * 0.5f)
-            textPaint.color = if (sel) bg else alpha(fg, dim)
-            val xs = if (p == Engine.xfA) " ·A" else if (p == Engine.xfB) " ·B" else ""
-            canvas.drawText("${p + 1}$xs", t.centerX(), t.centerY() + dp(1f), textPaint)
-            textPaint.textSize = min(dp(9f), t.width() * 0.3f)
-            textPaint.color = if (sel) alpha(bg, 0.8f) else alpha(fg, 0.6f * dim)
-            val kind = if (!has) "–" else fitLabel(textPaint, Engine.padName(p) ?: if (Engine.isOneShot(p)) "⚡" else "LOOP", t.width() - dp(4f), textPaint.textSize, dp(6f))
-            canvas.drawText(kind, t.centerX(), t.bottom - dp(3f), textPaint)
-            // Fader
-            val f = mixZones[1]
-            val g = Engine.padGain(p)
-            textPaint.textSize = min(dp(10f), f.width() * 0.32f)
-            textPaint.color = alpha(fg, 0.7f * dim)
-            if (has) canvas.drawText(gainDb(g), f.centerX(), f.top - dp(5f), textPaint)
-            val tw = min(dp(8f), f.width() * 0.22f)
-            val tx = f.centerX() - dp(3f)
+        mixLayoutAll()
+        if (mixList.isEmpty()) {
+            textPaint.textSize = dp(13f); textPaint.color = alpha(fg, 0.8f)
+            canvas.drawText("Noch spielt nichts", mixRect.centerX(), mixRect.centerY() - dp(8f), textPaint)
+            textPaint.textSize = dp(10f); textPaint.color = alpha(fg, 0.55f)
+            canvas.drawText(fitLabel(textPaint, "Pads aufnehmen oder Noten in 303/909/SYNTH setzen – dann erscheinen hier ihre Kanäle", mixRect.width() - dp(20f), dp(10f), dp(7f)), mixRect.centerX(), mixRect.centerY() + dp(12f), textPaint)
+            return
+        }
+        val red = Color.rgb(255, 60, 80)
+        val yellow = Color.rgb(255, 200, 40)
+        for ((k, c) in mixList.withIndex()) {
+            val st = mixStrips[k]
+            val col = chColor(c)
+            val on = chOn(c)
+            // Kanalzug
+            fillPaint.color = alpha(on.let { if (it) col else fg }, if (on) 0.10f else 0.04f)
+            canvas.drawRoundRect(st, dp(8f), dp(8f), fillPaint)
+            strokePaint.strokeWidth = dp(if (on) 1.4f else 0.8f)
+            strokePaint.color = alpha(if (on) col else fg, if (on) 0.8f else 0.25f)
+            canvas.drawRoundRect(st, dp(8f), dp(8f), strokePaint)
+            // Name
+            textPaint.textSize = min(dp(11f), st.width() * 0.2f)
+            textPaint.color = alpha(fg, if (on) 1f else 0.55f)
+            canvas.drawText(fitLabel(textPaint, chIcon(c) + " " + chName(c), st.width() - dp(6f), textPaint.textSize, dp(6.5f)), st.centerX(), st.top + dp(16f), textPaint)
+            textPaint.textSize = min(dp(8.5f), st.width() * 0.16f)
+            textPaint.color = alpha(fg, 0.5f)
+            canvas.drawText(fitLabel(textPaint, chSub(c), st.width() - dp(6f), textPaint.textSize, dp(6f)), st.centerX(), st.top + dp(29f), textPaint)
+            // Fader + Pegel
+            val f = mixFader[k]
+            val g = chGain(c)
+            val tw = min(dp(9f), f.width() * 0.22f)
+            val tx = f.centerX() - dp(4f)
             tmpRect.set(tx - tw / 2f, f.top, tx + tw / 2f, f.bottom)
             fillPaint.color = alpha(fg, 0.12f)
             canvas.drawRoundRect(tmpRect, tw / 2f, tw / 2f, fillPaint)
-            val muted = has && Engine.isMuted(p)
-            val silent = muted || (Engine.soloAny && !Engine.solo[p])
             val fy = f.bottom - f.height() * (g / 1.5f)
-            val xg = Engine.xfGain(p)
-            if (has) {
-                fillPaint.color = alpha(if (silent) fg else col, if (silent) 0.25f else 0.85f)
-                tmpRect.set(tx - tw / 2f, fy, tx + tw / 2f, f.bottom)
-                canvas.drawRoundRect(tmpRect, tw / 2f, tw / 2f, fillPaint)
-            }
-            // 0-dB-Markierung
+            fillPaint.color = alpha(if (on) col else fg, if (on) 0.85f else 0.25f)
+            tmpRect.set(tx - tw / 2f, fy, tx + tw / 2f, f.bottom)
+            canvas.drawRoundRect(tmpRect, tw / 2f, tw / 2f, fillPaint)
             val uy = f.bottom - f.height() / 1.5f
-            strokePaint.strokeWidth = dp(1f)
-            strokePaint.color = alpha(fg, 0.35f)
+            strokePaint.strokeWidth = dp(1f); strokePaint.color = alpha(fg, 0.35f)
             canvas.drawLine(tx - tw, uy, tx + tw, uy, strokePaint)
-            // Pegelanzeige rechts vom Fader
-            val mx = tx + tw / 2f + dp(4f)
-            val mw = dp(3f)
+            val mx = tx + tw / 2f + dp(5f)
+            val mw = dp(4f)
             fillPaint.color = alpha(fg, 0.08f)
             canvas.drawRect(mx, f.top, mx + mw, f.bottom, fillPaint)
-            if (has && !silent) {
-                val lv = Engine.levels[p].coerceIn(0f, 1f)
-                if (lv > 0.005f) {
-                    fillPaint.color = if (lv > 0.95f) red else if (lv > 0.7f) yellow else Color.rgb(60, 230, 120)
-                    val lvx = lv * xg
-                    canvas.drawRect(mx, f.bottom - f.height() * lvx, mx + mw, f.bottom, fillPaint)
-                }
+            val lv = chLevel(c).coerceIn(0f, 1f)
+            if (lv > 0.005f) {
+                fillPaint.color = if (lv > 0.95f) red else if (lv > 0.7f) yellow else Color.rgb(60, 230, 120)
+                canvas.drawRect(mx, f.bottom - f.height() * lv, mx + mw, f.bottom, fillPaint)
             }
-            // Fader-Kappe
-            if (has) {
-                val cw = min(f.width() * 0.7f, dp(28f))
-                val ch = dp(14f)
-                tmpRect.set(tx - cw / 2f, fy - ch / 2f, tx + cw / 2f, fy + ch / 2f)
-                fillPaint.color = blend(bg, fg, 0.85f)
-                canvas.drawRoundRect(tmpRect, dp(3f), dp(3f), fillPaint)
-                strokePaint.strokeWidth = dp(1.5f)
-                strokePaint.color = if (mixPtr.values.any { it.pad == p }) acc else alpha(bg, 0.7f)
-                canvas.drawRoundRect(tmpRect, dp(3f), dp(3f), strokePaint)
-                strokePaint.color = alpha(bg, 0.8f)
-                strokePaint.strokeWidth = dp(1.2f)
-                canvas.drawLine(tmpRect.left + dp(3f), fy, tmpRect.right - dp(3f), fy, strokePaint)
-            }
-            mixButton(canvas, mixZones[2], "S", Engine.solo[p], yellow, true, fg)
-            mixButton(canvas, mixZones[3], "M", muted, blue, has, fg)
+            val cw = min(f.width() * 0.7f, dp(30f))
+            val ch = dp(14f)
+            tmpRect.set(tx - cw / 2f, fy - ch / 2f, tx + cw / 2f, fy + ch / 2f)
+            fillPaint.color = blend(bg, fg, 0.85f)
+            canvas.drawRoundRect(tmpRect, dp(3f), dp(3f), fillPaint)
+            strokePaint.strokeWidth = dp(1.5f)
+            strokePaint.color = if (mixPtr.values.any { it.pad == k }) acc else alpha(bg, 0.7f)
+            canvas.drawRoundRect(tmpRect, dp(3f), dp(3f), strokePaint)
+            textPaint.textSize = min(dp(9f), st.width() * 0.17f)
+            textPaint.color = alpha(fg, 0.6f)
+            canvas.drawText(gainDb(g), st.centerX(), f.bottom + dp(9f), textPaint)
+            // großer AN/AUS-Knopf
+            val b = mixOnBtn[k]
+            fillPaint.color = if (on) col else alpha(fg, 0.07f)
+            canvas.drawRoundRect(b, dp(7f), dp(7f), fillPaint)
+            strokePaint.strokeWidth = dp(1.2f); strokePaint.color = alpha(if (on) col else fg, if (on) 1f else 0.4f)
+            canvas.drawRoundRect(b, dp(7f), dp(7f), strokePaint)
+            textPaint.textSize = min(dp(13f), b.height() * 0.42f)
+            textPaint.color = if (on) Color.BLACK else alpha(fg, 0.75f)
+            canvas.drawText(if (on) "AN" else "AUS", b.centerX(), b.centerY() + textPaint.textSize * 0.36f, textPaint)
         }
-        drawCrossfader(canvas, cols)
-    }
-
-    private fun drawCrossfader(canvas: Canvas, cols: IntArray) {
-        val bg = cols[0]
-        val fg = cols[1]
-        val acc = cols[2]
-        val act = Engine.xfActive()
-        fillPaint.shader = null
-        fillPaint.color = alpha(fg, 0.05f)
-        canvas.drawRoundRect(xfRect, dp(8f), dp(8f), fillPaint)
-        fun box(r: RectF, side: Int, pad: Int) {
-            val waiting = xfAssign == side
-            val blink = if (waiting) 0.5f + 0.5f * sin(time * 8f) else 0f
-            fillPaint.color = if (pad >= 0) alpha(padAccent(pad), 0.35f + 0.3f * blink) else alpha(fg, 0.08f + 0.25f * blink)
-            canvas.drawRoundRect(r, dp(7f), dp(7f), fillPaint)
-            strokePaint.strokeWidth = dp(if (waiting) 2f else 1.2f)
-            strokePaint.color = if (waiting) acc else alpha(fg, 0.5f)
-            canvas.drawRoundRect(r, dp(7f), dp(7f), strokePaint)
-            textPaint.textAlign = Paint.Align.CENTER
-            textPaint.textSize = min(dp(15f), r.height() * 0.36f)
-            textPaint.color = fg
-            canvas.drawText(if (side == 0) "A" else "B", r.centerX(), r.top + r.height() * 0.42f, textPaint)
-            textPaint.textSize = min(dp(10f), r.height() * 0.24f)
-            textPaint.color = alpha(fg, 0.8f)
-            val lab = if (waiting) "Pad wählen" else if (pad >= 0) "PAD ${pad + 1}" else "frei"
-            canvas.drawText(fitLabel(textPaint, lab, r.width() - dp(6f), textPaint.textSize, dp(6f)), r.centerX(), r.bottom - r.height() * 0.16f, textPaint)
-        }
-        box(xfBoxA, 0, Engine.xfA)
-        box(xfBoxB, 1, Engine.xfB)
-        // Schiene
-        val t = xfTrack
-        val cy = t.centerY()
-        fillPaint.color = alpha(fg, 0.14f)
-        tmpRect.set(t.left, cy - dp(3f), t.right, cy + dp(3f))
-        canvas.drawRoundRect(tmpRect, dp(3f), dp(3f), fillPaint)
-        for (k in 0..8) {
-            val x = t.left + t.width() * k / 8f
-            strokePaint.strokeWidth = dp(if (k == 4) 1.6f else 0.8f)
-            strokePaint.color = alpha(fg, if (k == 4) 0.5f else 0.22f)
-            canvas.drawLine(x, cy - dp(if (k == 4) 13f else 8f), x, cy + dp(if (k == 4) 13f else 8f), strokePaint)
-        }
-        // Griff
-        val kx = t.left + t.width() * Engine.xfPos
-        val kw = dp(26f)
-        val kh = min(t.height() - dp(6f), dp(38f))
-        tmpRect.set(kx - kw / 2f, cy - kh / 2f, kx + kw / 2f, cy + kh / 2f)
-        fillPaint.color = if (act) blend(bg, fg, 0.88f) else alpha(fg, 0.3f)
-        canvas.drawRoundRect(tmpRect, dp(4f), dp(4f), fillPaint)
-        strokePaint.strokeWidth = dp(1.6f)
-        strokePaint.color = if (mixPtr.values.any { it.pad == -2 }) acc else alpha(bg, 0.7f)
-        canvas.drawRoundRect(tmpRect, dp(4f), dp(4f), strokePaint)
-        strokePaint.color = alpha(bg, 0.85f)
-        canvas.drawLine(kx, tmpRect.top + dp(5f), kx, tmpRect.bottom - dp(5f), strokePaint)
-        if (!act) {
-            textPaint.textSize = dp(9f)
-            textPaint.color = alpha(fg, 0.7f)
-            canvas.drawText(fitLabel(textPaint, "CROSSFADER – A und B antippen, Pads zuordnen", t.width(), dp(9f), dp(6f)), t.centerX(), t.top + dp(9f), textPaint)
-        }
-        // Kurve
-        smallBtn(canvas, xfCurveBtn, Engine.XF_CURVES[Engine.xfCurve], false, cols)
     }
 
     // ---------------------------------------------------------------- Sequenzer
