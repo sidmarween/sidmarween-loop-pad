@@ -104,6 +104,22 @@ class MainActivity : Activity() {
                 .setItems(items.toTypedArray()) { _, w -> pads.songEd.setSection(bar, if (w < Engine.SECTION_NAMES.size) w else -1) }
                 .show()
         }
+        pads.songEd.onPickTracks = {
+            val ids = (0 until Engine.TRK_PADS).toList() + (0 until InstState.INSTS).map { Engine.TRK_INST + it } + (0 until Engine.ARR_X).map { Engine.TRK_X + it }
+            val names = ids.map { t ->
+                when {
+                    t < Engine.TRK_PADS -> "Pad ${t + 1}" + (Engine.padName(t)?.let { " · $it" } ?: if (Engine.hasLoop(t)) "" else " (leer)")
+                    t < Engine.TRK_X -> InstState.instNames[t - Engine.TRK_INST]
+                    else -> Engine.ARR_X_NAMES[t - Engine.TRK_X]
+                }
+            }.toTypedArray()
+            val ch = BooleanArray(ids.size) { ids[it] in pads.songEd.extraShown }
+            ui().setTitle("Spuren zusätzlich zeigen")
+                .setMultiChoiceItems(names, ch) { _, i, on -> ch[i] = on }
+                .setPositiveButton("Übernehmen") { _, _ -> pads.songEd.extraShown.clear(); for (i in ids.indices) if (ch[i]) pads.songEd.extraShown.add(ids[i]); pads.invalidate() }
+                .setNegativeButton("Abbrechen", null)
+                .show()
+        }
         pads.songEd.onPickAuto = {
             val ch = BooleanArray(Engine.AUTO_LANES) { pads.songEd.autoShown[it] || Engine.autoLaneUsed(it) }
             ui().setTitle("〰 Automations-Spuren im Song")

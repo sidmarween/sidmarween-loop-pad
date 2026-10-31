@@ -65,6 +65,22 @@ class ShotTest {
         dv.skinIdx = 15; shot(dv, h, w, "dj_${tag}_quer")
     }
 
-    @Test @Config(qualifiers = "w360dp-h800dp-xxhdpi") fun normal() { pads("n"); dj("n") }
+    private fun song(tag: String) {
+        val dm = ctx.resources.displayMetrics
+        val w = dm.widthPixels; val h = dm.heightPixels
+        Engine.setBpm(124f)
+        val pv = PadView(ctx)
+        Engine.arrClear(); Engine.songBars = 0
+        pv.openSongEditor()
+        shot(pv, w, h, "song_${tag}_leer")
+        InstState.drumApplyPreset(0); InstState.drumOn = true
+        InstState.acidRandom()
+        InstState.synRandom()
+        pv.songEd.scaffold()
+        shot(pv, w, h, "song_${tag}_geruest")
+        shot(pv, h, w, "song_${tag}_quer")
+    }
+
+    @Test @Config(qualifiers = "w360dp-h800dp-xxhdpi") fun normal() { pads("n"); dj("n"); song("n") }
     @Test @Config(qualifiers = "w320dp-h640dp-xhdpi") fun schmal() { pads("s"); dj("s") }
 }

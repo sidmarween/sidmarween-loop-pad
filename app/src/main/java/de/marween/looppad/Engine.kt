@@ -4725,6 +4725,8 @@ object Engine {
     const val ARR_X = 3
     val arrX = Array(ARR_X) { BooleanArray(ARR_MAX) }
     val ARR_X_NAMES = arrayOf("ATMOS", "EUKLID", "HARMONIZER")
+    /** Block-Grenzen im Song-Editor: hier beginnt ein neuer Block (auch wenn davor dasselbe liegt). Spuren 0 … TRK_AUTO−1. */
+    val arrBreak = Array(ARR_ROWS + ARR_X) { BooleanArray(ARR_MAX) }
     /** Abschnitte: ab diesem Takt beginnt Abschnitt k ([SECTION_NAMES]), -1 = keiner. */
     val arrSection = IntArray(ARR_MAX) { -1 }
     val SECTION_NAMES = arrayOf("INTRO", "HAUPTTEIL", "AUFBAU", "DROP", "BREAK", "BRIDGE", "ENDING")
@@ -5085,6 +5087,7 @@ object Engine {
         java.util.Arrays.fill(arrScene, -1)
         for (row in arrX) java.util.Arrays.fill(row, false)
         java.util.Arrays.fill(arrSection, -1)
+        for (row in arrBreak) java.util.Arrays.fill(row, false)
     }
 
     fun arrToJson(): org.json.JSONObject {
@@ -5100,6 +5103,7 @@ object Engine {
         j.put("launch", launchToJson())
         j.put("x", org.json.JSONArray().apply { for (row in arrX) put(String(CharArray(ARR_MAX) { if (row[it]) '1' else '0' })) })
         j.put("sections", org.json.JSONArray().apply { arrSection.forEach { put(it) } })
+        j.put("breaks", org.json.JSONArray().apply { for (row in arrBreak) put(String(CharArray(ARR_MAX) { if (row[it]) '1' else '0' })) })
         return j
     }
 
@@ -5122,6 +5126,7 @@ object Engine {
         launchFromJson(j.optJSONArray("launch"))
         j.optJSONArray("x")?.let { a -> for (k in 0 until min(ARR_X, a.length())) { val str = a.optString(k); for (b in 0 until min(ARR_MAX, str.length)) arrX[k][b] = str[b] == '1' } }
         j.optJSONArray("sections")?.let { a -> for (b in 0 until min(ARR_MAX, a.length())) arrSection[b] = a.optInt(b, -1) }
+        j.optJSONArray("breaks")?.let { a -> for (k in 0 until min(arrBreak.size, a.length())) { val str = a.optString(k); for (b in 0 until min(ARR_MAX, str.length)) arrBreak[k][b] = str[b] == '1' } }
         val pa = j.optJSONArray("pats")
         if (pa != null) {
             for (i in 0 until min(InstState.INSTS, pa.length())) {
