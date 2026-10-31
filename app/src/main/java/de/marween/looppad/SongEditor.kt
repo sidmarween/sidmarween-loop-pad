@@ -1269,8 +1269,8 @@ class SongEditor(private val host: View) {
             0 -> close()
             1 -> doUndo()
             2 -> doRedo()
-            3 -> { cursorBar = 0; Engine.playFromBar = 0; firstBar = 0f; if (Engine.seqPlaying) { Engine.transportStop(); Engine.songMode = true; Engine.transportPlay(false) } }
-            4 -> if (Engine.seqPlaying) Engine.transportStop() else { Engine.songMode = true; Engine.playFromBar = cursorBar; follow = true; Engine.transportPlay(false) }
+            3 -> { cursorBar = 0; Engine.playFromBar = 0; firstBar = 0f; if (Engine.seqPlaying) { Engine.transportStop(); Engine.songPlay(0) } }
+            4 -> if (Engine.seqPlaying) Engine.transportStop() else { follow = true; Engine.songPlay(cursorBar) }
             5 -> if (Engine.songRec) { Engine.transportStop(); hint("Aufnahme beendet – Song: ${Engine.songBars} Takte") } else {
                 snap()
                 follow = true
@@ -1475,7 +1475,6 @@ class SongEditor(private val host: View) {
             b += len
         }
         Engine.songBars = b
-        Engine.songMode = true
         cursorBar = 0; Engine.playFromBar = 0; firstBar = 0f
         clearSel()
         hint("✦ Gerüst: Intro → Hauptteil → Break (mit Filter-Aufbau) → Drop → Ending (Fade-out) · alles verschiebbar, ↶ macht es rückgängig")

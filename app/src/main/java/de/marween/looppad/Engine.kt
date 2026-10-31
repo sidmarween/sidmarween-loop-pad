@@ -3910,7 +3910,9 @@ object Engine {
     }
 
     fun transportStop() {
+        if (songAuto && !songRec) { songAuto = false; songMode = false }
         if (songRec) {
+            songAuto = false; songMode = false
             // laufender Takt zählt mit (auch wenn er nicht zu Ende gespielt wurde)
             if (seqPlaying) { arrCaptureBar(arrBar, 12); recLastBar = max(recLastBar, arrBar) }
             songRecStop()
@@ -4778,9 +4780,25 @@ object Engine {
     private fun xOn(k: Int): Boolean = when (k) { 0 -> Atmos.on; 1 -> Euclid.on; else -> Harmonizer.on }
     private fun setXOn(k: Int, v: Boolean) { when (k) { 0 -> Atmos.on = v; 1 -> Euclid.on = v; else -> Harmonizer.on = v } }
 
+    /**
+     * Song abspielen (aus Baukasten/Editor): Song-Modus nur für diese Wiedergabe – nach ■ sind Pads und Instrumente
+     * wieder frei (sonst schaltet das Arrangement z. B. die 909 jeden Takt wieder aus).
+     */
+    @Volatile var songAuto = false
+        private set
+
+    fun songPlay(from: Int) {
+        if (seqPlaying) transportStop()
+        songMode = true
+        songAuto = true
+        playFromBar = from.coerceIn(0, max(0, songBars - 1))
+        transportPlay(false)
+    }
+
     /** Song-Aufnahme starten: ab Takt [from], Song-Modus an, Transport von vorn. */
     fun songRecStart(from: Int) {
         if (seqPlaying) transportStop()
+        songAuto = true
         songMode = true
         playFromBar = from.coerceIn(0, ARR_MAX - 1)
         recLastBar = playFromBar - 1
@@ -5157,7 +5175,8 @@ object Engine {
         songMode = false
         songBars = 16
         if (j == null) return
-        songMode = j.optBoolean("mode", false)
+        // Song-Modus startet nie von selbst (sonst steuert das Arrangement Pads/Instrumente, ohne dass man es merkt)
+        songMode = false
         songBars = j.optInt("bars", 16).coerceIn(1, ARR_MAX)
         j.optJSONArray("rows")?.let { a ->
             for (r in 0 until min(ARR_ROWS, a.length())) {

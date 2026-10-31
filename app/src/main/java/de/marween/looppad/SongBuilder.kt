@@ -368,7 +368,7 @@ class SongBuilder(private val host: View, private val ed: SongEditor) {
             H_PLUS -> if (p != null) { if (Engine.songBars < Engine.ARR_MAX) ed.partLonger(p.b0, p.b1) else onHint?.invoke("Maximal 64 Takte") }
             H_PLAY -> if (p != null) {
                 if (Engine.seqPlaying) Engine.transportStop()
-                Engine.songMode = true; Engine.playFromBar = p.b0; Engine.transportPlay(false)
+                Engine.songPlay(p.b0)
             }
             H_TRACK -> if (p != null) {
                 val t = h.arg
@@ -376,7 +376,6 @@ class SongBuilder(private val host: View, private val ed: SongEditor) {
                 ed.snapshot()
                 val on = cover(t, p) >= 0.999f
                 setTrack(t, p, if (on) 0 else if (isInst(t)) patOf(t, p) else 1)
-                Engine.songMode = true
                 if (!on && isInst(t) && !InstState.patHasNotes(t - Engine.TRK_INST, patOf(t, p) - 1)) onHint?.invoke("${trackLabel(t)}: Pattern ${InstState.patLetter(patOf(t, p) - 1)} ist noch leer – lange drücken öffnet die Noten")
             }
             H_PAT -> if (p != null) {
@@ -410,7 +409,7 @@ class SongBuilder(private val host: View, private val ed: SongEditor) {
             0 -> close()
             1 -> if (Engine.seqPlaying) Engine.transportStop() else {
                 if (Engine.songBars <= 0) { onHint?.invoke("Erst Teile anlegen"); return }
-                Engine.songMode = true; Engine.playFromBar = 0; Engine.transportPlay(false)
+                Engine.songPlay(0)
             }
             2 -> if (Engine.songRec) { Engine.transportStop(); ensureParts(); onHint?.invoke("Aufnahme fertig – in Teile à 8 Takte gegliedert, jetzt anpassen") } else {
                 ed.snapshot()
@@ -442,7 +441,6 @@ class SongBuilder(private val host: View, private val ed: SongEditor) {
                 if (v > 0) { for (b in at until at + len) Engine.trkSet(t, b, v); ed.setBreak(t, at) }
             }
         }
-        Engine.songMode = true
         onHint?.invoke("Neuer Teil (${Engine.SECTION_NAMES[kind]}, 8 Takte) – Name antippen ändert die Art, Schalter wählen die Spuren")
         scroll = Float.MAX_VALUE
     }
