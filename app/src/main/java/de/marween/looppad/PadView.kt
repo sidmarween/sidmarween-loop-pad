@@ -9289,7 +9289,7 @@ class PadView(context: Context) : View(context) {
         se.onOpenInst = { inst, pat -> InstState.selectPat(inst, pat); openInstFromSong(inst) }
     }
     fun openSongEditor() { closeFocus(); songEd.open(); invalidate() }
-    val songBuilder = SongBuilder(this, songEd).also { sb ->
+    val songBuilder: SongBuilder = SongBuilder(this, songEd).also { sb ->
         sb.onHint = { m -> hint(m) }
         sb.onOpenInst = { inst, pat -> InstState.selectPat(inst, pat); openInstFromSong(inst) }
         sb.onProfi = { songEd.onClose = { songEd.onClose = null; songBuilder.open(); invalidate() }; songEd.open() }
