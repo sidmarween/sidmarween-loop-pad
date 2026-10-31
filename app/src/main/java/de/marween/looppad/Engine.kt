@@ -2523,6 +2523,8 @@ object Engine {
                 // Sequenzer-Raster wird zum Master-Tempo, Instrumente laufen ohne Sprung weiter
                 masterStart = seqOrigin
                 masterLen = take.gridBar
+                // EUKLID lief ohne ▶: Transport im selben Raster starten, damit der Loop sofort mitläuft
+                if (!seqPlaying) startTransportAt(seqOrigin)
             } else {
                 masterStart = loop.start
                 masterLen = len.toLong()
@@ -2598,7 +2600,8 @@ object Engine {
             }
             val rawTo = max(take.fromIn, inClock.frameAt(upNanos, sampleRate))
             // laufen nur Instrumente/Sequenzer (noch kein Master-Loop), gilt deren Raster – sonst springen sie
-            val m = if (masterLen > 0L) masterLen else if (seqPlaying && !take.oneShot && !take.overdub) seqBar().also { take.gridBar = it } else 0L
+            // ohne Master-Tempo: läuft der Sequenzer oder EUKLID (der auch ohne ▶ im Raster spielt), gilt dessen Takt
+            val m = if (masterLen > 0L) masterLen else if ((seqPlaying || (Euclid.on && take.src >= 1)) && !take.oneShot && !take.overdub) seqBar().also { take.gridBar = it } else 0L
             val sh = micShift()
             if (take.overdub) {
                 take.toIn = rawTo + max(0L, sh)
@@ -3492,6 +3495,7 @@ object Engine {
                 // Sequenzer-Raster wird zum Master-Tempo (ein Takt), der Groove läuft ohne Sprung weiter
                 masterStart = seqOrigin
                 masterLen = take.gridBar
+                if (!seqPlaying) startTransportAt(seqOrigin)
             } else {
                 masterStart = loop.start
                 masterLen = len.toLong()
