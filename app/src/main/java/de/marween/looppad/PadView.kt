@@ -8560,7 +8560,7 @@ class PadView(context: Context) : View(context) {
         return true
     }
 
-    private fun instMaskShort(m: Int): String = listOf("303", "909", "SYN").filterIndexed { k, _ -> (m shr k) and 1 != 0 }.joinToString("+").ifEmpty { "INST" }
+    private fun instMaskShort(m: Int): String = listOf("303", "909", "SYN", "EUK", "ATM", "HAR").filterIndexed { k, _ -> (m shr k) and 1 != 0 }.joinToString("+").ifEmpty { "INST" }
 
     private fun srcName(i: Int) = when (Engine.padSource[i]) {
         3 -> "🎹 Instrumente " + instMaskShort(Engine.padInstMask[i])

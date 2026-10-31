@@ -2700,7 +2700,7 @@ object Engine {
                 }
                 if (sb >= 0) {
                     if (padSource[sb] == 2) cm = padSrcMask[sb] and (1 shl sb).inv()
-                    if (padSource[sb] == 3) cim = padInstMask[sb] and 7
+                    if (padSource[sb] == 3) cim = padInstMask[sb] and 63
                 }
             }
             captureMask = cm
@@ -2979,19 +2979,35 @@ object Engine {
             }
             // ATMOS: Mitschnitt (für „Schnipsel einfangen“) und Klangteppich dazu
             Atmos.feed(mL, mR, block, sampleRate)
+            // Zusatz-Instrumente getrennt rendern: in den Master (mit Lautstärke) und – wenn ein Pad sie aufnimmt – in den Pad-Mitschnitt
+            if (xL.size < block) { xL = FloatArray(block); xR = FloatArray(block) }
+            val ciX = captureInst
+            fun mixX(bit: Int) {
+                for (i in 0 until block) { mL[i] += xL[i] * vol; mR[i] += xR[i] * vol }
+                if ((ciX shr bit) and 1 != 0) addPadRing(xL, xR, w, block)
+                addOutRing(xL, xR, w, block)
+            }
             if (Atmos.active()) {
+                java.util.Arrays.fill(xL, 0, block, 0f); java.util.Arrays.fill(xR, 0, block, 0f)
                 val ml = masterLen
                 val bar0 = if (ml > 0L) (w - masterStart).toDouble() / ml else -1.0
-                Atmos.render(mL, mR, block, sampleRate, bar0, if (ml > 0L) 1.0 / ml else 0.0, vol)
+                Atmos.render(xL, xR, block, sampleRate, bar0, if (ml > 0L) 1.0 / ml else 0.0, 1f)
+                mixX(4)
             }
             // EUKLID: generative Polyrhythmen im Master-Raster
             Euclid.tick()
             // gleiches Raster wie Sequenzer/909/303 (auch ohne Master-Tempo)
-            if (Euclid.active()) Euclid.render(mL, mR, block, sampleRate, w, seqStart(), seqBar(), vol, swingOffset(seqBar()))
+            if (Euclid.active()) {
+                java.util.Arrays.fill(xL, 0, block, 0f); java.util.Arrays.fill(xR, 0, block, 0f)
+                Euclid.render(xL, xR, block, sampleRate, w, seqStart(), seqBar(), 1f, swingOffset(seqBar()))
+                mixX(3)
+            }
             // Vocal-Harmonizer (Deck-Gesang oder Mikrofon)
             if (Harmonizer.on || Harmonizer.meter > 0f || Harmonizer.source != 3) {
+                java.util.Arrays.fill(xL, 0, block, 0f); java.util.Arrays.fill(xR, 0, block, 0f)
                 val mic = if (Harmonizer.on && Harmonizer.source == 3) micLatest(block) else null
-                Harmonizer.render(mL, mR, block, sampleRate, mic, vol)
+                Harmonizer.render(xL, xR, block, sampleRate, mic, 1f)
+                mixX(5)
             }
             MasterBus.process(mL, mR, block, sampleRate)
             // Schutz-Limiter: Spitzen (z. B. zwei Decks gleichzeitig) sanft absenken statt hart zu clippen
@@ -3269,12 +3285,37 @@ object Engine {
     /** Pads, die gerade als Eingang mitgeschnitten werden (Vereinigung aller laufenden Pad-Aufnahmen). */
     @Volatile private var captureMask = 0
     @Volatile private var captureInst = 0
-    /** Bei Eingang 3: welche Instrumente (Bit 0 ACID 303, Bit 1 DRUM 909, Bit 2 SYNTH). */
-    val padInstMask = IntArray(PADS) { 7 }
-    val INST_NAMES = arrayOf("ACID 303", "DRUM 909", "SYNTH")
+    /** Bei Eingang 3: welche Instrumente (Bit 0 ACID 303, Bit 1 DRUM 909, Bit 2 SYNTH, 3 EUKLID, 4 ATMOS, 5 HARMONIZER). */
+    val padInstMask = IntArray(PADS) { 63 }
+    val INST_NAMES = arrayOf("ACID 303", "DRUM 909", "SYNTH", "EUKLID", "ATMOS", "HARMONIZER")
     private var padRing = FloatArray(0)
 
     fun maskPads(m: Int): List<Int> = (0 until PADS).filter { (m shr it) and 1 != 0 }
+
+    /** Nachträglich in den Pad-Mitschnitt mischen (Instrumente, die erst in der Master-Stufe entstehen). */
+    private fun addPadRing(l: FloatArray, r: FloatArray, w: Long, block: Int) {
+        val size = padRing.size
+        if (size == 0) return
+        var idx = (w % size).toInt()
+        for (i in 0 until block) {
+            padRing[idx] += (l[i] + r[i]) * 0.5f
+            idx++
+            if (idx == size) idx = 0
+        }
+    }
+    /** Zusatz-Instrumente auch in den Wave-Mitschnitt (Eingang „Wave“/Resampling). */
+    private fun addOutRing(l: FloatArray, r: FloatArray, w: Long, block: Int) {
+        val size = outRing.size
+        if (size == 0) return
+        var idx = (w % size).toInt()
+        for (i in 0 until block) {
+            outRing[idx] += (l[i] + r[i]) * 0.5f
+            idx++
+            if (idx == size) idx = 0
+        }
+    }
+    private var xL = FloatArray(0)
+    private var xR = FloatArray(0)
 
     private fun writePadRing(buf: FloatArray, w: Long, block: Int) {
         val size = padRing.size
@@ -3324,7 +3365,7 @@ object Engine {
             t.mask = padSrcMask[p] and (1 shl p).inv()
             if (t.mask == 0) t.src = 1
         } else if (t.src == 3) {
-            t.mask = padInstMask[p] and 7
+            t.mask = padInstMask[p] and 63
             if (t.mask == 0) t.src = 1
         }
         t.live = liveBars != 0
@@ -3484,10 +3525,13 @@ object Engine {
             // Instrument-Eingang: aufgenommene Instrumente ausschalten (sonst doppelt)
             if (bounce && (take.src == 3 || take.src == 1) && !take.oneShot) {
                 val off = ArrayList<String>()
-                val im = if (take.src == 1) 7 else take.mask
+                val im = if (take.src == 1) 63 else take.mask
                 if ((im and 1) != 0 && InstState.acidOn) { InstState.acidOn = false; off.add("303") }
                 if ((im and 2) != 0 && InstState.drumOn) { InstState.drumOn = false; off.add("909") }
                 if ((im and 4) != 0 && InstState.synOn) { InstState.synOn = false; off.add("SYNTH") }
+                if ((im and 8) != 0 && Euclid.on) { Euclid.on = false; off.add("EUKLID") }
+                if ((im and 16) != 0 && Atmos.on) { Atmos.on = false; off.add("ATMOS") }
+                if ((im and 32) != 0 && Harmonizer.on) { Harmonizer.on = false; off.add("HARMONIZER") }
                 if (off.isNotEmpty()) onBouncedInst?.invoke(p, off.joinToString(", "))
             }
             onRecorded?.invoke(p, data.copyOf(), sampleRate)
