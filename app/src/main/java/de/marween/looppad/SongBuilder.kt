@@ -127,8 +127,9 @@ class SongBuilder(private val host: View, private val ed: SongEditor) {
     private fun laneEnds(l: Int, p: Part): Pair<Float, Float>? {
         val a = Engine.auto[l]
         val i0 = p.b0 * Engine.AUTO_RES; val i1 = (p.b1 + 1) * Engine.AUTO_RES - 1
-        val f = a[i0]; val e = a[i1]
-        return if (f.isNaN() || e.isNaN()) null else f to e
+        var f = Float.NaN; var e = Float.NaN
+        for (i in i0..i1) { val v = a[i]; if (!v.isNaN()) { if (f.isNaN()) f = v; e = v } }
+        return if (f.isNaN()) null else f to e
     }
     private fun fxOf(p: Part): Int {
         laneEnds(11, p)?.let { (f, e) -> if (e < f - 0.3f) return 3; if (f < e - 0.3f) return 2 }
