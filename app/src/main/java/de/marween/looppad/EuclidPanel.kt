@@ -28,7 +28,9 @@ class EuclidPanel(private val host: View) {
     private val box = RectF()
     private val bClose = RectF(); private val bOn = RectF(); private val bPoly = RectF(); private val bNew = RectF()
     private val bPreset = RectF(); private val bKit = RectF()
-    private val bRec = RectF(); private val bRecBars = RectF()
+    private val bRec = RectF(); private val bRecBars = RectF(); private val bSmp = RectF()
+    /** Eigene Samples je Spur wählen (MainActivity). */
+    var onSamples: (() -> Unit)? = null
     private var recBars = 2
     private var recPad = -1
     private val rings = Array(4) { RectF() }
@@ -57,8 +59,9 @@ class EuclidPanel(private val host: View) {
         val sTop = box.bottom - pad - 4 * sh - 3 * dp(6f)
         for (i in 0 until 4) sliders[i].set(box.left + pad, sTop + i * (sh + dp(6f)), box.right - pad, sTop + i * (sh + dp(6f)) + sh)
         val r3 = r2 + bh + dp(6f)
-        bRec.set(box.left + pad, r3, box.left + pad + w2 * 0.72f, r3 + bh)
-        bRecBars.set(bRec.right + dp(6f), r3, box.right - pad, r3 + bh)
+        bRec.set(box.left + pad, r3, box.left + pad + w2 * 0.5f, r3 + bh)
+        bRecBars.set(bRec.right + dp(6f), r3, bRec.right + dp(6f) + w2 * 0.18f, r3 + bh)
+        bSmp.set(bRecBars.right + dp(6f), r3, box.right - pad, r3 + bh)
         val top = r3 + bh + dp(8f)
         val h = sTop - dp(10f) - top
         val cell = min((box.width() - 2 * pad) / 2, h / 2)
@@ -106,6 +109,8 @@ class EuclidPanel(private val host: View) {
         if (recPad >= 0 && !armed && Engine.hasLoop(recPad)) recPad = -1
         btn(c, bRec, if (armed) (if (Engine.isArmed(recPad)) "⏺ wartet auf die Eins … (Pad ${recPad + 1})" else "⏺ nimmt auf in Pad ${recPad + 1} …") else "⏺ ALS LOOP AUFNEHMEN (nur EUKLID)", armed, Color.rgb(255, 90, 90))
         btn(c, bRecBars, "$recBars TAKT" + if (recBars > 1) "E" else "", false, Color.rgb(255, 90, 90))
+        val nS = (0..3).count { UserSamples.has("euk:$it") }
+        btn(c, bSmp, if (nS > 0) "📂 SAMPLES ($nS)" else "📂 EIGENE SAMPLES", nS > 0, COLS[3])
         btn(c, bPreset, "◀  " + (if (Euclid.presetIdx >= 0) Euclid.PRESETS[Euclid.presetIdx].name else "VORLAGE WÄHLEN") + "  ▶", Euclid.presetIdx >= 0, COLS[3])
         btn(c, bKit, "KLANG: " + Euclid.KITS[Euclid.kit].name, false, COLS[0])
         for (l in 0 until 4) drawRing(c, l)
@@ -191,6 +196,7 @@ class EuclidPanel(private val host: View) {
                         onHint?.invoke(if (Euclid.poly) "RIM und PLUCK verteilen ihre Schritte über den ganzen Takt (z. B. 5 gegen 4)" else "Alle Spuren im 1/16-Raster – Spuren mit anderer Länge verschieben sich gegen den Takt")
                     }
                     bNew.contains(x, y) -> { Euclid.regenerate(); haptic() }
+                    bSmp.contains(x, y) -> { haptic(); onSamples?.invoke() }
                     bRecBars.contains(x, y) -> { recBars = when (recBars) { 1 -> 2; 2 -> 4; 4 -> 8; else -> 1 }; haptic() }
                     bRec.contains(x, y) -> {
                         haptic()

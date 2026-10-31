@@ -98,6 +98,8 @@ class MainActivity : Activity() {
         }
         pads.onTempo = { showTempo() }
         pads.onInstMore = { showMoreInstruments() }
+        UserSamples.load(this)
+        pads.euclid.onSamples = { showVoiceSamples(true) }
         pads.songBuilder.onPickSection = { bar -> pads.songEd.onPickSection?.invoke(bar) }
         pads.songEd.onPickSection = { bar ->
             val items = Engine.SECTION_NAMES.map { "▣ $it" } + listOf("✕ Abschnitts-Marke entfernen")
@@ -279,6 +281,7 @@ class MainActivity : Activity() {
         Engine.monitorMaster = prefs.getBoolean("monMaster", false)
         // DJ-Controller
         dj = DjView(this)
+        dj.euclid.onSamples = { showVoiceSamples(true) }
         dj.skinIdx = prefs.getInt("djSkin", 15)
         Dj.autoGain = prefs.getBoolean("djAutoGain", true)
         TouchVelocity.mode = prefs.getInt("velMode", 0)
@@ -2017,13 +2020,56 @@ class MainActivity : Activity() {
     }
 
     /** Klang-Kits für den Drumcomputer (Pattern bleibt). */
+    // ================================================================ Eigene Samples für 909-Stimmen und EUKLID-Spuren
+
+    private var voiceKey = ""
+
+    /** [euk] = EUKLID-Spuren, sonst die 11 Stimmen der 909. */
+    private fun showVoiceSamples(euk: Boolean) {
+        val keys = if (euk) (0..3).map { "euk:$it" } else (0 until InstState.DV).map { "drum:$it" }
+        val names = if (euk) Euclid.NAMES.toList() else InstState.drumNames.toList()
+        val labels = keys.mapIndexed { i, k -> names[i] + " – " + (UserSamples.name(k)?.let { "📂 $it" } ?: if (euk) "eingebauter Klang" else "909-Klang") }
+        ui().setTitle(if (euk) "⬡ EUKLID · eigene Samples je Spur" else "🥁 909 · eigene Samples je Stimme")
+            .setItems(labels.toTypedArray()) { _, i -> voiceSampleMenu(keys[i], names[i], euk) }
+            .setNegativeButton("Fertig", null).show()
+    }
+
+    private fun voiceSampleMenu(key: String, name: String, euk: Boolean) {
+        val pads = (0 until PadView.VISIBLE_PADS).filter { Engine.hasLoop(it) }
+        val items = ArrayList<String>()
+        items.add("📂 WAV/MP3 laden …")
+        for (p in pads) items.add("🎚 von Pad ${p + 1} übernehmen" + (Engine.padName(p)?.let { " · $it" } ?: ""))
+        if (UserSamples.has(key)) items.add("✕ Sample entfernen (" + (if (euk) "eingebauter Klang" else "909-Klang") + ")")
+        ui().setTitle("$name · Sample")
+            .setItems(items.toTypedArray()) { _, w ->
+                when {
+                    w == 0 -> {
+                        voiceKey = key
+                        val i = Intent(Intent.ACTION_OPEN_DOCUMENT).apply { addCategory(Intent.CATEGORY_OPENABLE); type = "audio/*" }
+                        try { startActivityForResult(i, REQ_VOICE_SAMPLE) } catch (e: Exception) { toast("Kein Dateimanager gefunden") }
+                    }
+                    w <= pads.size -> {
+                        val p = pads[w - 1]
+                        val d = Engine.loopData(p) ?: return@setItems
+                        UserSamples.set(this, key, d, Engine.sampleRate, Engine.padName(p) ?: "Pad ${p + 1}")
+                        hint("$name spielt jetzt das Sample von Pad ${p + 1}")
+                        showVoiceSamples(euk)
+                    }
+                    else -> { UserSamples.remove(this, key); hint("$name: wieder der eingebaute Klang"); showVoiceSamples(euk) }
+                }
+            }.setNegativeButton("Zurück") { _, _ -> showVoiceSamples(euk) }.show()
+    }
+
     private fun showSoundKits() {
         val kits = InstPresets.KITS
         val labels = kits.map { "${it.genre} · ${it.name}" + (if (it.voices.isEmpty()) "" else "  (" + it.voices.values.map { v -> v.model }.distinct().take(4).joinToString(", ") + ")") }
+        val all = listOf("📂 EIGENE SAMPLES je Stimme (WAV/MP3 oder von einem Pad) …") + labels
         ui().setTitle("🎛 Klang-Kits – Pattern bleibt")
-            .setItems(labels.toTypedArray()) { _, i ->
+            .setItems(all.toTypedArray()) { _, i0 ->
+                if (i0 == 0) { showVoiceSamples(false); return@setItems }
+                val i = i0 - 1
                 InstPresets.applyKit(kits[i])
-                hint("Kit: ${kits[i].name} – einzelne Klänge änderst du im Editor (KLANG: …)")
+                hint("Kit: ${kits[i].name} – einzelne Klänge änderst du im Editor (KLANG: …)" + if ((0 until InstState.DV).any { UserSamples.has("drum:$it") }) " · eigene Samples bleiben vorrangig" else "")
             }.setNegativeButton("Abbrechen", null).show()
     }
 
@@ -6513,6 +6559,22 @@ class MainActivity : Activity() {
             if (uris.isNotEmpty()) importLibraryUris(uris)
             return
         }
+        if (requestCode == REQ_VOICE_SAMPLE) {
+            val u = data?.data
+            if (resultCode != RESULT_OK || u == null) return
+            val key = voiceKey
+            val name = (displayName(u) ?: "Sample").substringBeforeLast('.')
+            Thread {
+                try {
+                    val x = AudioFiles.decode(this, u, Engine.sampleRate, 8)
+                    UserSamples.set(this, key, x, Engine.sampleRate, name)
+                    runOnUiThread { hint("📂 $name geladen"); showVoiceSamples(key.startsWith("euk")) }
+                } catch (e: Throwable) {
+                    runOnUiThread { toast("Sample konnte nicht geladen werden: ${e.message ?: e}") }
+                }
+            }.start()
+            return
+        }
         if (requestCode == REQ_ATMOS_FILE) {
             val u = data?.data
             if (resultCode != RESULT_OK || u == null) return
@@ -6958,6 +7020,7 @@ class MainActivity : Activity() {
         private const val REQ_BACKUP = 28
         private const val REQ_RESTORE = 29
         private const val REQ_ATMOS_FILE = 47
+        private const val REQ_VOICE_SAMPLE = 48
         /** Ziel eines Cloud-Imports: Pad 0..n, die Sammlung oder ein Deck (CLOUD_DECK + 0/1). */
         private const val CLOUD_COLLECTION = -1
         private const val CLOUD_DECK = 1000

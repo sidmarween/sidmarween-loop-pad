@@ -1271,7 +1271,20 @@ class DrumMachine(private val sr: Int) {
                     var s: Double
                     var env: Double
                     val model = st.drumModel[v]
-                    if (model > 0) {
+                    val smp = UserSamples.drum(v)
+                    if (smp != null) {
+                        // eigenes Sample: TUNE = Tonhöhe (±1 Oktave), DECAY = Länge (kurz abgeschnitten … ganz)
+                        val pos = vc.p1
+                        vc.p1 += 2.0.pow((tune - 0.5) * 2.0)
+                        val i0 = pos.toInt()
+                        if (i0 + 1 >= smp.size) { s = 0.0; env = 0.0 }
+                        else {
+                            val fr = pos - i0
+                            s = (smp[i0] + (smp[i0 + 1] - smp[i0]) * fr).toDouble()
+                            val maxT = 0.04 + dec * dec * 4.0
+                            env = if (t < maxT) 1.0 else exp(-(t - maxT) / 0.025)
+                        }
+                    } else if (model > 0) {
                         altVoice(vc, v, model, t, tune, dec)
                         s = altS; env = altEnv
                     } else {

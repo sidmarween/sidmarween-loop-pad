@@ -192,8 +192,25 @@ object Euclid {
         return 21
     }
 
+    // eigene Samples je Spur (UserSamples "euk:l")
+    private class SV(var on: Boolean = false, var pos: Double = 0.0, var rate: Double = 1.0, var amp: Float = 0f, var lane: Int = 0, var data: FloatArray? = null)
+    private val sv = Array(12) { SV() }
+    private val SV_PAN = floatArrayOf(0.4f, 0.6f, 0.7f, 0.5f)
+
     private fun trigger(l: Int, a: Float, alt: Boolean) {
         laneFlash[l] = 1f
+        val smp = UserSamples.euk(l)
+        if (smp != null) {
+            val v = sv.firstOrNull { !it.on } ?: sv.minByOrNull { it.amp }!!
+            // Pluck-Spur: Sample folgt den Tönen (als C4 aufgenommen gedacht), sonst Originaltonhöhe
+            v.rate = if (l == 3) {
+                val note = scaleNote(curKey, pluckDeg + (if (alt) 2 else 0) + (if (rnd.nextFloat() < morph * 0.5f) rnd.nextInt(3) - 1 else 0))
+                pluckDeg = pluckDeg.coerceIn(-4, 9)
+                2.0.pow((note - 60) / 12.0)
+            } else if (l == 0 && alt) 1.12 else 1.0
+            v.pos = 0.0; v.amp = a * (if (alt) 1f else 0.85f); v.lane = l; v.data = smp; v.on = true
+            return
+        }
         when (l) {
             0 -> {
                 val h = perc.firstOrNull { !it.on } ?: perc[0]
@@ -251,7 +268,7 @@ object Euclid {
         Engine.ghostLock(bpm, w - (inBar * outBeat).toLong())
     }
 
-    fun active(): Boolean = on || perc.any { it.on } || strs.any { it.on }
+    fun active(): Boolean = on || perc.any { it.on } || strs.any { it.on } || sv.any { it.on }
 
     /** In den Master mischen. [ms]/[ml] = Master-Start und -Taktlänge (Ausgabe-Proben), [w] = Ausgabe-Frame des Blocks. */
     private val pendT = IntArray(4)
@@ -297,6 +314,18 @@ object Euclid {
             }
             for (q in 0..3) if (pendT[q] > 0) { pendT[q]--; if (pendT[q] == 0) trigger(q, pendA[q], pendAlt[q]) }
             var l = 0f; var r = 0f
+            for (v in sv) {
+                if (!v.on) continue
+                val d = v.data
+                if (d == null) { v.on = false; continue }
+                val i0 = v.pos.toInt()
+                if (i0 + 1 >= d.size) { v.on = false; continue }
+                val fr = (v.pos - i0).toFloat()
+                val x = (d[i0] + (d[i0 + 1] - d[i0]) * fr) * v.amp * 0.6f
+                v.pos += v.rate
+                val pan = SV_PAN[v.lane]
+                l += x * (1f - pan); r += x * pan
+            }
             val kt = KITS[kit.coerceIn(0, KITS.size - 1)]
             // Perc: Conga / Metall / Marimba / Holzblock / tiefe Tom
             for (h in perc) {
