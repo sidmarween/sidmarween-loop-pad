@@ -63,7 +63,7 @@ class SongBuilder(private val host: View, private val ed: SongEditor) {
         while (b < n) {
             var e = b + 1
             while (e < n && Engine.arrSection[e] < 0) e++
-            out.add(Part(b, e - 1, Engine.arrSection[b].coerceAtLeast(1)))
+            out.add(Part(b, e - 1, Engine.arrSection[b].let { if (it < 0) 1 else it }))
             b = e
         }
         return out
@@ -270,16 +270,16 @@ class SongBuilder(private val host: View, private val ed: SongEditor) {
         // Kopf: Nummer · Name (antippen) · Länge − + · ▶
         bold.textSize = dp(11f); bold.color = DIM
         c.drawText("${pi + 1}", r.left + inner + dp(2f), r.top + dp(30f), bold)
-        val nameR = RectF(r.left + inner + dp(16f), r.top + dp(8f), r.left + inner + dp(16f) + w * 0.36f, r.top + dp(44f))
+        val bw = dp(40f)
+        val play = RectF(r.right - inner - bw, r.top + dp(8f), r.right - inner, r.top + dp(44f))
+        val plus = RectF(play.left - dp(8f) - bw, play.top, play.left - dp(8f), play.bottom)
+        val lenR = RectF(plus.left - dp(70f), play.top, plus.left - dp(2f), play.bottom)
+        val minus = RectF(lenR.left - dp(2f) - bw, play.top, lenR.left - dp(2f), play.bottom)
+        val nameR = RectF(r.left + inner + dp(16f), r.top + dp(8f), minus.left - dp(8f), r.top + dp(44f))
         rr(c, nameR, dp(10f), Color.argb(200, Color.red(col), Color.green(col), Color.blue(col)))
         bold.textSize = dp(14f); bold.color = Color.BLACK
         c.drawText(fitLabel(bold, Engine.SECTION_NAMES[p.kind] + " ▾", nameR.width() - dp(12f), dp(14f), dp(8f)), nameR.left + dp(8f), nameR.centerY() + dp(5f), bold)
         hits.add(Hit(nameR, H_NAME, pi, 0))
-        val bw = dp(40f)
-        val play = RectF(r.right - inner - bw, r.top + dp(8f), r.right - inner, r.top + dp(44f))
-        val plus = RectF(play.left - dp(8f) - bw, play.top, play.left - dp(8f), play.bottom)
-        val lenR = RectF(plus.left - dp(74f), play.top, plus.left - dp(4f), play.bottom)
-        val minus = RectF(lenR.left - dp(4f) - bw, play.top, lenR.left - dp(4f), play.bottom)
         btn(c, minus, "−", false, BLUE, 18f); hits.add(Hit(minus, H_MINUS, pi, 0))
         text.color = INK; text.textSize = dp(13f)
         c.drawText("${p.b1 - p.b0 + 1} Takte", lenR.centerX(), lenR.centerY() + dp(5f), text)
@@ -316,10 +316,10 @@ class SongBuilder(private val host: View, private val ed: SongEditor) {
         cy += rowsN * (chipH + dp(6f)) + dp(4f)
         // Fuß: Effekt · ↑ ↓ ⧉ 🗑
         val fx = fxOf(p)
-        val fxR = RectF(r.left + inner, cy, r.left + inner + w * 0.38f, cy + dp(40f))
-        btn(c, fxR, "Effekt: " + FX_NAMES[fx], fx != 0, Color.rgb(250, 225, 110), 11.5f)
-        hits.add(Hit(fxR, H_FX, pi, 0))
         val sw = dp(44f)
+        val fxR = RectF(r.left + inner, cy, r.right - inner - 4 * sw - 3 * dp(6f) - dp(8f), cy + dp(40f))
+        btn(c, fxR, (if (fxR.width() > dp(150f)) "Effekt: " else "") + FX_NAMES[fx], fx != 0, Color.rgb(250, 225, 110), 11.5f)
+        hits.add(Hit(fxR, H_FX, pi, 0))
         val acts = arrayOf("↑" to H_UP, "↓" to H_DOWN, "⧉" to H_DUP, "🗑" to H_DEL)
         var ax = r.right - inner - 4 * sw - 3 * dp(6f)
         for ((lb, id) in acts) {
