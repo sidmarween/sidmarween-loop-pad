@@ -350,7 +350,12 @@ class SongEditor(private val host: View) {
         c.drawRoundRect(addSec, dp(7f), dp(7f), stroke)
         text.color = INK; text.textSize = dp(10f)
         c.drawText("＋ Abschnitt", addSec.centerX(), addSec.centerY() + dp(3.5f), text)
-        if (!any) { text.color = DIM; text.textSize = dp(9f); c.drawText("Intro, Hauptteil, Ending … hier anlegen →", (secRow.left + min(secRow.right, addSec.left)) / 2, secRow.centerY() + dp(3f), text) }
+        if (!any) {
+            text.color = DIM; text.textSize = dp(9f); text.textAlign = Paint.Align.LEFT
+            val tx = if (addSec.left - secRow.left > dp(150f)) secRow.left + dp(6f) else addSec.right + dp(8f)
+            c.drawText(fitLabel(text, if (tx > addSec.left) "← Intro, Hauptteil, Ending …" else "Intro, Hauptteil, Ending … →", secRow.right - tx - dp(4f), dp(9f), dp(6.5f)), tx, secRow.centerY() + dp(3f), text)
+            text.textAlign = Paint.Align.CENTER
+        }
         c.restore()
     }
 
@@ -367,7 +372,7 @@ class SongEditor(private val host: View) {
             stroke.strokeWidth = dp(1f)
             stroke.color = if (b % 4 == 0) Color.argb(150, 255, 255, 255) else Color.argb(50, 255, 255, 255)
             c.drawLine(x, ruler.bottom - (if (b % 4 == 0) dp(10f) else dp(5f)), x, ruler.bottom, stroke)
-            if (b % step == 0) { text.color = if (b >= Engine.songBars) Color.argb(70, 255, 255, 255) else INK; c.drawText("${b + 1}", x + dp(3f), ruler.top + dp(11f), text) }
+            if (b % step == 0) { text.color = if (b >= Engine.songBars) Color.argb(70, 255, 255, 255) else INK; c.drawText("${b + 1}", x + dp(if (b == cursorBar) 9f else 3f), ruler.top + dp(11f), text) }
         }
         text.textAlign = Paint.Align.CENTER
         // Startmarke
@@ -377,6 +382,7 @@ class SongEditor(private val host: View) {
         c.drawPath(path, fill)
         // Song-Ende (ziehbar)
         val xe = xOf(Engine.songBars.toFloat())
+        if (Engine.songBars <= 0 || isEmptySong()) { c.restore(); return }
         stroke.color = Color.rgb(255, 95, 95); stroke.strokeWidth = dp(2f)
         c.drawLine(xe, ruler.top, xe, grid.bottom, stroke)
         tmp.set(xe - dp(9f), ruler.top + dp(2f), xe + dp(9f), ruler.bottom - dp(2f))
@@ -402,7 +408,7 @@ class SongEditor(private val host: View) {
         c.drawText(fitLabel(text, "Wähle einen Start – alles lässt sich danach verschieben und ändern:", empty.width() - dp(32f), dp(11f), dp(8f)), empty.left + dp(16f), empty.top + dp(50f), text)
         text.textAlign = Paint.Align.CENTER
         val bh = dp(52f)
-        val labels = arrayOf("🪄  Song-Gerüst bauen" to "Intro 8 · Hauptteil 16 · Break 8 · Drop 16 · Ending 8 – aus deinen Pads & Instrumenten",
+        val labels = arrayOf("✦  Song-Gerüst bauen" to "Intro 8 · Hauptteil 16 · Break 8 · Drop 16 · Ending 8 – aus deinen Pads & Instrumenten",
             "●  Live aufnehmen" to "spiel einfach – jeder Takt landet im Song",
             "🎬  Aus Szenen bauen" to "deine gespeicherten Szenen nacheinander")
         for (i in 0 until 3) {
@@ -771,7 +777,7 @@ class SongEditor(private val host: View) {
             l.add(A_INSBAR to "＋ TAKT @${cursorBar + 1}")
             l.add(A_ZOOMOUT to "− ZOOM")
             l.add(A_ZOOMIN to "＋ ZOOM")
-            l.add(A_SCAFFOLD to "🪄 GERÜST")
+            l.add(A_SCAFFOLD to "✦ GERÜST")
             l.add(A_HELP to "? HILFE")
             return l
         }
@@ -1457,6 +1463,6 @@ class SongEditor(private val host: View) {
         Engine.songMode = true
         cursorBar = 0; Engine.playFromBar = 0; firstBar = 0f
         clearSel()
-        hint("🪄 Gerüst: Intro → Hauptteil → Break (mit Filter-Aufbau) → Drop → Ending (Fade-out) · alles verschiebbar, ↶ macht es rückgängig")
+        hint("✦ Gerüst: Intro → Hauptteil → Break (mit Filter-Aufbau) → Drop → Ending (Fade-out) · alles verschiebbar, ↶ macht es rückgängig")
     }
 }
