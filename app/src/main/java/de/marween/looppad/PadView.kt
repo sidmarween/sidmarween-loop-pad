@@ -919,7 +919,6 @@ class PadView(context: Context) : View(context) {
         Engine.instPadsAuto()
         if (mixView) drawMixer(canvas) else for (i in 0 until VISIBLE_PADS) {
             drawPad(canvas, i, dt)
-            drawInstPad(canvas, i)
             if (!sceneView) drawStatus(canvas, i)
             drawMore(canvas, i)
             drawKeyButton(canvas, i)
@@ -927,6 +926,7 @@ class PadView(context: Context) : View(context) {
             drawPadOverlay(canvas, i)
             drawCueMark(canvas, i)
             drawPadName(canvas, i)
+            drawInstPad(canvas, i)
         }
         if (!mixView) drawSelOutline(canvas)
         if (SEC_SEQ !in secHidden) {
@@ -1609,7 +1609,6 @@ class PadView(context: Context) : View(context) {
                 if (mixView) drawMixer(canvas) else {
                     for (i in 0 until VISIBLE_PADS) {
                         drawPad(canvas, i, dt)
-                        drawInstPad(canvas, i)
                         if (!sceneView) drawStatus(canvas, i)
                         drawMore(canvas, i)
                         drawKeyButton(canvas, i)
@@ -1617,6 +1616,7 @@ class PadView(context: Context) : View(context) {
                         drawPadOverlay(canvas, i)
                         drawCueMark(canvas, i)
                         drawPadName(canvas, i)
+                        drawInstPad(canvas, i)
                     }
                     drawSelOutline(canvas)
                 }
@@ -2404,6 +2404,8 @@ class PadView(context: Context) : View(context) {
         val pulse = if (on && Engine.seqPlaying) 0.5f + 0.5f * sin(time * 6f) else 0f
         val rr = min(dp(14f), r.width() * 0.16f)
         fillPaint.shader = null
+        fillPaint.color = Color.rgb(16, 17, 22)
+        canvas.drawRoundRect(r, rr, rr, fillPaint)
         fillPaint.color = if (on) alpha(col, 0.55f + 0.2f * pulse) else alpha(col, 0.14f)
         canvas.drawRoundRect(r, rr, rr, fillPaint)
         strokePaint.strokeWidth = dp(if (on) 2.5f else 1.4f)
