@@ -129,7 +129,7 @@ class MainActivity : Activity() {
             if (i < Engine.PADS) Engine.padSrcMask[i] = v.toIntOrNull() ?: 0
         }
         prefs.getString("padInstMask", null)?.split(",")?.forEachIndexed { i, v ->
-            if (i < Engine.PADS) Engine.padInstMask[i] = (v.toIntOrNull() ?: 63).let { if (it == 7) 63 else it }   // früher „alle“ = 7
+            if (i < Engine.PADS) Engine.padInstMask[i] = v.toIntOrNull() ?: 7
         }
         Engine.liveBars = prefs.getInt("liveBars", 0)
         Engine.bounce = prefs.getBoolean("bounce", true)
@@ -708,7 +708,7 @@ class MainActivity : Activity() {
     /** Reiter „Instrumente“: ACID 303, DRUM 909 und SYNTH einzeln oder zusammen als Eingang. */
     private fun showInstSourcePicker(p: Int) {
         val names = arrayOf("🔊 ACID 303 (Bass)", "🥁 DRUM 909 (Drumcomputer)", "🎹 SYNTH (polyfon, Akkorde)", "⬡ EUKLID (Polyrhythmen)", "🌌 ATMOS (Klangteppich)", "🎤 HARMONIZER (Chor)")
-        val m0 = if (Engine.padSource[p] == 3) Engine.padInstMask[p] else 63
+        val m0 = if (Engine.padSource[p] == 3) Engine.padInstMask[p] else 7
         val checked = BooleanArray(6) { (m0 shr it) and 1 != 0 }
         ui()
             .setTitle("🎹 Instrumente → Pad ${p + 1}")

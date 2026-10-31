@@ -3289,7 +3289,7 @@ object Engine {
     @Volatile private var captureMask = 0
     @Volatile private var captureInst = 0
     /** Bei Eingang 3: welche Instrumente (Bit 0 ACID 303, Bit 1 DRUM 909, Bit 2 SYNTH, 3 EUKLID, 4 ATMOS, 5 HARMONIZER). */
-    val padInstMask = IntArray(PADS) { 63 }
+    val padInstMask = IntArray(PADS) { 7 }
     val INST_NAMES = arrayOf("ACID 303", "DRUM 909", "SYNTH", "EUKLID", "ATMOS", "HARMONIZER")
     private var padRing = FloatArray(0)
 
@@ -3329,6 +3329,22 @@ object Engine {
             idx++
             if (idx == size) idx = 0
         }
+    }
+
+    /**
+     * Nur ein bestimmtes Instrument als Loop aufnehmen ([mask]: Bit 3 EUKLID, 4 ATMOS, 5 HARMONIZER …) – ab dem nächsten
+     * Takt genau [bars] Takte ins erste freie Pad. Andere Instrumente (z. B. die 909) laufen unberührt weiter.
+     * Ergebnis: Pad-Nummer oder −1 (kein freies Pad / kein Raster).
+     */
+    fun recordInstLoop(mask: Int, bars: Int): Int {
+        if (!running) return -1
+        val p = (0 until 12).firstOrNull { loops.get(it) == null && takes.get(it) == null } ?: return -1
+        val oldSrc = padSource[p]; val oldMask = padInstMask[p]; val oldLive = liveBars
+        padSource[p] = 3; padInstMask[p] = mask; liveBars = bars.coerceIn(1, 8)
+        try { startNewTake(p, System.nanoTime()) } finally { padSource[p] = oldSrc; padInstMask[p] = oldMask; liveBars = oldLive }
+        val t = takes.get(p) ?: return -1
+        if (!t.armed) { takes.compareAndSet(p, t, null); return -1 }
+        return p
     }
 
     /** Alle Pads auf einen Eingang stellen. */
@@ -3391,7 +3407,7 @@ object Engine {
         if (!seqPlaying && m0 > 0L && !t.oneShot && (t.src >= 1 || liveBars > 0)) startTransportAt(heard)
         // Raster: Master-Tempo – oder, wenn es noch keins gibt, der Takt des laufenden Sequenzers
         // (z. B. wenn nur Instrumente oder ⚡-Pads spielen und jetzt resampelt wird)
-        val seqGrid = m0 <= 0L && t.src >= 1 && seqPlaying && !t.oneShot
+        val seqGrid = m0 <= 0L && t.src >= 1 && (seqPlaying || Euclid.on) && !t.oneShot
         val m = if (seqGrid) seqBar() else m0
         val gs = if (seqGrid) seqOrigin else masterStart
         if (seqGrid) t.gridBar = m
@@ -3576,6 +3592,9 @@ object Engine {
     /** Pad, dessen Pad-/Instrument-Eingang gerade bereitsteht (zuletzt eingestellt). */
     @Volatile var capOwner = -1
     var onBouncedInst: ((Int, String) -> Unit)? = null
+
+    /** Läuft (oder wartet) auf diesem Pad eine Aufnahme? */
+    fun isRecording(p: Int): Boolean = p in 0 until PADS && takes.get(p) != null
 
     /** Pad wartet im Live-Modus auf den nächsten Takt. */
     fun isArmed(p: Int): Boolean {
