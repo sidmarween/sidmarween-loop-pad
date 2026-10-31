@@ -89,6 +89,8 @@ class ShotTest {
         Euclid.on = true
         pv.setMixView(true)
         shot(pv, w, h, "mix_${tag}")
+        pv.setMixView(false)
+        shot(pv, w, h, "instpads_${tag}")
         Euclid.on = false
     }
 
