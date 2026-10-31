@@ -85,6 +85,11 @@ class ShotTest {
         shot(pv, h, w, "bau_${tag}_quer")
         Engine.arrClear(); Engine.songBars = 0
         shot(pv, w, h, "bau_${tag}_leer")
+        pv.songBuilder.close()
+        Euclid.on = true
+        pv.setMixView(true)
+        shot(pv, w, h, "mix_${tag}")
+        Euclid.on = false
     }
 
     @Test @Config(qualifiers = "w360dp-h800dp-xxhdpi") fun normal() { pads("n"); dj("n"); song("n") }

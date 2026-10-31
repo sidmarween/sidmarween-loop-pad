@@ -2474,6 +2474,8 @@ class PadView(context: Context) : View(context) {
     private var mixLastTapMs = 0L
     private val mixZones = Array(4) { RectF() }
 
+    fun setMixView(on: Boolean) { if (mixView != on) toggleMixView() }
+
     private fun toggleMixView() {
         mixView = !mixView
         mixPtr.clear()
