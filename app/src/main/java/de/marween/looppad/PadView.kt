@@ -916,8 +916,10 @@ class PadView(context: Context) : View(context) {
         if (!zoomXy.isEmpty) zoomBtn(canvas, zoomXy, overlayColors())
         if (!zoomFx.isEmpty) zoomBtn(canvas, zoomFx, overlayColors())
         if (SEC_SEL !in secHidden) drawSelRow(canvas)
+        Engine.instPadsAuto()
         if (mixView) drawMixer(canvas) else for (i in 0 until VISIBLE_PADS) {
             drawPad(canvas, i, dt)
+            drawInstPad(canvas, i)
             if (!sceneView) drawStatus(canvas, i)
             drawMore(canvas, i)
             drawKeyButton(canvas, i)
@@ -1607,6 +1609,7 @@ class PadView(context: Context) : View(context) {
                 if (mixView) drawMixer(canvas) else {
                     for (i in 0 until VISIBLE_PADS) {
                         drawPad(canvas, i, dt)
+                        drawInstPad(canvas, i)
                         if (!sceneView) drawStatus(canvas, i)
                         drawMore(canvas, i)
                         drawKeyButton(canvas, i)
@@ -2380,6 +2383,45 @@ class PadView(context: Context) : View(context) {
     }
 
     /** Pad-Name groß im Pad (Drum-Modus). */
+    private fun instPadName(code: Int): String = when (code) {
+        0 -> "BASS 303"; 1 -> "DRUMS 909"; in 2..9 -> "SYNTH ${code - 1}"
+        10 -> "EUKLID"; 11 -> "ATMOS"; else -> "HARMONIZER"
+    }
+    private fun instPadIcon(code: Int): String = when (code) { 0 -> "🔊"; 1 -> "🥁"; in 2..9 -> "🎹"; 10 -> "⬡"; 11 -> "🌌"; else -> "🎤" }
+    private fun instPadColor(code: Int): Int = when (code) {
+        0 -> Color.rgb(90, 190, 255); 1 -> Color.rgb(255, 150, 70); 2 -> Color.rgb(200, 140, 255); 3 -> Color.rgb(240, 120, 200); 4 -> Color.rgb(120, 230, 140)
+        10 -> Color.rgb(255, 170, 90); 11 -> Color.rgb(140, 170, 255); else -> Color.rgb(255, 120, 190)
+    }
+
+    /** Instrument-Pad: zeigt, welches Instrument hier liegt und ob es läuft. */
+    private fun drawInstPad(canvas: Canvas, i: Int) {
+        val code = Engine.padInst[i]
+        if (code < 0) return
+        val r = padRects[i]
+        if (r.width() <= 0f) return
+        val col = instPadColor(code)
+        val on = Engine.instCodeOn(code)
+        val pulse = if (on && Engine.seqPlaying) 0.5f + 0.5f * sin(time * 6f) else 0f
+        val rr = min(dp(14f), r.width() * 0.16f)
+        fillPaint.shader = null
+        fillPaint.color = if (on) alpha(col, 0.55f + 0.2f * pulse) else alpha(col, 0.14f)
+        canvas.drawRoundRect(r, rr, rr, fillPaint)
+        strokePaint.strokeWidth = dp(if (on) 2.5f else 1.4f)
+        strokePaint.color = alpha(col, if (on) 1f else 0.6f)
+        canvas.drawRoundRect(r, rr, rr, strokePaint)
+        textPaint.textAlign = Paint.Align.CENTER
+        textPaint.color = Color.WHITE
+        textPaint.textSize = min(dp(26f), r.width() * 0.3f)
+        canvas.drawText(instPadIcon(code), r.centerX(), r.centerY() + textPaint.textSize * 0.15f, textPaint)
+        textPaint.textSize = min(dp(12f), r.width() * 0.13f)
+        textPaint.setShadowLayer(dp(3f), 0f, 0f, Color.BLACK)
+        canvas.drawText(fitLabel(textPaint, instPadName(code), r.width() * 0.9f, textPaint.textSize, dp(6.5f)), r.centerX(), r.top + dp(8f) + textPaint.textSize, textPaint)
+        textPaint.textSize = min(dp(11f), r.width() * 0.12f)
+        textPaint.color = if (on) Color.WHITE else Color.argb(170, 255, 255, 255)
+        canvas.drawText(if (on) "● AN" else "○ AUS", r.centerX(), r.bottom - dp(9f), textPaint)
+        textPaint.clearShadowLayer()
+    }
+
     private fun drawPadName(canvas: Canvas, i: Int) {
         val n = Engine.padName(i) ?: return
         val r = padRects[i]
@@ -2507,8 +2549,8 @@ class PadView(context: Context) : View(context) {
     }
     private fun chSub(c: MixCh): String = when (c.kind) {
         0 -> "Pad ${c.idx + 1} · " + if (Engine.isOneShot(c.idx)) "⚡" else "∞ Loop"
-        1 -> "Instrument"
-        else -> "Generator"
+        1 -> Engine.padOfInst(c.idx).let { if (it >= 0) "Pad ${it + 1}" else "Instrument" }
+        else -> Engine.padOfInst(10 + c.idx).let { if (it >= 0) "Pad ${it + 1}" else "Generator" }
     }
     private fun chIcon(c: MixCh): String = when (c.kind) {
         0 -> if (Engine.isOneShot(c.idx)) "⚡" else "∿"
@@ -2576,7 +2618,7 @@ class PadView(context: Context) : View(context) {
             mixStrips.add(st)
             val bh = min(dp(46f), st.height() * 0.24f)
             mixOnBtn.add(RectF(st.left + dp(3f), st.bottom - bh - dp(3f), st.right - dp(3f), st.bottom - dp(3f)))
-            mixFader.add(RectF(st.left + dp(6f), st.top + dp(40f), st.right - dp(6f), st.bottom - bh - dp(12f)))
+            mixFader.add(RectF(st.left + dp(6f), st.top + dp(54f), st.right - dp(6f), st.bottom - bh - dp(8f)))
         }
     }
 
@@ -2716,7 +2758,7 @@ class PadView(context: Context) : View(context) {
             canvas.drawRoundRect(tmpRect, dp(3f), dp(3f), strokePaint)
             textPaint.textSize = min(dp(9f), st.width() * 0.17f)
             textPaint.color = alpha(fg, 0.6f)
-            canvas.drawText(gainDb(g), st.centerX(), f.bottom + dp(9f), textPaint)
+            canvas.drawText(gainDb(g) + " dB", st.centerX(), f.top - dp(7f), textPaint)
             // großer AN/AUS-Knopf
             val b = mixOnBtn[k]
             fillPaint.color = if (on) col else alpha(fg, 0.07f)
@@ -4397,7 +4439,24 @@ class PadView(context: Context) : View(context) {
                     return true
                 }
                 if (func != F_NONE) {
+                    if (Engine.padInst[p] >= 0 && func == F_ERASE) {
+                        Engine.padInst[p] = -1
+                        hint("Pad ${p + 1} wieder frei (Instrument-Zuordnung gelöst)")
+                        return true
+                    }
                     funcPad(p)
+                    return true
+                }
+                if (Engine.padInst[p] >= 0) {
+                    // Instrument-Pad: antippen = Instrument an/aus
+                    val code = Engine.padInst[p]
+                    val v = !Engine.instCodeOn(code)
+                    Engine.setInstCodeOn(code, v)
+                    flash[p] = 1f
+                    val r = padRects[p]
+                    burst(r.centerX(), r.centerY(), instPadColor(code), 18, 220f)
+                    performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+                    hint(instPadName(code) + if (v) " an" else " aus")
                     return true
                 }
                 if (pointerPad.containsValue(p) && !(drumActive() && Engine.isOneShot(p))) {

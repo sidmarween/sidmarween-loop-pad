@@ -3338,7 +3338,7 @@ object Engine {
      */
     fun recordInstLoop(mask: Int, bars: Int): Int {
         if (!running) return -1
-        val p = (0 until 12).firstOrNull { loops.get(it) == null && takes.get(it) == null } ?: return -1
+        val p = (0 until 12).firstOrNull { loops.get(it) == null && takes.get(it) == null && padInst[it] < 0 } ?: return -1
         val oldSrc = padSource[p]; val oldMask = padInstMask[p]; val oldLive = liveBars
         padSource[p] = 3; padInstMask[p] = mask; liveBars = bars.coerceIn(1, 8)
         try { startNewTake(p, System.nanoTime()) } finally { padSource[p] = oldSrc; padInstMask[p] = oldMask; liveBars = oldLive }
@@ -3592,6 +3592,42 @@ object Engine {
     /** Pad, dessen Pad-/Instrument-Eingang gerade bereitsteht (zuletzt eingestellt). */
     @Volatile var capOwner = -1
     var onBouncedInst: ((Int, String) -> Unit)? = null
+
+    /**
+     * Instrument-Pads: ein leeres Pad steht für ein Instrument (0 ACID, 1 DRUM, 2.. SYNTH, 10 EUKLID, 11 ATMOS, 12 HARMONIZER),
+     * −1 = normales Pad. Wird automatisch vergeben, sobald ein Instrument benutzt wird (siehe [instPadsAuto]).
+     */
+    val padInst = IntArray(PADS) { -1 }
+
+    fun instCodeOn(code: Int): Boolean = when (code) {
+        in 0 until InstState.INSTS -> InstState.instOn(code)
+        10 -> Euclid.on; 11 -> Atmos.on; 12 -> Harmonizer.on
+        else -> false
+    }
+
+    fun setInstCodeOn(code: Int, v: Boolean) {
+        when (code) {
+            in 0 until InstState.INSTS -> { InstState.setInstOn(code, v); if (v && !seqPlaying) transportPlay(false) }
+            10 -> Euclid.on = v; 11 -> Atmos.on = v; 12 -> Harmonizer.on = v
+        }
+    }
+
+    fun padOfInst(code: Int): Int = padInst.indexOf(code)
+
+    /** Benutzte Instrumente bekommen das nächste freie Pad (1–12); ein Pad mit Aufnahme gibt seine Zuordnung ab. */
+    fun instPadsAuto() {
+        for (p in 0 until min(12, PADS)) if (padInst[p] >= 0 && loops.get(p) != null) padInst[p] = -1
+        val used = ArrayList<Int>()
+        for (i in 0 until InstState.INSTS) if (InstState.instOn(i) && InstState.instHasNotes(i)) used.add(i)
+        if (Euclid.on) used.add(10)
+        if (Atmos.on) used.add(11)
+        if (Harmonizer.on) used.add(12)
+        for (code in used) {
+            if (padInst.contains(code)) continue
+            val p = (0 until min(12, PADS)).firstOrNull { loops.get(it) == null && takes.get(it) == null && padInst[it] < 0 } ?: return
+            padInst[p] = code
+        }
+    }
 
     /** Läuft (oder wartet) auf diesem Pad eine Aufnahme? */
     fun isRecording(p: Int): Boolean = p in 0 until PADS && takes.get(p) != null
