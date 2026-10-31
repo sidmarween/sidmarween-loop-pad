@@ -120,14 +120,6 @@ class MainActivity : Activity() {
                 .setNegativeButton("Abbrechen", null)
                 .show()
         }
-        pads.songEd.onPickAuto = {
-            val ch = BooleanArray(Engine.AUTO_LANES) { pads.songEd.autoShown[it] || Engine.autoLaneUsed(it) }
-            ui().setTitle("〰 Automations-Spuren im Song")
-                .setMultiChoiceItems(Engine.AUTO_NAMES.mapIndexed { i, n -> "$n – ${Engine.AUTO_HELP[i]}" }.toTypedArray(), ch) { _, i, on -> ch[i] = on }
-                .setPositiveButton("Anzeigen") { _, _ -> for (i in 0 until Engine.AUTO_LANES) pads.songEd.autoShown[i] = ch[i]; pads.invalidate(); hint("Spur mit ✎ MALEN bemalen: hoch = mehr, ⌫ RADIER löscht") }
-                .setNegativeButton("Abbrechen", null)
-                .show()
-        }
         val prefs = getSharedPreferences("marvpad", MODE_PRIVATE)
         prefs.getString("padSource", null)?.split(",")?.forEachIndexed { i, v ->
             if (i < Engine.PADS) Engine.padSource[i] = v.toIntOrNull() ?: 0
