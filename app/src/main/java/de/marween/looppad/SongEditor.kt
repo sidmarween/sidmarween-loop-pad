@@ -124,7 +124,22 @@ class SongEditor(private val host: View) {
         cursorBar = Engine.playFromBar
         if (barW <= 0f) barW = 0f
     }
-    fun close() { isOpen = false; clearSel() }
+    fun close() { isOpen = false; clearSel(); onClose?.invoke() }
+    /** Nach dem Schließen (z. B. zurück zum Baukasten). */
+    var onClose: (() -> Unit)? = null
+
+    // ---- für den Teile-Baukasten: Abschnitts-Aktionen von außen
+    private fun allTracks(): List<Int> = (0 until Engine.TRK_AUTO).toList() + (0 until Engine.AUTO_LANES).map { Engine.TRK_AUTO + it }
+    private fun partOp(b0: Int, b1: Int, op: Int) { selTracks = allTracks(); selB0 = b0; selB1 = b1; selSection = true; action(op); clearSel() }
+    fun partDuplicate(b0: Int, b1: Int) = partOp(b0, b1, A_DUP)
+    fun partMove(b0: Int, b1: Int, dir: Int) = partOp(b0, b1, if (dir < 0) A_LEFT else A_RIGHT)
+    fun partDelete(b0: Int, b1: Int) = partOp(b0, b1, A_SECDEL)
+    fun partLonger(b0: Int, b1: Int) = partOp(b0, b1, A_SECPLUS)
+    fun partShorter(b0: Int, b1: Int) = partOp(b0, b1, A_SECMINUS)
+    fun snapshot() = snap()
+    fun undoStep() = doUndo()
+    fun canUndo() = undo.isNotEmpty()
+    fun setBreak(t: Int, b: Int) = setBrk(t, b, true)
 
     // ================================================================ Spuren
 

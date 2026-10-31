@@ -98,6 +98,7 @@ class MainActivity : Activity() {
         }
         pads.onTempo = { showTempo() }
         pads.onInstMore = { showMoreInstruments() }
+        pads.songBuilder.onPickSection = { bar -> pads.songEd.onPickSection?.invoke(bar) }
         pads.songEd.onPickSection = { bar ->
             val items = Engine.SECTION_NAMES.map { "▣ $it" } + listOf("✕ Abschnitts-Marke entfernen")
             ui().setTitle("Abschnitt ab Takt ${bar + 1}")
@@ -1897,7 +1898,7 @@ class MainActivity : Activity() {
     private fun showMoreInstruments() {
         fun st(on: Boolean) = if (on) "  ● läuft" else ""
         val items = arrayOf(
-            "🎼 SONG-EDITOR · alle Spuren, Noten, Automation, Aufnahme",
+            "🎼 SONG · Teile bauen (Intro, Hauptteil, Ending) & aufnehmen",
             "🌌 ATMOS · Klangteppich & Drones" + st(Atmos.on),
             "🎤 VOCAL-HARMONIZER · Chor aus dem Gesang" + st(Harmonizer.on),
             "⬡ EUKLID · generative Polyrhythmen" + st(Euclid.on),
@@ -1906,7 +1907,7 @@ class MainActivity : Activity() {
         ui().setTitle("🎹 Weitere Instrumente")
             .setItems(items) { _, w ->
                 when (w - 1) {
-                    -1 -> { if (djMode) switchMode(false); pads.openSongEditor(); hint("🎼 Jede Quelle auf einer Spur · ⬚ Rahmen ziehen = Block wählen und verschieben · ● SONG-REC nimmt den ganzen Song live auf") }
+                    -1 -> { if (djMode) switchMode(false); pads.openSongBuilder(); hint("🎼 Teile anlegen, pro Teil die Spuren anschalten, ▶ spielen") }
                     0 -> openAtmos()
                     1 -> { if (djMode) dj.openHarm() else pads.openHarm(); hint("▶ AN, dann Akkord-Pads halten – der Gesang des Decks wird zum Chor · XY: Formant und Tuning") }
                     2 -> { if (djMode) dj.openEuclid() else pads.openEuclid(); hint("▶ START – läuft im Takt des Decks · drei Regler: Schläge, Taktlänge, Morphing") }
@@ -2547,7 +2548,7 @@ class MainActivity : Activity() {
                 }
                 add("✂ Slicer: Song-Abschnitt auf 16 Pads zerlegen") { if (djMode) switchMode(false); if (Slicer.data == null) pickSlicerSource() else pads.openSlicer() }
                 add("👻 Ghost-Producer: Genre-Patterns als Live-Remix") { openGhost() }
-                add("🎼 SONG-EDITOR: alle Spuren mit Noten, Blöcke, Automation, Song-Aufnahme") { if (djMode) switchMode(false); pads.openSongEditor() }
+                add("🎼 SONG: Teile bauen (Intro, Hauptteil, Ending), aufnehmen, Spuren-Ansicht") { if (djMode) switchMode(false); pads.openSongBuilder() }
                 add("🌌 ATMOS: Klangteppich & Drones (Übergänge, Intros)") { openAtmos() }
                 add("⬡ EUKLID: generative Polyrhythmen (Perc, Hats, Rim, Pluck)") { if (djMode) dj.openEuclid() else pads.openEuclid(); hint("▶ START – läuft im Takt des Decks · drei Regler: Schläge, Taktlänge, Morphing") }
                 add("🎤 Vocal-Harmonizer: Chor aus dem Deck-Gesang") { if (djMode) dj.openHarm() else pads.openHarm(); hint("▶ AN, dann Akkord-Pads halten – der Gesang des Decks wird zum Chor · XY: Formant und Tuning") }

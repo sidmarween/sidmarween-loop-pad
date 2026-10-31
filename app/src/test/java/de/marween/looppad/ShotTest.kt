@@ -79,6 +79,12 @@ class ShotTest {
         pv.songEd.scaffold()
         shot(pv, w, h, "song_${tag}_geruest")
         shot(pv, h, w, "song_${tag}_quer")
+        pv.songEd.close()
+        pv.openSongBuilder()
+        shot(pv, w, h, "bau_${tag}_teile")
+        shot(pv, h, w, "bau_${tag}_quer")
+        Engine.arrClear(); Engine.songBars = 0
+        shot(pv, w, h, "bau_${tag}_leer")
     }
 
     @Test @Config(qualifiers = "w360dp-h800dp-xxhdpi") fun normal() { pads("n"); dj("n"); song("n") }
