@@ -2620,7 +2620,7 @@ class PadView(context: Context) : View(context) {
         1 -> when (c.idx) { 0 -> 0; 1 -> 1; else -> (c.idx - 2).let { t -> if (t < 3) 2 + t else if (t == InstState.KEYS_TRACK) 6 else 7 } }
         else -> StemRecorder.X0 + c.idx
     }
-    private fun mixSaveRect(k: Int): RectF { val st = mixStrips[k]; return RectF(st.right - dp(22f), st.top + dp(34f), st.right - dp(3f), st.top + dp(52f)) }
+    private fun mixSaveRect(k: Int): RectF { val st = mixStrips[k]; return RectF(st.right - dp(20f), st.top + dp(19f), st.right - dp(3f), st.top + dp(35f)) }
     private val mixStrips = ArrayList<RectF>()
     private val mixOnBtn = ArrayList<RectF>()
     private val mixFader = ArrayList<RectF>()
