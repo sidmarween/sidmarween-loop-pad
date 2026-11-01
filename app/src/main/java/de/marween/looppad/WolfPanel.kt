@@ -53,7 +53,7 @@ class WolfPanel(private val host: View) {
     private fun layout(a: RectF) {
         box.set(a)
         val pad = dp(10f)
-        val bh = dp(36f)
+        val bh = dp(42f)
         bClose.set(box.right - pad - bh, box.top + pad, box.right - pad, box.top + pad + bh)
         val row1 = box.top + pad + bh + dp(22f)
         val w = box.width() - 2 * pad
@@ -62,12 +62,12 @@ class WolfPanel(private val host: View) {
         val r1 = arrayOf(bOn, bSrc, bNew, bHold)
         for (i in 0 until 4) r1[i].set(box.left + pad + i * (gw + g), row1, box.left + pad + i * (gw + g) + gw, row1 + bh)
         val row2 = row1 + bh + g
-        bPreset.set(box.left + pad, row2, box.left + pad + w * 0.5f, row2 + bh)
-        bMute.set(bPreset.right + g, row2, bPreset.right + g + w * 0.24f, row2 + bh)
+        bPreset.set(box.left + pad, row2, box.left + pad + w * 0.42f, row2 + bh)
+        bMute.set(bPreset.right + g, row2, bPreset.right + g + w * 0.22f, row2 + bh)
         bRec.set(bMute.right + g, row2, box.right - pad - dp(44f), row2 + bh)
         bRecBars.set(bRec.right + g, row2, box.right - pad, row2 + bh)
         val sTop = row2 + bh + dp(10f)
-        val sh = dp(40f)
+        val sh = dp(48f)
         val sw = (w - g) / 2
         for (i in 0 until 4) {
             val r = i / 2; val c = i % 2
@@ -75,11 +75,11 @@ class WolfPanel(private val host: View) {
         }
         val stTop = sTop + 2 * (sh + g) + dp(22f)
         val cw = (w - 15 * dp(3f)) / 16
-        val ch = min(dp(46f), cw * 2.2f)
+        val ch = min(dp(64f), cw * 3f)
         for (k in 0 until 16) steps[k].set(box.left + pad + k * (cw + dp(3f)), stTop, box.left + pad + k * (cw + dp(3f)) + cw, stTop + ch)
         val aTop = stTop + ch + dp(28f)
         val aw = (w - 2 * g) / 3
-        val ah = min(dp(42f), (box.bottom - pad - aTop - 2 * g) / 3)
+        val ah = min(dp(64f), (box.bottom - pad - aTop - 2 * g) / 3)
         for (i in 0 until 9) {
             val r = i / 3; val c = i % 3
             acts[i].set(box.left + pad + c * (aw + g), aTop + r * (ah + g), box.left + pad + c * (aw + g) + aw, aTop + r * (ah + g) + ah)
