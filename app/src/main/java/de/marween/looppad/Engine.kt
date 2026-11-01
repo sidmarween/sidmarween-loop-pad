@@ -830,6 +830,7 @@ object Engine {
         for (w in Orbits.wells) w.active = false
         BassLab.mPreset = -1; BassLab.fPreset = -1
         GrooveGen.made = false
+        Chaos.armed = false; Chaos.marrow = 0f; Chaos.scratch = 0f
     }
 
     /** Rendert das Sequenzer-Pattern als nahtlosen Ein-Takt-Loop. */
@@ -3026,6 +3027,8 @@ object Engine {
             }
             // ATMOS: Mitschnitt (für „Schnipsel einfangen“) und Klangteppich dazu
             Atmos.feed(mL, mR, block, sampleRate)
+            // CHAOS-TRIGGER: zerlegt den laufenden Master (Stutter, Resonatoren, Scratches, Portal)
+            if (Chaos.active()) { Chaos.tick(); Chaos.process(mL, mR, block, w, sampleRate) }
             // Zusatz-Instrumente getrennt rendern: in den Master (mit Lautstärke) und – wenn ein Pad sie aufnimmt – in den Pad-Mitschnitt
             if (xL.size < block) { xL = FloatArray(block); xR = FloatArray(block) }
             val ciX = captureInst

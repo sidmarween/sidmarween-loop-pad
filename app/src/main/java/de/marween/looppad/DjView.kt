@@ -144,6 +144,8 @@ class DjView(context: Context) : View(context) {
     fun openGhost() { ghost.open(); invalidate() }
     val atmos = AtmosPanel(this).also { a -> a.onHint = { m -> onHint?.invoke(m) } }
     fun openAtmos() { atmos.open(); invalidate() }
+    val chaos = ChaosPanel(this).also { a -> a.onHint = { m -> onHint?.invoke(m) } }
+    fun openChaos() { chaos.open(); invalidate() }
     val harm = HarmonizerPanel(this).also { a -> a.onHint = { m -> onHint?.invoke(m) } }
     fun openHarm() { harm.open(); invalidate() }
     val euclid = EuclidPanel(this).also { a -> a.onHint = { m -> onHint?.invoke(m) } }
@@ -613,6 +615,11 @@ class DjView(context: Context) : View(context) {
         if (harm.isOpen) {
             c.drawColor(skin.bg)
             harm.draw(c, RectF(dp(6f), insetTop + dp(6f), width - dp(6f), height - insetBottom - dp(6f)), skin.accent)
+            return
+        }
+        if (chaos.isOpen) {
+            c.drawColor(skin.bg)
+            chaos.draw(c, RectF(dp(6f), insetTop + dp(6f), width - dp(6f), height - insetBottom - dp(6f)), skin.accent)
             return
         }
         if (atmos.isOpen) {
@@ -2411,6 +2418,11 @@ class DjView(context: Context) : View(context) {
         }
         if (harm.isOpen) {
             harm.touch(e)
+            invalidate()
+            return true
+        }
+        if (chaos.isOpen) {
+            chaos.touch(e)
             invalidate()
             return true
         }

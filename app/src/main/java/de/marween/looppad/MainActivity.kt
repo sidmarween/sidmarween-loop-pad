@@ -1975,6 +1975,10 @@ class MainActivity : Activity() {
                 Item("🎤 VOCAL-HARMONIZER · Chor aus dem Gesang" + st(Harmonizer.on)) { if (djMode) dj.openHarm() else pads.openHarm(); hint("▶ AN, dann Akkord-Pads halten – der Gesang des Decks wird zum Chor · XY: Formant und Tuning") }
             ),
             "🛠 WERKZEUGE" to listOf(
+                Item("⚡ CHAOS-TRIGGER · zerlegt den laufenden Mix live (DJ)") {
+                    if (djMode) dj.openChaos() else pads.openChaos()
+                    hint("⚡ Pads halten = Stutter mit Gravitation · Resonatoren antippen · unten halten = Portal-Warp, loslassen = Drop")
+                },
                 Item("🐺 WOLF · Loop-Zerhacker" + st(Wolf.on)) {
                     pad(); pads.openWolf()
                     hint(if (Wolf.srcPad >= 0) "🐺 ▶ START – Pad ${Wolf.srcPad + 1} wird im Takt zerhackt · CHAOS / DICHTE / VARIATION" else "🐺 Erst einen Loop auf ein Pad legen, dann QUELLE wählen")
