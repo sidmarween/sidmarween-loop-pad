@@ -28,6 +28,7 @@ object FxGen {
         var lp = 0f; var bp = 0f; var lp2 = 0f; var bp2 = 0f
         var ph = DoubleArray(6)
         var hit = -1L; var hitT = 0; var hitPh = 0.0
+        var g = 0f; var pf = 110.0
         var r = 31337
         fun nz(): Float { r = r * 1664525 + 1013904223; return ((r ushr 8) / 16777216f) * 2f - 1f }
     }
@@ -63,6 +64,9 @@ object FxGen {
         java.util.Arrays.fill(progress, -2f)
         val k = intensity
         var pk = 0f
+        if (sL.size < n) { sL = FloatArray(n); sR = FloatArray(n) }
+        java.util.Arrays.fill(sL, 0, n, 0f); java.util.Arrays.fill(sR, 0, n, 0f)
+        val gl = vol * (0.5f + 0.5f * k) * 0.55f
         for (f in fx) {
             if (w > f.start + f.len + sr * 4) { fx.remove(f); continue }
             val pr = ((w - f.start).toDouble() / f.len).toFloat()
@@ -80,12 +84,15 @@ object FxGen {
                         val q = if (f.type == 0) p else 1f - min(1f, p)
                         val env = if (f.type == 0) q.pow(1.6f) else (if (p < 0.02f) p / 0.02f else 1f) * q.pow(1.4f)
                         if (f.type == 1 && p > 1f) continue
-                        val fc = 200.0 * 2.0.pow(q * 6.0 * (0.6 + 0.4 * k))
-                        val g = (2 * sin(PI * min(fc, sr / 6.0) / sr)).toFloat()
+                        if ((t and 15L) == 0L || f.g == 0f) {
+                            f.g = (2 * sin(PI * min(200.0 * 2.0.pow(q * 6.0 * (0.6 + 0.4 * k)), sr / 6.0) / sr)).toFloat()
+                            f.pf = 110.0 * 2.0.pow(q * 3.5 * k)
+                        }
+                        val g = f.g
                         val qq = 1f - 0.85f * q
                         f.lp += g * f.bp; val h = f.nz() - f.lp - qq * f.bp; f.bp += g * h
                         f.lp2 += g * f.bp2; val h2 = f.nz() - f.lp2 - qq * f.bp2; f.bp2 += g * h2
-                        val pf = 110.0 * 2.0.pow(q * 3.5 * k)
+                        val pf = f.pf
                         var tone = 0f
                         for (j in 0 until 3) { f.ph[j] += pf * (1 + (j - 1) * 0.01) / sr; if (f.ph[j] >= 1.0) f.ph[j] -= 1.0; tone += (2 * f.ph[j] - 1).toFloat() }
                         tone *= 0.12f * k
@@ -121,8 +128,8 @@ object FxGen {
                     5 -> {
                         if (p > 1f) continue
                         val q = sin(PI * p).toFloat()
-                        val fc = 150.0 * 2.0.pow(q * 6.5 * k)
-                        val g = (2 * sin(PI * min(fc, sr / 6.0) / sr)).toFloat()
+                        if ((t and 15L) == 0L || f.g == 0f) f.g = (2 * sin(PI * min(150.0 * 2.0.pow(q * 6.5 * k), sr / 6.0) / sr)).toFloat()
+                        val g = f.g
                         f.lp += g * f.bp; val h = f.nz() - f.lp - 0.35f * f.bp; f.bp += g * h
                         val env = 0.3f + 0.7f * q
                         val pan = sin(2 * PI * p).toFloat()
@@ -148,23 +155,27 @@ object FxGen {
                     }
                     else -> {
                         if (p > 1f) continue
-                        val fc = 4000.0 * 2.0.pow(-p * 4.0)
-                        val g = (2 * sin(PI * min(fc, sr / 6.0) / sr)).toFloat()
+                        if ((t and 15L) == 0L || f.g == 0f) f.g = (2 * sin(PI * min(4000.0 * 2.0.pow(-p * 4.0), sr / 6.0) / sr)).toFloat()
+                        val g = f.g
                         f.lp += g * f.bp; val h = f.nz() - f.lp - 0.4f * f.bp; f.bp += g * h
                         val env = sin(PI * p).toFloat()
                         l = f.bp * env * (1f - p); r = f.bp * env * p
                         l *= 1.4f; r *= 1.4f
                     }
                 }
-                val gl = vol * (0.5f + 0.5f * k)
-                val yl = tanh((l * gl * 0.55f).toDouble()).toFloat(); val yr = tanh((r * gl * 0.55f).toDouble()).toFloat()
-                oL[i] += yl; oR[i] += yr
-                val a = abs(yl)
-                if (a > pk) pk = a
+                sL[i] += l * gl; sR[i] += r * gl
             }
+        }
+        // alle Effekte zusammen sanft begrenzen (einzeln begrenzt addierten sie sich über 0 dB)
+        if (fx.isNotEmpty()) for (i in 0 until n) {
+            val yl = tanh(sL[i].toDouble()).toFloat(); val yr = tanh(sR[i].toDouble()).toFloat()
+            oL[i] += yl; oR[i] += yr
+            val a = abs(yl)
+            if (a > pk) pk = a
         }
         meter = max(pk, meter * 0.9f)
     }
 
+    private var sL = FloatArray(0); private var sR = FloatArray(0)
     private fun Float.pow(e: Float): Float = this.toDouble().pow(e.toDouble()).toFloat()
 }

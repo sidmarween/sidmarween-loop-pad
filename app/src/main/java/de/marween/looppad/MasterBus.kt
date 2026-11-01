@@ -262,6 +262,10 @@ object MasterBus {
     private fun linToDb(v: Float) = if (v <= 1e-6f) -120f else 20f * ln(v) / ln(10f)
 
     /** Verarbeitet den Master (L/R) im Mischer-Thread. */
+    // Puffer ohne Neu-Anlage je Block (kein Müll im Audio-Thread)
+    private val mbGainBuf = FloatArray(3)
+    private val mbgBuf = FloatArray(3)
+
     fun process(l: FloatArray, r: FloatArray, n: Int, rate: Int) {
         var ip = 0f
         for (i in 0 until n) { val a = max(abs(l[i]), abs(r[i])); if (a > ip) ip = a }
@@ -283,7 +287,8 @@ object MasterBus {
         val pm = par[MB]
         val mbAtt = exp(-1.0 / (0.005 * sr)).toFloat()
         val mbRel = exp(-1.0 / (0.12 * sr)).toFloat()
-        val mbGain = floatArrayOf(dbToLin(db(pm[3], 6f)), dbToLin(db(pm[4], 6f)), dbToLin(db(pm[5], 6f)))
+        val mbGain = mbGainBuf
+        mbGain[0] = dbToLin(db(pm[3], 6f)); mbGain[1] = dbToLin(db(pm[4], 6f)); mbGain[2] = dbToLin(db(pm[5], 6f))
         val ps = par[SAT]
         val sType = min(2, (ps[1] * 3f).toInt())
         val sMix = ps[2]
@@ -295,7 +300,7 @@ object MasterBus {
         val lRel = exp(-1.0 / (limRelMs(pl[2]) * 0.001 * sr)).toFloat()
         var cg = 0f
         var lg = 0f
-        val mbg = FloatArray(3)
+        val mbg = mbgBuf; java.util.Arrays.fill(mbg, 0f)
         var op = 0f
         val la = la
         val lb = lb

@@ -1515,6 +1515,10 @@ class PolySynth(private val sr: Int, private val t: InstState.SynTrack) {
         var kw = 0
         /** Zustände der Bass-Motoren (MAGMA, FUNK). */
         val m = FloatArray(24)
+        /** Filter-Koeffizient (Steuer-Rate). */
+        var fg = 0f
+        /** Steuer-Raten-Speicher der Modelle (MAGMA, FUNK, VIBE). */
+        val c = FloatArray(8)
     }
 
     private companion object {
@@ -1528,6 +1532,8 @@ class PolySynth(private val sr: Int, private val t: InstState.SynTrack) {
             return SIN[i] + (SIN[i + 1] - SIN[i]) * fr
         }
         const val TWO_PI_INV = 1.0 / (2 * PI)
+        /** Schnelle tanh-Näherung (Padé), weich begrenzt – weicht < 2 % von tanh ab. */
+        fun fastTanh(x: Float): Float = if (x > 3f) 1f else if (x < -3f) -1f else { val x2 = x * x; x * (27f + x2) / (27f + 9f * x2) }
         // Orgel-Zugriegel: 16' 8' 5⅓' 4' 2⅔' 2' 1⅗' 1⅓' 1'
         val ORG_R = doubleArrayOf(0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 5.0, 6.0, 8.0)
         val ORG_JAZZ = floatArrayOf(0.8f, 1f, 0.6f, 0f, 0f, 0f, 0f, 0f, 0f)
@@ -1617,7 +1623,7 @@ class PolySynth(private val sr: Int, private val t: InstState.SynTrack) {
                 for (i in 0 until cnt) { lp += a * (rnd(v) - lp); buf[i] = lp * amp * 2.2f }
                 v.kw = cnt % buf.size
                 v.nz = 0f
-                v.lp = 0f; v.bp = 0f
+                v.lp = 0f; v.bp = 0f; v.fg = 0f
             }
             28 -> {
                 // ORGAN-BASS: Holz-FM und Klick neu anschlagen
@@ -1671,7 +1677,7 @@ class PolySynth(private val sr: Int, private val t: InstState.SynTrack) {
             if (!sounding) {
                 for (k in v.ph.indices) v.ph[k] = Math.random()
                 v.mph = 0.0
-                v.lp = 0f; v.bp = 0f
+                v.lp = 0f; v.bp = 0f; v.fg = 0f
             }
             if (!legato) { v.stage = 0; v.fenv = 1f; noteInit(v, e.vel) }
             return
@@ -1699,7 +1705,7 @@ class PolySynth(private val sr: Int, private val t: InstState.SynTrack) {
             if (v.env < 0.001f) {
                 for (k in v.ph.indices) v.ph[k] = Math.random()
                 v.mph = 0.0
-                v.lp = 0f; v.bp = 0f
+                v.lp = 0f; v.bp = 0f; v.fg = 0f
             }
             noteInit(v, e.vel)
         }
@@ -1716,7 +1722,8 @@ class PolySynth(private val sr: Int, private val t: InstState.SynTrack) {
         val bl = BassLab
         val m = v.m
         // Spucke: Pitch-Glitches und Noise-Bursts
-        if (m[10] <= 0f && Math.random() < bl.spit * bl.spit * 0.0006) {
+        val ctl = (v.n and 7L) == 1L
+        if (m[10] <= 0f && bl.spit > 0.01f && ctl && rnd(v) * 0.5f + 0.5f < bl.spit * bl.spit * 0.0048f) {
             m[10] = (sr * (0.02 + 0.05 * Math.random())).toFloat()
             m[11] = 2.0.pow((Math.random() * 24 - 12) / 12).toFloat()
             m[12] = if (Math.random() < 0.4) 1f else 0f
@@ -1747,7 +1754,7 @@ class PolySynth(private val sr: Int, private val t: InstState.SynTrack) {
             y = y * (1f - amtHigh * 0.5f) + amtHigh * 0.6f * y * sinT(v.ph[2])
             if (m[15] <= 0f) {
                 val q = 2f.pow(8f - 6f * amtHigh)
-                m[14] = Math.round(y * q) / q
+                m[14] = kotlin.math.round(y * q) / q
                 m[15] = 1f + amtHigh * 6f
             }
             m[15]--
@@ -1760,16 +1767,21 @@ class PolySynth(private val sr: Int, private val t: InstState.SynTrack) {
         var top = y - m[16]
         // Röhre
         val dr = 1.5f + bl.drive * 6f
-        top = (tanh(top * dr + 0.2f) - tanh(0.2f)) * 0.6f / tanh(dr * 0.6f).coerceAtLeast(0.3f)
+        if (ctl) { v.c[1] = 0.6f / tanh(dr * 0.6f).coerceAtLeast(0.3f) }
+        top = (fastTanh(top * dr + 0.2f) - 0.19738f) * v.c[1]
         // Krater: 4-Pol-Ladder mit aggressiver Rückkopplung
-        val oct = bl.craterCut * 8.2f + kick * 3f + amtMid * bub * 1.5f
-        val fc = min(0.45 * sr, 40.0 * 2.0.pow(oct.toDouble()))
-        val g = (1 - exp(-2 * PI * fc / sr)).toFloat()
-        val u = tanh(top - ladK * tanh(m[20] * 1.3f))
-        m[17] += g * (u - tanh(m[17]))
-        m[18] += g * (tanh(m[17]) - tanh(m[18]))
-        m[19] += g * (tanh(m[18]) - tanh(m[19]))
-        m[20] += g * (tanh(m[19]) - tanh(m[20]))
+        if (ctl) {
+            val oct = bl.craterCut * 8.2f + kick * 3f + amtMid * bub * 1.5f
+            val fc = min(0.45 * sr, 40.0 * 2.0.pow(oct.toDouble()))
+            v.c[0] = (1 - exp(-2 * PI * fc / sr)).toFloat()
+        }
+        val g = v.c[0]
+        val u = fastTanh(top - ladK * fastTanh(m[20] * 1.3f))
+        val t17 = fastTanh(m[17]); val t18 = fastTanh(m[18]); val t19 = fastTanh(m[19])
+        m[17] += g * (u - t17)
+        m[18] += g * (t17 - t18)
+        m[19] += g * (t18 - t19)
+        m[20] += g * (t19 - fastTanh(m[20]))
         top = m[20] * (1f + ladK * 0.35f)
         m[13] = top
         return (anchor * bl.sub * 0.9f + top * 0.75f).toDouble()
@@ -1790,8 +1802,12 @@ class PolySynth(private val sr: Int, private val t: InstState.SynTrack) {
         val i1 = (i0 + 1) % sz
         val fr = (rp - kotlin.math.floor(rp)).toFloat()
         val yv = buf[i0] + (buf[i1] - buf[i0]) * fr
-        val tt = if (mode == 2) 0.03 else tightT
-        val loss = exp(-1.0 / (f * tt)).toFloat()
+        val ctl = (v.n and 7L) == 1L
+        if (ctl) {
+            val tt = if (mode == 2) 0.03 else tightT
+            v.c[0] = exp(-1.0 / (f * tt)).toFloat()
+        }
+        val loss = v.c[0]
         val nv = (yv + v.nz) * 0.5f * loss
         v.nz = yv
         buf[v.kw] = nv
@@ -1802,7 +1818,7 @@ class PolySynth(private val sr: Int, private val t: InstState.SynTrack) {
             val pf = f * (1.0 + (if (mode == 2) 1.5 else 4.0) * m[2])
             v.ph[3] += pf / sr; if (v.ph[3] >= 1.0) v.ph[3] -= 1.0
             x += sinT(v.ph[3]) * m[2] * (if (mode == 2) 0.6f else 0.7f)
-            m[2] *= exp(-1.0 / ((if (mode == 2) 0.02 else 0.012) * sr)).toFloat()
+            m[2] *= if (mode == 2) kGhost else kThumb
         }
         // Pop: metallischer Klick
         if (mode == 1 && m[1] > 1e-3f) {
@@ -1810,24 +1826,27 @@ class PolySynth(private val sr: Int, private val t: InstState.SynTrack) {
             val nz = rnd(v)
             m[6] += 0.6f * (nz - m[6])
             x += ((nz - m[6]) * 0.6f + sinT(v.ph[4]) * 0.4f) * m[1]
-            m[1] *= exp(-1.0 / (0.006 * sr)).toFloat()
+            m[1] *= kPop
         }
         // Auto-Wah: schnell auf (Quack), dann unter den Grundwert fallen (Ow)
-        val up = 1f - exp(-tSec / 0.004f)
-        val down = exp(-tSec / (0.12f + 0.3f * (1f - juice)))
-        val wah = up * down
-        val cut = 220.0 * 2.0.pow((0.9 + juice * 4.2 * wah - juice * 1.1 * (1 - down) + (if (mode == 1) 0.8 else 0.0)).coerceIn(-1.0, 6.5))
-        val g = (2 * sin(PI * min(cut, sr * 0.4) / sr)).toFloat()
+        if (ctl) {
+            val up = 1f - exp(-tSec / 0.004f)
+            val down = exp(-tSec / (0.12f + 0.3f * (1f - juice)))
+            val wah = up * down
+            v.c[2] = wah
+            val cut = 220.0 * 2.0.pow((0.9 + juice * 4.2 * wah - juice * 1.1 * (1 - down) + (if (mode == 1) 0.8 else 0.0)).coerceIn(-1.0, 6.5))
+            v.c[1] = (2 * sin(PI * min(cut, sr * 0.4) / sr)).toFloat()
+            v.c[3] = (2 * sin(PI * (325.0 + (800.0 - 325.0) * wah) / sr)).toFloat()
+            v.c[4] = (2 * sin(PI * (700.0 + (1150.0 - 700.0) * wah) / sr)).toFloat()
+        }
+        val g = v.c[1]
         v.lp += g * v.bp
         val hp = x - v.lp - 0.3f * v.bp
         v.bp += g * hp
         var y = v.lp * 0.65f + v.bp * (0.4f + 0.6f * juice)
         // Formant: U → A beim Anschlag, dann zurück („Yow-Waw“)
         if (bl.talk > 0.01f) {
-            val p = wah
-            val f1 = 325.0 + (800.0 - 325.0) * p
-            val f2 = 700.0 + (1150.0 - 700.0) * p
-            val g1 = (2 * sin(PI * f1 / sr)).toFloat(); val g2 = (2 * sin(PI * f2 / sr)).toFloat()
+            val g1 = v.c[3]; val g2 = v.c[4]
             m[8] += g1 * m[9]; val h1 = x - m[8] - 0.15f * m[9]; m[9] += g1 * h1
             m[10] += g2 * m[11]; val h2 = x - m[10] - 0.15f * m[11]; m[11] += g2 * h2
             val form = m[9] * 0.9f + m[11] * 0.55f
@@ -1836,10 +1855,12 @@ class PolySynth(private val sr: Int, private val t: InstState.SynTrack) {
         // 6-stufiger Phaser (langsam), Stärke mit dem Juice
         if (juice > 0.05f) {
             v.mph += 0.25 / sr; if (v.mph >= 1.0) v.mph -= 1.0
-            val lf = 0.5f + 0.5f * sinT(v.mph)
-            val wc = 300.0 * 2.0.pow(lf * 3.0)
-            val tw = (PI * wc / sr).toFloat()
-            val a = (1f - tw) / (1f + tw)
+            if (ctl) {
+                val lf = 0.5f + 0.5f * sinT(v.mph)
+                val tw = (PI * 300.0 * 2.0.pow(lf * 3.0) / sr).toFloat()
+                v.c[5] = (1f - tw) / (1f + tw)
+            }
+            val a = v.c[5]
             var ap = y
             for (k in 0 until 6) {
                 val zi = 12 + k
@@ -1851,15 +1872,22 @@ class PolySynth(private val sr: Int, private val t: InstState.SynTrack) {
         }
         // Band-Sättigung (Disco-Dirt)
         val sat = 1f + juice * 2.5f
-        y = tanh(y * sat) / tanh(sat).coerceAtLeast(0.5f)
+        y = fastTanh(y * sat) / fastTanh(sat).coerceAtLeast(0.5f)
         // Thumb-Sub (808-Sinus), klingt mit der Saite aus
         v.ph[5] += f / sr; if (v.ph[5] >= 1.0) v.ph[5] -= 1.0
-        m[5] *= exp(-1.0 / ((if (mode == 2) 0.04 else tightT * 1.5 + 0.1) * sr)).toFloat()
+        if (ctl) v.c[6] = exp(-1.0 / ((if (mode == 2) 0.04 else tightT * 1.5 + 0.1) * sr)).toFloat()
+        m[5] *= v.c[6]
         y += sinT(v.ph[5]) * m[5] * bl.thumbSub * 0.8f
         return y.toDouble()
     }
 
     private var tapeLp = 0f
+    // feste Abkling-Faktoren (früher je Probe neu berechnet)
+    private val kGhost = exp(-1.0 / (0.02 * sr)).toFloat()
+    private val kThumb = exp(-1.0 / (0.012 * sr)).toFloat()
+    private val kPop = exp(-1.0 / (0.006 * sr)).toFloat()
+    private val kWood = exp(-1.0 / (0.04 * sr)).toFloat()
+    private val kClick = exp(-1.0 / (0.003 * sr)).toFloat()
 
     /** 🎹 ORGAN-BASS: Zugriegel (1', 2', 3', 4' Obertöne), holziger 1:1-FM-Anschlag, Klick, Sub, aufgeräumter Tiefmitten-Bereich. */
     private fun organBass(v: Voice, f: Double): Double {
@@ -1872,17 +1900,17 @@ class PolySynth(private val sr: Int, private val t: InstState.SynTrack) {
         y *= 0.55f
         // Holz: 1:1-FM, Index fällt in ~40 ms
         y += sinT(p + ob.wood * 2.5 * m[0] * sinT(p) / (2 * PI)) * ob.wood * 0.45f
-        m[0] *= exp(-1.0 / (0.04 * sr)).toFloat()
+        m[0] *= kWood
         // Klick (Anschlag)
         if (m[1] > 1e-3f) {
             v.ph[4] += 2600.0 / sr; if (v.ph[4] >= 1.0) v.ph[4] -= 1.0
             y += (sinT(v.ph[4]) * 0.6f + rnd(v) * 0.4f) * m[1] * ob.click
-            m[1] *= exp(-1.0 / (0.003 * sr)).toFloat()
+            m[1] *= kClick
         }
         y += sinT(p) * ob.sub * 0.5f
         // aufräumen: Tiefpass (Ton) + Hochpass 35 Hz
-        val a = (1 - exp(-2 * PI * (600.0 + ob.tone * 4000.0) / sr)).toFloat()
-        m[2] += a * (y - m[2])
+        if ((v.n and 7L) == 1L) v.c[0] = (1 - exp(-2 * PI * (600.0 + ob.tone * 4000.0) / sr)).toFloat()
+        m[2] += v.c[0] * (y - m[2])
         val hpA = (2 * PI * 35.0 / sr).toFloat()
         m[3] += hpA * (m[2] - m[3])
         return ((m[2] - m[3]) * 1.6f).toDouble()
@@ -1907,7 +1935,7 @@ class PolySynth(private val sr: Int, private val t: InstState.SynTrack) {
         val m = v.m
         val dr = Vibe.drift
         for (k in 0 until 2) {
-            if (m[2 + k] <= 0f) { m[4 + k] = rnd(v); m[2 + k] = (sr * (0.2 + 0.6 * Math.random())).toFloat() }
+            if (m[2 + k] <= 0f) { m[4 + k] = rnd(v); m[2 + k] = sr * (0.5f + 0.3f * rnd(v)) }
             m[2 + k]--
             m[k] += (m[4 + k] - m[k]) * 0.00008f
         }
@@ -1917,16 +1945,20 @@ class PolySynth(private val sr: Int, private val t: InstState.SynTrack) {
         val s2 = saw(v, 1, f * d2)
         val osc = ((s1 + s2 * (1f - acid * 0.8f)) * 0.55).toFloat()
         val st = t
-        val oct = st.cutNow() * 7.2f + st.env * (4f + acid * 3.5f) * v.fenv * (0.6f + 0.4f * v.vel) + st.cutMod * 2.5f
-        val fc = min(0.45 * sr, 40.0 * 2.0.pow(oct.toDouble()))
-        val g = (1 - exp(-2 * PI * fc / sr)).toFloat()
+        if ((v.n and 7L) == 1L) {
+            val oct = st.cutNow() * 7.2f + st.env * (4f + acid * 3.5f) * v.fenv * (0.6f + 0.4f * v.vel) + st.cutMod * 2.5f
+            val fc = min(0.45 * sr, 40.0 * 2.0.pow(oct.toDouble()))
+            v.c[0] = (1 - exp(-2 * PI * fc / sr)).toFloat()
+        }
+        val g = v.c[0]
         val k = st.res * (3.4f + acid * 0.9f)
         // Diode-Ladder: leicht asymmetrische Stufen, Rückkopplung vom Ausgang
-        val u = tanh(osc * 1.4f - k * m[9])
-        m[6] += g * (tanh(u + 0.08f * u * u) - tanh(m[6]))
-        m[7] += g * (tanh(m[6]) - tanh(m[7]))
-        m[8] += g * (tanh(m[7]) - tanh(m[8]))
-        m[9] += g * (tanh(m[8]) - tanh(m[9]))
+        val u = fastTanh(osc * 1.4f - k * m[9])
+        val t6 = fastTanh(m[6]); val t7 = fastTanh(m[7]); val t8 = fastTanh(m[8])
+        m[6] += g * (fastTanh(u + 0.08f * u * u) - t6)
+        m[7] += g * (t6 - t7)
+        m[8] += g * (t7 - t8)
+        m[9] += g * (t8 - fastTanh(m[9]))
         var y = m[9] * (1f + k * 0.28f)
         if (Vibe.sub > 0.01f) {
             v.ph[2] += f / sr; if (v.ph[2] >= 1.0) v.ph[2] -= 1.0
@@ -1949,14 +1981,18 @@ class PolySynth(private val sr: Int, private val t: InstState.SynTrack) {
                 queue.removeAll(evs.toSet())
             }
         }
+        // Leerlauf: keine Stimme klingt, nichts kommt an → nichts zu rechnen
+        if (evs.isEmpty() && voices.none { it.active }) { tapeLp = 0f; if (t.wave == 25) BassLab.kick = 0f; return }
         val st = t
         val wave = st.wave
+        // Regler einmal je Block lesen (statt je Probe und Stimme)
+        val cutN = st.cutNow(); val envA = st.env; val cutM = st.cutMod; val resA = st.res
         val atk = (1.0 / ((0.002 + st.atk * st.atk * 2.5) * sr)).toFloat()
         val relC = exp(-1.0 / ((0.02 + st.rel * st.rel * 3.0) * sr)).toFloat()
         val decC = exp(-1.0 / ((if (wave == 3) 0.25 else if (wave == OrganBass.WAVE) 0.03 + OrganBass.decay * OrganBass.decay * 0.9 else 0.6) * sr)).toFloat()
         val sus = when (wave) { 3, 4 -> 0f; 11, 12, 13, 16, 19, 26 -> 1f; 17 -> 0.75f; 25 -> 0.92f; 28 -> if (OrganBass.legato) 0.45f else 0f; else -> 0.8f }
         val fDec = exp(-1.0 / ((if (wave == 3) 0.12 else 0.35) * sr)).toFloat()
-        val q = 1f - st.res * 0.92f
+        val q = 1f - resA * 0.92f
         val vol = st.volNow() * 0.32f
         val spread = st.detune
         val chip = InstState.synIsChip(wave)
@@ -1992,7 +2028,7 @@ class PolySynth(private val sr: Int, private val t: InstState.SynTrack) {
         // Orgel-Register über CUTOFF: Jazz → Gospel → volles Werk
         var orgNorm = 1f
         if (wave == 13) {
-            val r = st.cutNow().coerceIn(0f, 1f)
+            val r = cutN.coerceIn(0f, 1f)
             var sum = 0f
             for (k in 0 until 9) {
                 orgW[k] = if (r < 0.5f) ORG_JAZZ[k] + (ORG_GOSPEL[k] - ORG_JAZZ[k]) * r * 2f else ORG_GOSPEL[k] + (ORG_FULL[k] - ORG_GOSPEL[k]) * (r - 0.5f) * 2f
@@ -2007,9 +2043,13 @@ class PolySynth(private val sr: Int, private val t: InstState.SynTrack) {
         val wobRate = bpmNow / 60.0 * WOB_MULT[(spread * 5.999f).toInt().coerceIn(0, 5)]
         val fmRatio = if (spread < 0.33f) 1.0 else if (spread < 0.66f) 2.0 else 3.0
         val wt = if (InstState.synIsWt(wave)) Wavetables.ready(wave - 20) else null
+        val chipOpen = chip && wave != 8 && cutN > 0.97f
         var ei = 0
+        var kickI = kick0
+        val kickK = exp(-1.0 / (0.25 * sr)).toFloat()
         for (i in 0 until n) {
             while (ei < evs.size && (evs[ei].frame < 0 || evs[ei].frame <= w + i)) { apply(evs[ei]); ei++ }
+            val kickNow = kickI; kickI *= kickK
             var lesV = 0f
             var lesA = 1f
             if (wave == 13) {
@@ -2077,10 +2117,10 @@ class PolySynth(private val sr: Int, private val t: InstState.SynTrack) {
                         // FM-Chip (2 Operatoren mit Rückkopplung, wie OPL/Mega Drive): Index folgt der Filter-Hüllkurve
                         val ratio = if (spread < 0.5f) 1.0 else 2.0
                         v.mph += f * ratio / sr; if (v.mph >= 1.0) v.mph -= 1.0
-                        val fbk = v.nz.toDouble() * (0.2 + st.res * 0.9)
+                        val fbk = v.nz.toDouble() * (0.2 + resA * 0.9)
                         val mod = kotlin.math.sin(2 * PI * v.mph + fbk)
                         v.nz = mod.toFloat()
-                        val idx = 0.4 + (st.env * 4.0) * v.fenv + st.cutNow() * 1.2
+                        val idx = 0.4 + (envA * 4.0) * v.fenv + cutN * 1.2
                         v.ph[0] += f / sr; if (v.ph[0] >= 1.0) v.ph[0] -= 1.0
                         o = kotlin.math.sin(2 * PI * v.ph[0] + idx * mod) * 0.75
                     }
@@ -2095,7 +2135,7 @@ class PolySynth(private val sr: Int, private val t: InstState.SynTrack) {
                         v.ph[0] += f * 8 / sr
                         while (v.ph[0] >= 1.0) {
                             v.ph[0] -= 1.0
-                            val tap = if (st.res > 0.5f) 6 else 1
+                            val tap = if (resA > 0.5f) 6 else 1
                             val bit = (v.lfsr xor (v.lfsr shr tap)) and 1
                             v.lfsr = (v.lfsr shr 1) or (bit shl 14)
                             v.nz = if (v.lfsr and 1 == 0) 0.6f else -0.6f
@@ -2106,6 +2146,7 @@ class PolySynth(private val sr: Int, private val t: InstState.SynTrack) {
                         // Flügel
                         var sum = 0f
                         for (k in 0 until v.np) {
+                            if (v.pa[k] < 1e-5f) continue   // verklungener Teilton: nicht mehr rechnen
                             v.ph[k] += v.inc[k]; if (v.ph[k] >= 1.0) v.ph[k] -= 1.0
                             sum += v.pa[k] * sinT(v.ph[k])
                             v.pa[k] *= v.pd[k]
@@ -2120,7 +2161,7 @@ class PolySynth(private val sr: Int, private val t: InstState.SynTrack) {
                     12 -> {
                         // E-Piano (FM): Körper 1:1 mit abklingendem Index + metallischer Anschlag (14:1), Tremolo über VERSTIMMUNG
                         val vel = v.vel
-                        val bright = st.cutNow()
+                        val bright = cutN
                         v.ph[0] += f / sr; if (v.ph[0] >= 1.0) v.ph[0] -= 1.0
                         v.ph[1] += f / sr; if (v.ph[1] >= 1.0) v.ph[1] -= 1.0
                         v.ph[2] += f * 14.0 / sr; if (v.ph[2] >= 1.0) v.ph[2] -= 1.0
@@ -2145,9 +2186,9 @@ class PolySynth(private val sr: Int, private val t: InstState.SynTrack) {
                             sum += wk * sinT(v.ph[k])
                         }
                         sum *= orgNorm
-                        if (st.env > 0.03f && v.pa[0] > 1e-4f) {
+                        if (envA > 0.03f && v.pa[0] > 1e-4f) {
                             v.ph[9] += fv * 3.0 / sr; if (v.ph[9] >= 1.0) v.ph[9] -= 1.0
-                            sum += v.pa[0] * st.env * 0.8f * sinT(v.ph[9])
+                            sum += v.pa[0] * envA * 0.8f * sinT(v.ph[9])
                             v.pa[0] *= v.pd[0]
                         }
                         if (v.hn > 1e-4f) { sum += rnd(v) * v.hn; v.hn *= clickHd }
@@ -2156,7 +2197,7 @@ class PolySynth(private val sr: Int, private val t: InstState.SynTrack) {
                     14 -> {
                         // Sync-Lead: Slave-Säge an der Master-Phase neu gestartet, Verhältnis über VERSTIMMUNG + Filter-Hüllkurve
                         val dt0 = f / sr
-                        val ratio = 1.5 + spread * 2.5 + st.env * 4.0 * v.fenv
+                        val ratio = 1.5 + spread * 2.5 + envA * 4.0 * v.fenv
                         val dt1 = dt0 * ratio
                         v.ph[0] += dt0
                         if (v.ph[0] >= 1.0) { v.ph[0] -= 1.0; v.ph[1] = v.ph[0] * ratio }
@@ -2179,9 +2220,9 @@ class PolySynth(private val sr: Int, private val t: InstState.SynTrack) {
                     17 -> {
                         // FM-Bass: Modulator (1:1, 2:1 oder 3:1 über VERSTIMMUNG) mit Rückkopplung (RESONANZ), Index folgt der Filter-Hüllkurve
                         v.mph += f * fmRatio / sr; if (v.mph >= 1.0) v.mph -= 1.0
-                        val mod = sinT(v.mph + v.nz * (0.05 + st.res * 0.2))
+                        val mod = sinT(v.mph + v.nz * (0.05 + resA * 0.2))
                         v.nz = mod
-                        val idx = 0.3 + st.env * 6.0 * v.fenv + st.cutNow() * 1.5
+                        val idx = 0.3 + envA * 6.0 * v.fenv + cutN * 1.5
                         v.ph[0] += f / sr; if (v.ph[0] >= 1.0) v.ph[0] -= 1.0
                         v.ph[1] += f * 0.5 / sr; if (v.ph[1] >= 1.0) v.ph[1] -= 1.0
                         o = sinT(v.ph[0] + idx * mod * TWO_PI_INV) * 0.72 + sinT(v.ph[1]) * 0.28
@@ -2220,7 +2261,7 @@ class PolySynth(private val sr: Int, private val t: InstState.SynTrack) {
                     in 20..24 -> {
                         // Wavetable: zwei leicht verstimmte Oszillatoren, Position aus VERSTIMMUNG + Filter-Hüllkurve
                         if (wt == null) o = 0.0 else {
-                            val pos = (spread + st.env * v.fenv * (1f - spread)).coerceIn(0f, 1f) * (Wavetables.FRAMES - 1)
+                            val pos = (spread + envA * v.fenv * (1f - spread)).coerceIn(0f, 1f) * (Wavetables.FRAMES - 1)
                             val f0 = pos.toInt().coerceIn(0, Wavetables.FRAMES - 2)
                             val fr = pos - f0
                             val lvl = Wavetables.level(f * 1.003, sr)
@@ -2240,7 +2281,7 @@ class PolySynth(private val sr: Int, private val t: InstState.SynTrack) {
                             o = sum * 0.8
                         }
                     }
-                    25 -> o = magma(v, f, kick0 * exp(-i / (0.25 * sr)).toFloat(), amtMid, amtHigh, ladK)
+                    25 -> o = magma(v, f, kickNow, amtMid, amtHigh, ladK)
                     26 -> o = funk(v, f, juice, ksTight)
                     27 -> o = vibe(v, f, vAcid)
                     28 -> o = organBass(v, f)
@@ -2269,11 +2310,15 @@ class PolySynth(private val sr: Int, private val t: InstState.SynTrack) {
                     }
                 }
                 var s = o.toFloat()
-                if (!noFilter && !(chip && wave != 8 && st.cutNow() > 0.97f)) {
-                    val oct = if (wave == 18) st.cutNow() * 7.5f + st.env * 6f * wobLfo + st.cutMod * 2.5f
-                              else st.cutNow() * 7.5f + st.env * 4.5f * v.fenv + st.cutMod * 2.5f
-                    val fc = min(0.42f * sr, 60f * 2f.pow(oct))
-                    val g = (2.0 * kotlin.math.sin(PI * fc / sr)).toFloat().coerceAtMost(1.1f)
+                if (!noFilter && !chipOpen) {
+                    // Filter-Koeffizient in Steuer-Rate (alle 8 Proben) – pow/sin je Probe kosteten am meisten
+                    if ((v.n and 7L) == 1L || v.fg == 0f) {
+                        val oct = if (wave == 18) cutN * 7.5f + envA * 6f * wobLfo + cutM * 2.5f
+                                  else cutN * 7.5f + envA * 4.5f * v.fenv + cutM * 2.5f
+                        val fc = min(0.42f * sr, 60f * 2f.pow(oct))
+                        v.fg = (2.0 * kotlin.math.sin(PI * fc / sr)).toFloat().coerceAtMost(1.1f)
+                    }
+                    val g = v.fg
                     // Chamberlin-SVF (Tiefpass)
                     v.lp += g * v.bp
                     val hp = s - v.lp - q * v.bp
@@ -2295,7 +2340,7 @@ class PolySynth(private val sr: Int, private val t: InstState.SynTrack) {
                 val y = tanh(x + 0.12f * vDrive * x * x)
                 tapeLp += (0.55f - 0.35f * vDrive) * (y - tapeLp)
                 out[i] += tapeLp
-            } else out[i] += tanh(mix * vol * 1.2f)
+            } else out[i] += fastTanh(mix * vol * 1.2f)
         }
         if (ei < evs.size) synchronized(lock) { queue.addAll(evs.subList(ei, evs.size)) }
     }

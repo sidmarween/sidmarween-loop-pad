@@ -281,7 +281,9 @@ object Architect {
         if (!on) { lastG = Long.MIN_VALUE; for (t in 0 until T) pos[t] = -1 }
     }
 
+    private var swingNow = 0.0
     private fun stepHit(g: Long, stepLen: Double, sr: Int, root: Int) {
+        swingNow = Engine.swingFrames().toDouble()
         val ch = chaos
         val dens = y
         for (t in 0 until T) {
@@ -300,7 +302,7 @@ object Architect {
             vel *= level[t]
             // Swing (ungerade 16tel später, bis „Afro-Cuban“), Human-Jitter, bei hoher Dichte 1/32-Versatz
             var d = 0.0
-            if (g % 2L != 0L) d += stepLen * 0.42 * ch
+            if (g % 2L != 0L) d += stepLen * 0.42 * ch + swingNow   // eigener Chaos-Swing + Sequenzer-Swing (groovt mit der 909)
             d += (rnd.nextGaussian() * 0.006 * ch * sr).coerceIn(-0.4 * stepLen, 0.4 * stepLen)
             if (dens > 0.6f && rnd.nextFloat() < (dens - 0.6f) * 0.8f) d += stepLen * 0.5
             val di = max(0, d.toInt())

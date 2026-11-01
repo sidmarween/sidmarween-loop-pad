@@ -576,6 +576,8 @@ object Engine {
     }
 
     private fun swingOffset(bar: Long): Long = (swing * 0.5f * bar / STEPS).toLong()
+    /** Swing-Versatz der ungeraden 16tel im laufenden Raster (für Zusatz-Instrumente, damit alle gleich grooven). */
+    fun swingFrames(): Long = swingOffset(seqBar())
     private fun seqStart(): Long = if (masterLen > 0L) masterStart else seqOrigin
 
     /** Taktlänge für taktsynchrone Effekte: Master-Loop, sonst das laufende Instrumenten-Raster (0 = keins). */
@@ -3040,8 +3042,6 @@ object Engine {
             }
             // ATMOS: Mitschnitt (für „Schnipsel einfangen“) und Klangteppich dazu
             Atmos.feed(mL, mR, block, sampleRate)
-            // CHAOS-TRIGGER: zerlegt den laufenden Master (Stutter, Resonatoren, Scratches, Portal)
-            if (Chaos.active()) { Chaos.tick(); Chaos.process(mL, mR, block, w, sampleRate) }
             // Zusatz-Instrumente getrennt rendern: in den Master (mit Lautstärke) und – wenn ein Pad sie aufnimmt – in den Pad-Mitschnitt
             if (xL.size < block) { xL = FloatArray(block); xR = FloatArray(block) }
             val ciX = captureInst
@@ -3053,8 +3053,9 @@ object Engine {
             }
             if (Atmos.active()) {
                 java.util.Arrays.fill(xL, 0, block, 0f); java.util.Arrays.fill(xR, 0, block, 0f)
-                val ml = masterLen
-                val bar0 = if (ml > 0L) (w - masterStart).toDouble() / ml else -1.0
+                // gleiches Takt-Raster wie Sequenzer und Instrumente (auch ohne Master-Loop)
+                val ml = if (masterLen > 0L) masterLen else if (seqPlaying) seqBar() else 0L
+                val bar0 = if (ml > 0L) (w - seqStart()).toDouble() / ml else -1.0
                 Atmos.render(xL, xR, block, sampleRate, bar0, if (ml > 0L) 1.0 / ml else 0.0, 1f)
                 mixX(4)
             }
@@ -3071,7 +3072,7 @@ object Engine {
                 java.util.Arrays.fill(xL, 0, block, 0f); java.util.Arrays.fill(xR, 0, block, 0f)
                 val mic = if (Harmonizer.on && Harmonizer.source == 3) micLatest(block) else null
                 Harmonizer.render(xL, xR, block, sampleRate, mic, 1f)
-                mixX(5)
+                if (Harmonizer.on || Harmonizer.meter > 0f) mixX(5)
             }
             // WOLF: Loop-Zerhacker (Quelle: Loop eines Pads, läuft in dessen Raster)
             if (Wolf.active()) {
@@ -3110,6 +3111,8 @@ object Engine {
                 Vocoder.render(xL, xR, block, sampleRate, if (Vocoder.on) micLatest(block) else null)
                 mixX(11)
             }
+            // CHAOS-TRIGGER: zerlegt den laufenden Master inkl. aller Zusatz-Instrumente (Stutter, Resonatoren, Scratches, Portal)
+            if (Chaos.active()) { Chaos.tick(); Chaos.process(mL, mR, block, w, sampleRate) }
             MasterBus.process(mL, mR, block, sampleRate)
             // Schutz-Limiter: Spitzen (z. B. zwei Decks gleichzeitig) sanft absenken statt hart zu clippen
             safety.process(mL, mR, block)

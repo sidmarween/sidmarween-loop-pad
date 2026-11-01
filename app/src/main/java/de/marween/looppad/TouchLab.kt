@@ -47,6 +47,8 @@ object TouchLab {
         val ph = DoubleArray(16)
         val s = FloatArray(32)
         var lp = 0f; var bp = 0f
+        // Steuer-Rate (alle 8 Proben neu): Frequenz und Filter-Koeffizient
+        var cf = 261.6; var cg = 0.1f
         var r = 4242
         fun nz(): Float { r = r * 1664525 + 1013904223; return ((r ushr 8) / 16777216f) * 2f - 1f }
     }
@@ -110,6 +112,8 @@ object TouchLab {
     )
     /** Ecken: oben links, oben rechts, unten links, unten rechts. */
     val corners = intArrayOf(0, 3, 1, 2)
+    // Formant-Koeffizienten des VOCAL-Modells (einmal je Block)
+    private var vg1 = 0.1f; private var vg2 = 0.1f
     @Volatile var mx = 0.5f
     @Volatile var my = 0.5f
     val w = FloatArray(4) { 0.25f }
@@ -127,9 +131,8 @@ object TouchLab {
             3 -> {
                 // Puls durch zwei Formanten („Ah“), Grund-Vokal wandert leicht mit der Y-Position
                 val x = pulse(v, b, f, sr, 0.3)
-                val f1 = 700.0 + 200 * my; val f2 = 1100.0 + 600 * (1 - my)
                 val i0 = slot * 4
-                val g1 = (2 * sin(PI * f1 / sr)).toFloat(); val g2 = (2 * sin(PI * f2 / sr)).toFloat()
+                val g1 = vg1; val g2 = vg2
                 v.s[i0] += g1 * v.s[i0 + 1]; val h1 = x.toFloat() - v.s[i0] - 0.12f * v.s[i0 + 1]; v.s[i0 + 1] += g1 * h1
                 v.s[i0 + 2] += g2 * v.s[i0 + 3]; val h2 = x.toFloat() - v.s[i0 + 2] - 0.15f * v.s[i0 + 3]; v.s[i0 + 3] += g2 * h2
                 (v.s[i0 + 1] * 0.8f + v.s[i0 + 3] * 0.5f).toDouble()
@@ -197,18 +200,26 @@ object TouchLab {
     fun active(): Boolean = voices.any { it.active } || (mode == SPECTRAL && specPlay) || (mode == MODULAR && Modular.running()) || space > 0.01f && dl.isNotEmpty() && delayTail > 0
 
     private var delayTail = 0
+    private val twBuf = FloatArray(4)
+    private val chBuf = FloatArray(6)
 
     fun render(oL: FloatArray, oR: FloatArray, n: Int, sr: Int, w0: Long, ms: Long, ml: Long) {
         while (true) { val e = q.poll() ?: break; applyEv(e) }
         if (dl.isEmpty()) { dl = FloatArray(sr * 2); dr = FloatArray(sr * 2) }
         val beat = if (ml > 0L) ml / 4.0 else sr * 0.5
         // Morph-Gewichte (bilinear) weich nachführen
-        val tw = floatArrayOf((1 - mx) * my, mx * my, (1 - mx) * (1 - my), mx * (1 - my))
+        val tw = twBuf
+        tw[0] = (1 - mx) * my; tw[1] = mx * my; tw[2] = (1 - mx) * (1 - my); tw[3] = mx * (1 - my)
         for (k in 0 until 4) w[k] += (tw[k] - w[k]) * 0.2f
-        val ch = FloatArray(6)
+        val ch = chBuf; java.util.Arrays.fill(ch, 0f)
         if (mode == MORPH) for (k in 0 until 4) { val c = CHAR[corners[k]]; for (j in 0 until 6) ch[j] += c[j] * w[k] }
         val atk = 1f / (0.004f * sr)
         val rel = exp(-1.0 / (0.25 * sr)).toFloat()
+        // pro Block konstant (früher je Probe und Stimme gerechnet)
+        val decK = exp(-1.0 / ((if (mode == MORPH) ch[4] else 0.8f).coerceAtLeast(0.01f) * sr)).toFloat()
+        val fenvK = exp(-1.0 / (0.2 * sr)).toFloat()
+        vg1 = (2 * sin(PI * (700.0 + 200 * my) / sr)).toFloat(); vg2 = (2 * sin(PI * (1100.0 + 600 * (1 - my)) / sr)).toFloat()
+        val tHeight = if (mode == TERRAIN) terrainAt(terrain, tx.toDouble(), ty.toDouble()).toFloat() * 0.5f + 0.5f else 0f
         var pk = 0f
         val dTime = (beat * 0.75).toInt().coerceIn(100, dl.size - 1)
         for (i in 0 until n) {
@@ -217,12 +228,13 @@ object TouchLab {
                 MORPH, TERRAIN, GESTURE -> for (v in voices) {
                     if (!v.active) continue
                     v.semi += (v.tgt - v.semi) * (if (mode == GESTURE) 0.0015 else 0.004)
-                    val f = hz(v.semi)
-                    val dec = if (mode == MORPH) ch[4] else 0.8f
+                    val ctl = (v.t and 7L) == 0L
+                    if (ctl) v.cf = hz(v.semi)
+                    val f = v.cf
                     val sus = if (mode == MORPH) ch[5] else 0.85f
-                    if (v.gate) { if (v.env < 1f && v.t < sr / 50) v.env = min(1f, v.env + atk) else v.env = sus + (v.env - sus) * exp(-1.0 / (dec * sr)).toFloat() }
+                    if (v.gate) { if (v.env < 1f && v.t < sr / 50) v.env = min(1f, v.env + atk) else v.env = sus + (v.env - sus) * decK }
                     else { v.env *= rel; if (v.env < 1e-4f) { v.active = false; continue } }
-                    v.fenv *= exp(-1.0 / (0.2 * sr)).toFloat()
+                    v.fenv *= fenvK
                     v.t++
                     var x: Float
                     var cut: Float; var res: Float; var drv: Float
@@ -243,7 +255,7 @@ object TouchLab {
                             x = terrainAt(terrain, px, py).toFloat()
                             // DC weg
                             v.s[0] += 0.002f * (x - v.s[0]); x -= v.s[0]
-                            val height = (terrainAt(terrain, tx.toDouble(), ty.toDouble()).toFloat() * 0.5f + 0.5f)
+                            val height = tHeight
                             cut = 3.5f + height * 4.5f; res = 0.2f + height * 0.3f; drv = height * 0.4f
                         }
                         else -> {
@@ -260,8 +272,8 @@ object TouchLab {
                         }
                     }
                     // Filter (SVF Tiefpass) mit gemischtem Charakter
-                    val fc = min(sr / 6.0, 50.0 * 2.0.pow(cut.toDouble()))
-                    val g = (2 * sin(PI * fc / sr)).toFloat()
+                    if (ctl) v.cg = (2 * sin(PI * min(sr / 6.0, 50.0 * 2.0.pow(cut.toDouble())) / sr)).toFloat()
+                    val g = v.cg
                     v.lp += g * v.bp
                     val hp = x - v.lp - (1f - res * 0.9f) * v.bp
                     v.bp += g * hp
