@@ -33,10 +33,10 @@ class BassLabPanel(private val host: View) {
     /** 0 = MAGMA, 1 = FUNK */
     var tab = 0
     private val box = RectF()
-    private val bClose = RectF(); private val tMagma = RectF(); private val tFunk = RectF()
+    private val bClose = RectF(); private val tMagma = RectF(); private val tFunk = RectF(); private val tOrgan = RectF()
     private val bOn = RectF(); private val bNotes = RectF(); private val bPreset = RectF()
     private val visc = RectF()
-    private val sliders = Array(4) { RectF() }
+    private val sliders = Array(6) { RectF() }
     private val crater = RectF()
     private val keys = Array(8) { RectF() }
     private var drag = -1          // 0..3 Regler, 10 Viskosität, 11 Krater
@@ -50,7 +50,8 @@ class BassLabPanel(private val host: View) {
     fun open(t: Int) {
         tab = t
         isOpen = true
-        BassLab.useOn(if (tab == 0) BassLab.MAGMA else BassLab.FUNK)
+        BassLab.useOn(waveOf(tab))
+        if (tab == 2 && OrganBass.preset < 0) OrganBass.apply(0)
         if (tab == 0 && BassLab.mPreset < 0) BassLab.applyMagma(1)
         if (tab == 1 && BassLab.fPreset < 0) BassLab.applyFunk(0)
     }
@@ -58,13 +59,20 @@ class BassLabPanel(private val host: View) {
 
     private val SLM = arrayOf("SUB-ANKER", "SPUCKE", "RÖHRE", "")
     private val SLF = arrayOf("FUNK-JUICE", "SLAP-TIGHTNESS", "THUMB SUB", "TALK (Formant)")
-    private fun get(i: Int): Float = if (tab == 0) when (i) { 0 -> BassLab.sub; 1 -> BassLab.spit; else -> BassLab.drive }
-        else when (i) { 0 -> BassLab.juice; 1 -> BassLab.tight; 2 -> BassLab.thumbSub; else -> BassLab.talk }
+    private val SLO = arrayOf("KLICK", "DECAY", "HOLZ (FM)", "ZUGRIEGEL", "SUB", "AUTO-LEGATO")
+    private fun waveOf(t: Int) = when (t) { 0 -> BassLab.MAGMA; 1 -> BassLab.FUNK; else -> OrganBass.WAVE }
+    private fun get(i: Int): Float = when (tab) {
+        0 -> when (i) { 0 -> BassLab.sub; 1 -> BassLab.spit; else -> BassLab.drive }
+        1 -> when (i) { 0 -> BassLab.juice; 1 -> BassLab.tight; 2 -> BassLab.thumbSub; else -> BassLab.talk }
+        else -> when (i) { 0 -> OrganBass.click; 1 -> OrganBass.decay; 2 -> OrganBass.wood; 3 -> OrganBass.bars; 4 -> OrganBass.sub; else -> if (OrganBass.legato) 1f else 0f }
+    }
     private fun set(i: Int, v: Float) {
         val c = v.coerceIn(0f, 1f)
-        if (tab == 0) when (i) { 0 -> BassLab.sub = c; 1 -> BassLab.spit = c; else -> BassLab.drive = c }
-        else when (i) { 0 -> BassLab.juice = c; 1 -> BassLab.tight = c; 2 -> BassLab.thumbSub = c; else -> BassLab.talk = c }
-        if (tab == 0) BassLab.mPreset = -1 else BassLab.fPreset = -1
+        when (tab) {
+            0 -> { when (i) { 0 -> BassLab.sub = c; 1 -> BassLab.spit = c; else -> BassLab.drive = c }; BassLab.mPreset = -1 }
+            1 -> { when (i) { 0 -> BassLab.juice = c; 1 -> BassLab.tight = c; 2 -> BassLab.thumbSub = c; else -> BassLab.talk = c }; BassLab.fPreset = -1 }
+            else -> { when (i) { 0 -> OrganBass.click = c; 1 -> OrganBass.decay = c; 2 -> OrganBass.wood = c; 3 -> OrganBass.bars = c; 4 -> OrganBass.sub = c; else -> OrganBass.legato = c > 0.5f }; OrganBass.preset = -1 }
+        }
     }
 
     private fun layout(a: RectF) {
@@ -73,8 +81,10 @@ class BassLabPanel(private val host: View) {
         val w = box.width() - 2 * pad
         bClose.set(box.right - pad - bh, box.top + pad, box.right - pad, box.top + pad + bh)
         val r1 = box.top + pad + bh + g
-        tMagma.set(box.left + pad, r1, box.left + pad + (w - g) / 2, r1 + bh)
-        tFunk.set(tMagma.right + g, r1, box.right - pad, r1 + bh)
+        val tw3 = (w - 2 * g) / 3
+        tMagma.set(box.left + pad, r1, box.left + pad + tw3, r1 + bh)
+        tFunk.set(tMagma.right + g, r1, tMagma.right + g + tw3, r1 + bh)
+        tOrgan.set(tFunk.right + g, r1, box.right - pad, r1 + bh)
         val r2 = r1 + bh + g
         bOn.set(box.left + pad, r2, box.left + pad + w * 0.27f, r2 + bh)
         bNotes.set(bOn.right + g, r2, bOn.right + g + w * 0.2f, r2 + bh)
@@ -89,14 +99,15 @@ class BassLabPanel(private val host: View) {
             visc.set(box.left + pad, y, box.right - pad, y + dp(64f))
             y = visc.bottom + g
             for (i in 0 until 3) { val sw = (w - 2 * g) / 3; sliders[i].set(box.left + pad + i * (sw + g), y, box.left + pad + i * (sw + g) + sw, y + sh) }
-            sliders[3].setEmpty()
+            sliders[3].setEmpty(); sliders[4].setEmpty(); sliders[5].setEmpty()
             y += sh + g
             crater.set(box.left + pad, y, box.right - pad, keyTop - dp(18f))
         } else {
             visc.setEmpty(); crater.setEmpty()
-            for (i in 0 until 4) { val r = i / 2; val c = i % 2; val sw = (w - g) / 2; sliders[i].set(box.left + pad + c * (sw + g), y + r * (sh + g), box.left + pad + c * (sw + g) + sw, y + r * (sh + g) + sh) }
-            // Funk: große Spieltasten
-            val kt = sliders[3].bottom + dp(36f)
+            val ns = if (tab == 2) 6 else 4
+            for (i in 0 until 6) { if (i >= ns) { sliders[i].setEmpty(); continue }; val r = i / 2; val c = i % 2; val sw = (w - g) / 2; sliders[i].set(box.left + pad + c * (sw + g), y + r * (sh + g), box.left + pad + c * (sw + g) + sw, y + r * (sh + g) + sh) }
+            // Funk/Orgel: große Spieltasten
+            val kt = sliders[ns - 1].bottom + dp(36f)
             for (k in 0 until 8) keys[k].set(keys[k].left, kt, keys[k].right, box.bottom - pad)
         }
     }
@@ -115,7 +126,7 @@ class BassLabPanel(private val host: View) {
 
     fun draw(c: Canvas, area: RectF, acc: Int) {
         layout(area)
-        val col = if (tab == 0) Color.rgb(255, 110, 40) else Color.rgb(255, 210, 60)
+        val col = when (tab) { 0 -> Color.rgb(255, 110, 40); 1 -> Color.rgb(255, 210, 60); else -> Color.rgb(150, 220, 255) }
         fill.shader = null
         fill.color = Color.argb(225, 0, 0, 0)
         c.drawRect(0f, 0f, host.width.toFloat(), host.height.toFloat(), fill)
@@ -130,17 +141,23 @@ class BassLabPanel(private val host: View) {
         btn(c, bClose, "✕", false, acc)
         btn(c, tMagma, "🌋 MAGMA", tab == 0, Color.rgb(255, 110, 40))
         btn(c, tFunk, "🎸 FUNK-SLAP", tab == 1, Color.rgb(255, 210, 60))
+        btn(c, tOrgan, "🎹 ORGAN-BASS", tab == 2, Color.rgb(150, 220, 255))
         val t = InstState.synTracks[InstState.BASS_TRACK]
         val running = t.on && Engine.seqPlaying
         btn(c, bOn, if (running) "■ STOPP" else "▶ BASSLINE", running, Color.rgb(140, 230, 170))
         btn(c, bNotes, "✏ NOTEN", false, col)
-        val pn = if (tab == 0) BassLab.mPreset.let { if (it >= 0) BassLab.MAGMA_PRESETS[it].name else "VORLAGE" } else BassLab.fPreset.let { if (it >= 0) BassLab.FUNK_PRESETS[it].name else "VORLAGE" }
+        val pn = when (tab) {
+            0 -> BassLab.mPreset.let { if (it >= 0) BassLab.MAGMA_PRESETS[it].name else "VORLAGE" }
+            1 -> BassLab.fPreset.let { if (it >= 0) BassLab.FUNK_PRESETS[it].name else "VORLAGE" }
+            else -> OrganBass.preset.let { if (it >= 0) OrganBass.PRESETS[it].name else "VORLAGE" }
+        }
         btn(c, bPreset, "◀ $pn ▶", true, col)
         if (tab == 0) drawMagma(c) else {
             text.color = Color.argb(180, 255, 255, 255); text.textSize = dp(10f)
-            c.drawText(fitLabel(text, "oben = POP · Mitte = SLAP · unten = GHOST · wischen = Slide", box.width() - dp(24f), dp(10f), dp(7f)), box.centerX(), sliders[3].bottom + dp(22f), text)
+            val last = if (tab == 2) sliders[5] else sliders[3]
+            c.drawText(fitLabel(text, if (tab == 2) "Tasten spielen den Orgel-Bass · wischen = gebunden (Legato)" else "oben = POP · Mitte = SLAP · unten = GHOST · wischen = Slide", box.width() - dp(24f), dp(10f), dp(7f)), box.centerX(), last.bottom + dp(22f), text)
         }
-        for (i in 0 until 4) {
+        for (i in 0 until 6) {
             val r = sliders[i]
             if (r.isEmpty) continue
             fill.color = Color.rgb(40, 30, 26)
@@ -148,7 +165,7 @@ class BassLabPanel(private val host: View) {
             fill.color = Color.argb(160, Color.red(col), Color.green(col), Color.blue(col))
             c.drawRoundRect(RectF(r.left, r.top, r.left + r.width() * get(i), r.bottom), dp(7f), dp(7f), fill)
             text.color = Color.WHITE; text.textSize = dp(10f); text.textAlign = Paint.Align.LEFT
-            c.drawText(fitLabel(text, if (tab == 0) SLM[i] else SLF[i], r.width() * 0.72f, dp(10f), dp(6.5f)), r.left + dp(8f), r.centerY() + dp(3.5f), text)
+            c.drawText(fitLabel(text, when (tab) { 0 -> SLM[i]; 1 -> SLF[i]; else -> SLO[i] }, r.width() * 0.72f, dp(10f), dp(6.5f)), r.left + dp(8f), r.centerY() + dp(3.5f), text)
             text.textAlign = Paint.Align.RIGHT
             c.drawText("${(get(i) * 100).toInt()}", r.right - dp(8f), r.centerY() + dp(3.5f), text)
             text.textAlign = Paint.Align.CENTER
@@ -268,14 +285,17 @@ class BassLabPanel(private val host: View) {
                 if (k >= 0) {
                     keyPtr[id] = k
                     // eigene Spur auf diesen Motor stellen, falls jemand umgeschaltet hat
-                    val want = if (tab == 0) BassLab.MAGMA else BassLab.FUNK
+                    val want = waveOf(tab)
                     if (InstState.synTracks[InstState.BASS_TRACK].wave != want) BassLab.useOn(want)
                     noteOn(k, velAt(k, y), 9000 + id)
                     return
                 }
                 if (!visc.isEmpty && visc.contains(x, y)) { drag = 10; setVisc(x); return }
                 if (!crater.isEmpty && crater.contains(x, y)) { drag = 11; crLastX = x; crLastT = SystemClock.uptimeMillis(); setCrater(x, y); return }
-                for (s in 0 until 4) if (!sliders[s].isEmpty && sliders[s].contains(x, y)) { drag = s; lastX = x; return }
+                for (s in 0 until 6) if (!sliders[s].isEmpty && sliders[s].contains(x, y)) {
+                    if (tab == 2 && s == 5) { OrganBass.legato = !OrganBass.legato; haptic(); onHint?.invoke(if (OrganBass.legato) "AUTO-LEGATO: direkt folgende Noten werden gebunden – rollende Linien, kein Neuanschlag" else "Jede Note neu angeschlagen (perkussiv)"); return }
+                    drag = s; lastX = x; return
+                }
                 if (e.actionMasked == MotionEvent.ACTION_DOWN) tap(x, y)
             }
             MotionEvent.ACTION_MOVE -> for (p in 0 until e.pointerCount) {
@@ -305,7 +325,7 @@ class BassLabPanel(private val host: View) {
                         crLastX = px; crLastT = now
                         setCrater(px, py)
                     }
-                    in 0..3 -> if (p == 0) { set(drag, get(drag) + (px - lastX) / sliders[drag].width()); lastX = px }
+                    in 0..5 -> if (p == 0) { set(drag, get(drag) + (px - lastX) / sliders[drag].width()); lastX = px }
                 }
             }
             MotionEvent.ACTION_UP, MotionEvent.ACTION_POINTER_UP, MotionEvent.ACTION_CANCEL -> {
@@ -333,6 +353,7 @@ class BassLabPanel(private val host: View) {
         when {
             bClose.contains(x, y) -> { close(); haptic() }
             tMagma.contains(x, y) -> { haptic(); tab = 0; BassLab.useOn(BassLab.MAGMA); if (BassLab.mPreset < 0) BassLab.applyMagma(1); onHint?.invoke("🌋 MAGMA auf der BASSLINE · Streifen: flüssig → kochend → Ausbruch · Krater-Pad: Filter, schnell rechts wischen = Drop") }
+            tOrgan.contains(x, y) -> { haptic(); tab = 2; BassLab.useOn(OrganBass.WAVE); if (OrganBass.preset < 0) OrganBass.apply(0); onHint?.invoke("🎹 ORGAN-BASS auf der BASSLINE · kurze, holzige Garage-/Deep-House-Bässe · AUTO-LEGATO für rollende Linien") }
             tFunk.contains(x, y) -> { haptic(); tab = 1; BassLab.useOn(BassLab.FUNK); if (BassLab.fPreset < 0) BassLab.applyFunk(0); onHint?.invoke("🎸 FUNK-SLAP auf der BASSLINE · leise Noten = Ghost, laute/hohe = Pop") }
             bOn.contains(x, y) -> {
                 haptic()
@@ -346,9 +367,12 @@ class BassLabPanel(private val host: View) {
                 if (tab == 0) {
                     BassLab.applyMagma(if (BassLab.mPreset < 0) 0 else BassLab.mPreset + if (left) -1 else 1)
                     onHint?.invoke("🌋 ${BassLab.MAGMA_PRESETS[BassLab.mPreset].name}")
-                } else {
+                } else if (tab == 1) {
                     BassLab.applyFunk(if (BassLab.fPreset < 0) 0 else BassLab.fPreset + if (left) -1 else 1)
                     onHint?.invoke("🎸 ${BassLab.FUNK_PRESETS[BassLab.fPreset].name}")
+                } else {
+                    OrganBass.apply(if (OrganBass.preset < 0) 0 else OrganBass.preset + if (left) -1 else 1)
+                    onHint?.invoke("🎹 ${OrganBass.PRESETS[OrganBass.preset].name}")
                 }
             }
         }

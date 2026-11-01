@@ -268,7 +268,7 @@ object InstState {
     var synCutMod: Float get() = syn.cutMod; set(v) { syn.cutMod = v }
     val synWaveNames = arrayOf("SAW", "SQR", "SUPER", "PLUCK", "GLOCKE", "NES ▢", "NES △", "NOISE", "SID", "GB-WAVE", "FM-CHIP",
         "PIANO", "E-PIANO", "ORGEL", "SYNC-LEAD", "REESE", "SUB-BASS", "FM-BASS", "WOBBLE", "SAITE",
-        "WT ANALOG", "WT VOCAL", "WT GROWL", "WT DIGITAL", "WT SAMPLE", "MAGMA", "FUNK-SLAP", "VIBE")
+        "WT ANALOG", "WT VOCAL", "WT GROWL", "WT DIGITAL", "WT SAMPLE", "MAGMA", "FUNK-SLAP", "VIBE", "ORGAN-BASS")
     fun synIsWt(w: Int) = w in 20..24
     /** Chiptune-Klänge (Klang-Nr. 5–10): Akkorde laufen als schnelles Chip-Arpeggio, Lautstärke in 16 Stufen. */
     fun synIsChip(w: Int) = w in 5..10
@@ -287,6 +287,7 @@ object InstState {
         Triple("Lead", 19, "Saite (gezupft: Gitarre, Harfe) – VERST. = Nachklang"),
         Triple("Bass", 25, "🌋 MAGMA – Viskosität, Krater-Filter, Spucke (Bass-Labor)"),
         Triple("Bass", 26, "🎸 FUNK-SLAP – Slap/Pop/Ghost, Auto-Wah, sprechender Formant (Bass-Labor)"),
+        Triple("Bass", 28, "🎹 ORGAN-BASS – perkussiver Garage-/Deep-House-Orgelbass (Bass-Labor)"),
         Triple("Bass", 17, "FM-Bass (DX-Art) – VERST. = Obertöne"),
         Triple("Bass", 15, "Reese-Bass (DnB) – VERST. = Schwebung"),
         Triple("Bass", 16, "Sub-Bass (Sinus, 808) – VERST. = Wärme/Drive"),
@@ -1618,6 +1619,10 @@ class PolySynth(private val sr: Int, private val t: InstState.SynTrack) {
                 v.nz = 0f
                 v.lp = 0f; v.bp = 0f
             }
+            28 -> {
+                // ORGAN-BASS: Holz-FM und Klick neu anschlagen
+                v.m[0] = 1f; v.m[1] = 1f
+            }
             25 -> {
                 // MAGMA: Blubber-LFOs neu, Glitch aus
                 java.util.Arrays.fill(v.m, 0f)
@@ -1856,6 +1861,33 @@ class PolySynth(private val sr: Int, private val t: InstState.SynTrack) {
 
     private var tapeLp = 0f
 
+    /** 🎹 ORGAN-BASS: Zugriegel (1', 2', 3', 4' Obertöne), holziger 1:1-FM-Anschlag, Klick, Sub, aufgeräumter Tiefmitten-Bereich. */
+    private fun organBass(v: Voice, f: Double): Double {
+        val ob = OrganBass
+        val m = v.m
+        v.ph[0] += f / sr; if (v.ph[0] >= 1.0) v.ph[0] -= 1.0
+        val p = v.ph[0]
+        val b = ob.bars
+        var y = sinT(p) + sinT(p * 2) * b * 0.7f + sinT(p * 3) * b * b * 0.45f + sinT(p * 4) * b * b * b * 0.3f
+        y *= 0.55f
+        // Holz: 1:1-FM, Index fällt in ~40 ms
+        y += sinT(p + ob.wood * 2.5 * m[0] * sinT(p) / (2 * PI)) * ob.wood * 0.45f
+        m[0] *= exp(-1.0 / (0.04 * sr)).toFloat()
+        // Klick (Anschlag)
+        if (m[1] > 1e-3f) {
+            v.ph[4] += 2600.0 / sr; if (v.ph[4] >= 1.0) v.ph[4] -= 1.0
+            y += (sinT(v.ph[4]) * 0.6f + rnd(v) * 0.4f) * m[1] * ob.click
+            m[1] *= exp(-1.0 / (0.003 * sr)).toFloat()
+        }
+        y += sinT(p) * ob.sub * 0.5f
+        // aufräumen: Tiefpass (Ton) + Hochpass 35 Hz
+        val a = (1 - exp(-2 * PI * (600.0 + ob.tone * 4000.0) / sr)).toFloat()
+        m[2] += a * (y - m[2])
+        val hpA = (2 * PI * 35.0 / sr).toFloat()
+        m[3] += hpA * (m[2] - m[3])
+        return ((m[2] - m[3]) * 1.6f).toDouble()
+    }
+
     /** One-Finger-Akkord des Vibe-Synths: Einzelnote → gewählter Club-Akkord; Akkord der Folge → mit passender Erweiterung. */
     private fun vibeChord(iv: IntArray): IntArray {
         if (iv.size <= 1) return Vibe.CHORDS[Vibe.chord.coerceIn(0, Vibe.CHORDS.size - 1)]
@@ -1921,14 +1953,14 @@ class PolySynth(private val sr: Int, private val t: InstState.SynTrack) {
         val wave = st.wave
         val atk = (1.0 / ((0.002 + st.atk * st.atk * 2.5) * sr)).toFloat()
         val relC = exp(-1.0 / ((0.02 + st.rel * st.rel * 3.0) * sr)).toFloat()
-        val decC = exp(-1.0 / ((if (wave == 3) 0.25 else 0.6) * sr)).toFloat()
-        val sus = when (wave) { 3, 4 -> 0f; 11, 12, 13, 16, 19, 26 -> 1f; 17 -> 0.75f; 25 -> 0.92f; else -> 0.8f }
+        val decC = exp(-1.0 / ((if (wave == 3) 0.25 else if (wave == OrganBass.WAVE) 0.03 + OrganBass.decay * OrganBass.decay * 0.9 else 0.6) * sr)).toFloat()
+        val sus = when (wave) { 3, 4 -> 0f; 11, 12, 13, 16, 19, 26 -> 1f; 17 -> 0.75f; 25 -> 0.92f; 28 -> if (OrganBass.legato) 0.45f else 0f; else -> 0.8f }
         val fDec = exp(-1.0 / ((if (wave == 3) 0.12 else 0.35) * sr)).toFloat()
         val q = 1f - st.res * 0.92f
         val vol = st.volNow() * 0.32f
         val spread = st.detune
         val chip = InstState.synIsChip(wave)
-        val noFilter = wave == 4 || wave == 10 || wave in 11..13 || wave == 16 || wave == 17 || wave == 19 || wave == 25 || wave == 26 || wave == 27
+        val noFilter = wave == 4 || wave == 10 || wave in 11..13 || wave == 16 || wave == 17 || wave == 19 || wave == 25 || wave == 26 || wave == 27 || wave == 28
         // Bass-Labor
         val bl = BassLab
         val kick0 = if (wave == 25) bl.kick else 0f
@@ -2211,6 +2243,7 @@ class PolySynth(private val sr: Int, private val t: InstState.SynTrack) {
                     25 -> o = magma(v, f, kick0 * exp(-i / (0.25 * sr)).toFloat(), amtMid, amtHigh, ladK)
                     26 -> o = funk(v, f, juice, ksTight)
                     27 -> o = vibe(v, f, vAcid)
+                    28 -> o = organBass(v, f)
                     1 -> {
                         val dt = f / sr
                         v.ph[0] += dt; if (v.ph[0] >= 1.0) v.ph[0] -= 1.0

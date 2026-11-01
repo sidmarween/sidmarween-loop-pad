@@ -63,8 +63,9 @@ object BassLab {
         val t = InstState.synTracks[InstState.BASS_TRACK]
         t.wave = wave
         t.mono = true
-        if (t.glide < 0.05f) t.glide = if (wave == FUNK) 0.12f else 0.2f
-        t.atk = 0f; t.rel = if (wave == FUNK) 0.08f else 0.15f
+        if (t.glide < 0.05f) t.glide = if (wave == FUNK) 0.12f else if (wave == OrganBass.WAVE) 0f else 0.2f
+        if (wave == OrganBass.WAVE) t.glide = 0f
+        t.atk = 0f; t.rel = if (wave == FUNK) 0.08f else if (wave == OrganBass.WAVE) 0.06f else 0.15f
         t.vol = 0.7f
         if (t.oct > -1) t.oct = -1
         t.on = true
@@ -72,7 +73,7 @@ object BassLab {
             val old = InstState.synCur
             InstState.synCur = InstState.BASS_TRACK
             val list = InstPresets.SYNTHS.filter { it.genre == "Bassline" }
-            val p = list.firstOrNull { if (wave == FUNK) it.name.contains("Funk") else it.name.contains("Reese") } ?: list.first()
+            val p = list.firstOrNull { when (wave) { FUNK -> it.name.contains("Funk"); OrganBass.WAVE -> it.name.contains("Organ"); else -> it.name.contains("Reese") } } ?: list.first()
             InstPresets.applySynth(p)
             t.wave = wave; t.mono = true
             if (wave == FUNK) { for (k in 0 until t.len) if (t.gate[k] && !t.tie[k] && k % 4 == 3) t.vel[k] = 0.35f } // Ghost-Notes

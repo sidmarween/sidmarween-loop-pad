@@ -420,6 +420,8 @@ object InstPresets {
         Synth("Wavetable", "Eigenes Sample als Fläche", 100, 24, 0, 0, 0.7f, 0.1f, 0.4f, 0.3f, 0.6f, 0.3f, 4,
             cr(intArrayOf(0, 16), 0, 2, -4, 1, -7, 1, -5, 1)),
         // ---- Bassline (zweiter Bass-Sequenzer: MONO mit GLIDE)
+        Synth("Bassline", "Organ-Bass (Garage, Show-Me-Love-Stil)", 124, 28, 0, -1, 0.5f, 0f, 0f, 0f, 0.06f, 0.2f, 2,
+            n(0, 0, 1, 3, 0, 1, 6, 12, 1, 8, 0, 1, 10, 10, 1, 11, 0, 1, 14, 3, 1, 16, -2, 1, 19, -2, 1, 22, 10, 1, 24, -4, 1, 27, -4, 1, 30, 8, 1), mono = true),
         Synth("Bassline", "FM-Bass (Funk)", 110, 17, 0, -1, 0.4f, 0.3f, 0.55f, 0f, 0.1f, 0.2f, 1,
             n(0, 0, 2, 3, 0, 1, 4, 12, 1, 6, 10, 1, 7, 12, 1, 8, 0, 2, 11, 3, 1, 12, 5, 2, 14, 7, 1, 15, 10, 1), mono = true, glide = 0.15f),
         Synth("Bassline", "Reese (Drum & Bass)", 174, 15, 0, -2, 0.42f, 0.2f, 0.25f, 0f, 0.2f, 0.5f, 2,

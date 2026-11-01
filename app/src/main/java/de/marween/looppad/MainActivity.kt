@@ -1951,7 +1951,8 @@ class MainActivity : Activity() {
                 Item("🔊 ACID 303 · Acid-Bass" + st(InstState.acidOn && InstState.acidHasNotes())) { pad(); pads.openInstEditor(1) },
                 Item("🎸 BASSLINE · zweiter Bass-Sequenzer (FM, Reese, Sub, Wobble)") { synthTrack(InstState.BASS_TRACK, true) },
                 Item("🌋 MAGMA · flüssiger Monster-Bass (Viskosität, Krater, Spucke)") { pad(); pads.openBassLab(0) },
-                Item("🎸 FUNK-SLAP · Slap & Pop, Auto-Wah, sprechender Bass") { pad(); pads.openBassLab(1) }
+                Item("🎸 FUNK-SLAP · Slap & Pop, Auto-Wah, sprechender Bass") { pad(); pads.openBassLab(1) },
+                Item("🎹 ORGAN-BASS · Garage/Deep-House-Orgelbass (Show-Me-Love-Stil)") { pad(); pads.openBassLab(2) }
             ),
             "🎹 TASTEN & SYNTHS" to listOf(
                 Item("🎹 SYNTH 1–3 · Lead, Fläche, Bass (polyfon, Akkorde, Arpeggiator)") { synthTrack(0, false) },

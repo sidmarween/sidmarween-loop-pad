@@ -281,7 +281,9 @@ object Engine {
                 if (skip) continue
                 val iv = InstState.chordOf(t, k)
                 val vel = grooveVel(2 + ti, n, t.vel[k])
-                val offAt = f + stepLen * len - stepLen / 8
+                // ORGAN-BASS mit AUTO-LEGATO: direkt folgende Noten überlappen → gebunden statt neu angeschlagen
+                val legatoNext = t.wave == OrganBass.WAVE && OrganBass.legato && t.gate[(k + len) % sl] && !t.tie[(k + len) % sl]
+                val offAt = if (legatoNext) f + stepLen * len + stepLen / 4 else f + stepLen * len - stepLen / 8
                 if (Midi.internalOn(2 + ti)) {
                     sy.queue(f, true, semi, vel, tag, iv)
                     sy.queue(offAt, false, 0, 0f, tag)
