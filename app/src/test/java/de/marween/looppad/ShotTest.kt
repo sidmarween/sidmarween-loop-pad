@@ -104,6 +104,11 @@ class ShotTest {
         InstPresets.applySynth(InstPresets.SYNTHS.first { it.genre == "Bassline" })
         pv.openSynthEditor()
         shot(pv, w, h, "bass_${tag}")
+        pv.openWolf()
+        Wolf.applyPreset(0)
+        for (k in 0 until 16) Wolf.planView[k] = if (k % 5 == 3) (k % 9) + 1 else 0
+        shot(pv, w, h, "wolf_${tag}")
+        pv.wolf.close()
     }
 
     @Test @Config(qualifiers = "w360dp-h800dp-xxhdpi") fun normal() { pads("n"); dj("n"); song("n") }
