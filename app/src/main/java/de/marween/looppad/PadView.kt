@@ -8659,7 +8659,7 @@ class PadView(context: Context) : View(context) {
                     else -> "HALTEN: Aufnahme läuft, solange der Finger liegt."
                 }
                 fxBadgeRect(i, iconRect)
-                if (iconRect.contains(x, y)) return Triple(RectF(iconRect), "FX des Pads", "Eigene Effekt-Kette für Pad ${i + 1} mit bis zu 3 Effekten (die Punkte zeigen die belegten Plätze). Antippen = an/aus, lange drücken = Effekte wählen und einstellen. Unabhängig davon wirkt die XY-Fläche auf alle Pads mit „Effekt (XY)“ im •••-Menü.")
+                if (showFxBadge && iconRect.contains(x, y)) return Triple(RectF(iconRect), "FX des Pads", "Eigene Effekt-Kette für Pad ${i + 1} mit bis zu 3 Effekten (die Punkte zeigen die belegten Plätze). Antippen = an/aus, lange drücken = Effekte wählen und einstellen. Unabhängig davon wirkt die XY-Fläche auf alle Pads mit „Effekt (XY)“ im •••-Menü.")
                 importRect(i, iconRect)
                 if (!Engine.hasLoop(i) && iconRect.contains(x, y)) return Triple(RectF(iconRect), "📂 Laden", "WAV/MP3-Datei, Bibliothek oder eigene Aufnahme laden. Tempo und Länge werden erkannt und der Clip auf das Master-Tempo gewarpt (Tonhöhe bleibt). Danach wartet er – antippen startet ihn auf der Eins.")
                 val gestures = " Gesten: ← wischen = löschen, ↕ wischen = Lautstärke, zwei Finger = stumm (lang: Solo)."
