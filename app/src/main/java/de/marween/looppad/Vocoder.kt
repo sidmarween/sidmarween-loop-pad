@@ -94,7 +94,7 @@ object Vocoder {
                 // Synthese: obere Bänder bekommen Rauschen (S, T, K)
                 val src = if (k >= N - 4) c * (1f - sibilance) + nz * sibilance * 2f else c
                 cLp[k] += gC[k] * cBp[k]; val hc = src - cLp[k] - q * cBp[k]; cBp[k] += gC[k] * hc
-                val y = cBp[k] * env[k] * 6f
+                val y = cBp[k] * env[k] * 0.15f
                 if (k % 2 == 0) { outL += y; outR += y * 0.7f } else { outL += y * 0.7f; outR += y }
             }
             val g = level

@@ -157,8 +157,9 @@ object FxGen {
                     }
                 }
                 val gl = vol * (0.5f + 0.5f * k)
-                oL[i] += l * gl; oR[i] += r * gl
-                val a = abs(l * gl)
+                val yl = tanh((l * gl * 0.55f).toDouble()).toFloat(); val yr = tanh((r * gl * 0.55f).toDouble()).toFloat()
+                oL[i] += yl; oR[i] += yr
+                val a = abs(yl)
                 if (a > pk) pk = a
             }
         }
