@@ -740,7 +740,7 @@ class MainActivity : Activity() {
 
     /** Reiter „Instrumente“: ACID 303, DRUM 909 und SYNTH einzeln oder zusammen als Eingang. */
     private fun showInstSourcePicker(p: Int) {
-        val names = arrayOf("🔊 ACID 303 (Bass)", "🥁 DRUM 909 (Drumcomputer)", "🎹 SYNTH, KEYS, BASSLINE", "⬡ EUKLID (Polyrhythmen)", "🌌 ATMOS (Klangteppich)", "🎤 HARMONIZER (Chor)", "🐺 WOLF (Loop-Zerhacker)")
+        val names = arrayOf("🔊 ACID 303 (Bass)", "🥁 DRUM 909 (Drumcomputer)", "🎹 SYNTH, KEYS, BASSLINE", "⬡ EUKLID (Polyrhythmen)", "🌌 ATMOS (Klangteppich)", "🎤 HARMONIZER (Chor)", "🐺 WOLF (Loop-Zerhacker)", "🧬 RHYTHM ARCHITECT")
         val m0 = if (Engine.padSource[p] == 3) Engine.padInstMask[p] else 7
         val checked = BooleanArray(names.size) { (m0 shr it) and 1 != 0 }
         ui()
@@ -1944,7 +1944,8 @@ class MainActivity : Activity() {
             "🎸 BASSLINE · zweiter Bass-Sequenzer (FM, Reese, Sub, Wobble)",
             "🐺 WOLF · Loop-Zerhacker (dreht Loops durch den Wolf)" + st(Wolf.on),
             "🎲 GROOVE-GENERATOR · kompletter Beat auf Knopfdruck",
-            "🧪 WAVETABLE · Klangformen durchfahren (Growl, Vocal, Digital …)"
+            "🧪 WAVETABLE · Klangformen durchfahren (Growl, Vocal, Digital …)",
+            "🧬 RHYTHM ARCHITECT · Polyrhythmus- & Textur-Synth" + st(Architect.on)
         )
         ui().setTitle("🎹 Weitere Instrumente")
             .setItems(items) { _, w ->
@@ -1969,6 +1970,11 @@ class MainActivity : Activity() {
                         if (djMode) switchMode(false)
                         pads.openSynthEditor()
                         showWavetablePresets()
+                    }
+                    9 -> {
+                        if (djMode) switchMode(false)
+                        pads.openArchitect()
+                        hint("🧬 ▶ START · Zellen antippen = Wahrscheinlichkeit 100/75/50/25 %/aus · Spurname = Klang · ◂ ▸ = Spurlänge")
                     }
                     else -> {
                         if (djMode) switchMode(false)
@@ -4003,7 +4009,7 @@ class MainActivity : Activity() {
 
     /** 💾 Ein Klick: alles, was gerade läuft, einmal im Takt aufnehmen – jede Spur als eigene WAV + Gesamtmix, nach Musik/Marv PAD. */
     private fun exportAllWaves() {
-        val any = (0 until PadView.VISIBLE_PADS).any { Engine.hasLoop(it) } || (0 until InstState.INSTS).any { InstState.instHasNotes(it) } || Euclid.on || Atmos.on || Wolf.on
+        val any = (0 until PadView.VISIBLE_PADS).any { Engine.hasLoop(it) } || (0 until InstState.INSTS).any { InstState.instHasNotes(it) } || Euclid.on || Atmos.on || Wolf.on || Architect.on
         if (!any) { toast("Noch läuft nichts – erst Pads oder Instrumente füllen"); return }
         if (android.os.Build.VERSION.SDK_INT < 29) { toast("Braucht Android 10 oder neuer – sonst Menü › Exportieren › Song + Stems"); return }
         var bars = 8
