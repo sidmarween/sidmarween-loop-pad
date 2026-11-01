@@ -11,7 +11,7 @@ import kotlin.math.min
 object StemRecorder {
     /** 0–7 Instrumente (5 = Slicer/Ghost), 8–19 die Pads 1–12 einzeln, 20–23 EUKLID, ATMOS, HARMONIZER, WOLF. */
     val NAMES = arrayOf("ACID", "DRUM", "SYNTH1", "SYNTH2", "SYNTH3", "SLICER", "KEYS", "BASSLINE") +
-        Array(12) { "PAD%02d".format(it + 1) } + arrayOf("EUKLID", "ATMOS", "HARMONIZER", "WOLF", "ARCHITECT", "ORBITS")
+        Array(12) { "PAD%02d".format(it + 1) } + arrayOf("EUKLID", "ATMOS", "HARMONIZER", "WOLF", "ARCHITECT", "ORBITS", "TOUCH-LAB")
     const val PAD0 = 8
     const val X0 = 20
     val COUNT = NAMES.size

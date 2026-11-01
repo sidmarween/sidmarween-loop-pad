@@ -740,7 +740,7 @@ class MainActivity : Activity() {
 
     /** Reiter „Instrumente“: ACID 303, DRUM 909 und SYNTH einzeln oder zusammen als Eingang. */
     private fun showInstSourcePicker(p: Int) {
-        val names = arrayOf("🔊 ACID 303 (Bass)", "🥁 DRUM 909 (Drumcomputer)", "🎹 SYNTH, KEYS, BASSLINE", "⬡ EUKLID (Polyrhythmen)", "🌌 ATMOS (Klangteppich)", "🎤 HARMONIZER (Chor)", "🐺 WOLF (Loop-Zerhacker)", "🧬 RHYTHM ARCHITECT", "🪐 ORBITS")
+        val names = arrayOf("🔊 ACID 303 (Bass)", "🥁 DRUM 909 (Drumcomputer)", "🎹 SYNTH, KEYS, BASSLINE", "⬡ EUKLID (Polyrhythmen)", "🌌 ATMOS (Klangteppich)", "🎤 HARMONIZER (Chor)", "🐺 WOLF (Loop-Zerhacker)", "🧬 RHYTHM ARCHITECT", "🪐 ORBITS", "🖐 TOUCH-LAB")
         val m0 = if (Engine.padSource[p] == 3) Engine.padInstMask[p] else 7
         val checked = BooleanArray(names.size) { (m0 shr it) and 1 != 0 }
         ui()
@@ -1944,7 +1944,8 @@ class MainActivity : Activity() {
                 Item("⬡ EUKLID · generative Polyrhythmen" + st(Euclid.on)) { if (djMode) dj.openEuclid() else pads.openEuclid(); hint("▶ START – drei Regler: Schläge, Taktlänge, Morphing") },
                 Item("🧬 RHYTHM ARCHITECT · Polyrhythmus- & Textur-Synth" + st(Architect.on)) { pad(); pads.openArchitect(); hint("🧬 ▶ START · Zellen antippen = Wahrscheinlichkeit 100/75/50/25 %/aus · Spurname = Klang · ◂ ▸ = Spurlänge") },
                 Item("🪐 ORBITS · Gravitations-Synth (Satelliten & Kollisionen)" + st(Orbits.on)) { pad(); pads.openOrbits(); hint("🪐 ▶ START · Satelliten antippen/ziehen · leere Fläche = Gravity Well") },
-                Item("🎲 GROOVE-GENERATOR · kompletter Beat auf Knopfdruck") { pad(); showGrooveGen() }
+                Item("🎲 GROOVE-GENERATOR · kompletter Beat auf Knopfdruck") { pad(); showGrooveGen() },
+                Item("🧫 GROOVE ORGANISM · der 909-Beat entwickelt sich selbst" + st(GrooveOrganism.on)) { pad(); pads.openOrganism(); hint("🧫 ▶ LEBEN – an jeder Eins verändert sich der Beat innerhalb deiner Regeln") }
             ),
             "🎸 BASS" to listOf(
                 Item("🔊 ACID 303 · Acid-Bass" + st(InstState.acidOn && InstState.acidHasNotes())) { pad(); pads.openInstEditor(1) },
@@ -1969,6 +1970,13 @@ class MainActivity : Activity() {
                             hint("👾 ${p.name} – Knopf KLANG wechselt NES ▢ / NES △ / NOISE / SID · ▶ startet")
                         }.show()
                 }
+            ),
+            "🖐 TOUCH-INSTRUMENTE" to listOf(
+                Item("🎚 TIMBRE MORPH MATRIX · 4 Klänge in den Ecken, Finger mischt Charakter") { pad(); pads.openTouch(TouchLab.MORPH) },
+                Item("🏔 WAVE TERRAIN · Klanglandschaft mit dem Finger erkunden") { pad(); pads.openTouch(TouchLab.TERRAIN) },
+                Item("🎨 SPECTRAL PAINTER · Klang ins Spektrum malen" + st(TouchLab.specPlay)) { pad(); pads.openTouch(TouchLab.SPECTRAL) },
+                Item("👋 GESTEN-INSTRUMENT · Kreisen, Wischen, Mehrfinger-Akkorde") { pad(); pads.openTouch(TouchLab.GESTURE) },
+                Item("🔌 TOUCH MODULAR · Module mit Kabeln verbinden" + st(Modular.drone)) { pad(); pads.openTouch(TouchLab.MODULAR) }
             ),
             "🌌 FLÄCHEN & STIMME" to listOf(
                 Item("🌌 ATMOS · Klangteppich & Drones" + st(Atmos.on)) { openAtmos() },
@@ -4017,7 +4025,7 @@ class MainActivity : Activity() {
 
     /** 💾 Ein Klick: alles, was gerade läuft, einmal im Takt aufnehmen – jede Spur als eigene WAV + Gesamtmix, nach Musik/Marv PAD. */
     private fun exportAllWaves() {
-        val any = (0 until PadView.VISIBLE_PADS).any { Engine.hasLoop(it) } || (0 until InstState.INSTS).any { InstState.instHasNotes(it) } || Euclid.on || Atmos.on || Wolf.on || Architect.on || Orbits.on
+        val any = (0 until PadView.VISIBLE_PADS).any { Engine.hasLoop(it) } || (0 until InstState.INSTS).any { InstState.instHasNotes(it) } || Euclid.on || Atmos.on || Wolf.on || Architect.on || Orbits.on || TouchLab.specPlay || Modular.drone
         if (!any) { toast("Noch läuft nichts – erst Pads oder Instrumente füllen"); return }
         if (android.os.Build.VERSION.SDK_INT < 29) { toast("Braucht Android 10 oder neuer – sonst Menü › Exportieren › Song + Stems"); return }
         var bars = 8

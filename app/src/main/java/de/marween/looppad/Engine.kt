@@ -208,6 +208,7 @@ object Engine {
 
     private fun instStep(n: Long, base: Long, w: Long, stepLen: Long) {
         val st = InstState
+        if (Math.floorMod(n, 16L) == 0L && GrooveOrganism.on) GrooveOrganism.onBar()
         if (scOn && scSource == 1 && Math.floorMod(n, 4L) == 0L) scKick(base)
         var f = base + grooveOff(0, n, stepLen)
         val a = acid
@@ -831,6 +832,9 @@ object Engine {
         BassLab.mPreset = -1; BassLab.fPreset = -1
         GrooveGen.made = false
         Chaos.armed = false; Chaos.marrow = 0f; Chaos.scratch = 0f
+        GrooveOrganism.on = false; GrooveOrganism.frozen = false; java.util.Arrays.fill(GrooveOrganism.locked, false)
+        TouchLab.specPlay = false; TouchLab.allOff(); for (r in TouchLab.spec) java.util.Arrays.fill(r, 0f)
+        Modular.drone = false; Modular.reset()
     }
 
     /** Rendert das Sequenzer-Pattern als nahtlosen Ein-Takt-Loop. */
@@ -3079,6 +3083,12 @@ object Engine {
                 Orbits.render(xL, xR, block, sampleRate, w, seqStart(), seqBar())
                 mixX(8)
             }
+            // TOUCH-LAB: Morph-Matrix, Wave Terrain, Spectral Painter, Gesten, Touch Modular
+            if (TouchLab.active()) {
+                java.util.Arrays.fill(xL, 0, block, 0f); java.util.Arrays.fill(xR, 0, block, 0f)
+                TouchLab.render(xL, xR, block, sampleRate, w, seqStart(), seqBar())
+                mixX(9)
+            }
             MasterBus.process(mL, mR, block, sampleRate)
             // Schutz-Limiter: Spitzen (z. B. zwei Decks gleichzeitig) sanft absenken statt hart zu clippen
             safety.process(mL, mR, block)
@@ -3357,7 +3367,7 @@ object Engine {
     @Volatile private var captureInst = 0
     /** Bei Eingang 3: welche Instrumente (Bit 0 ACID 303, Bit 1 DRUM 909, Bit 2 SYNTH, 3 EUKLID, 4 ATMOS, 5 HARMONIZER). */
     val padInstMask = IntArray(PADS) { 7 }
-    val INST_NAMES = arrayOf("ACID 303", "DRUM 909", "SYNTH", "EUKLID", "ATMOS", "HARMONIZER", "WOLF", "ARCHITECT", "ORBITS")
+    val INST_NAMES = arrayOf("ACID 303", "DRUM 909", "SYNTH", "EUKLID", "ATMOS", "HARMONIZER", "WOLF", "ARCHITECT", "ORBITS", "TOUCH-LAB")
     private var padRing = FloatArray(0)
 
     fun maskPads(m: Int): List<Int> = (0 until PADS).filter { (m shr it) and 1 != 0 }
@@ -3622,6 +3632,7 @@ object Engine {
                 if ((im and 64) != 0 && Wolf.on) { Wolf.on = false; off.add("WOLF") }
                 if ((im and 128) != 0 && Architect.on) { Architect.on = false; off.add("RHYTHM ARCHITECT") }
                 if ((im and 256) != 0 && Orbits.on) { Orbits.on = false; off.add("ORBITS") }
+                if ((im and 512) != 0 && TouchLab.specPlay) { TouchLab.specPlay = false; off.add("TOUCH-LAB") }
                 if (off.isNotEmpty()) onBouncedInst?.invoke(p, off.joinToString(", "))
             }
             onRecorded?.invoke(p, data.copyOf(), sampleRate)
@@ -3671,7 +3682,7 @@ object Engine {
 
     fun instCodeOn(code: Int): Boolean = when (code) {
         in 0 until InstState.INSTS -> InstState.instOn(code)
-        10 -> Euclid.on; 11 -> Atmos.on; 12 -> Harmonizer.on; 13 -> Wolf.on; 14 -> Architect.on; 15 -> Orbits.on
+        10 -> Euclid.on; 11 -> Atmos.on; 12 -> Harmonizer.on; 13 -> Wolf.on; 14 -> Architect.on; 15 -> Orbits.on; 16 -> TouchLab.specPlay || Modular.drone
         else -> false
     }
 
@@ -3682,6 +3693,7 @@ object Engine {
             13 -> { Wolf.switch(v); if (v && !seqPlaying) transportPlay(false) }
             14 -> { Architect.on = v; if (v && !seqPlaying) transportPlay(false) }
             15 -> { Orbits.on = v; if (v && !seqPlaying) transportPlay(false) }
+            16 -> { if (TouchLab.mode == TouchLab.SPECTRAL) TouchLab.specPlay = v else Modular.drone = v && TouchLab.mode == TouchLab.MODULAR; if (!v) { TouchLab.specPlay = false; Modular.drone = false; TouchLab.allOff() } }
         }
     }
 
@@ -3698,6 +3710,7 @@ object Engine {
         if (Wolf.on) used.add(13)
         if (Architect.on) used.add(14)
         if (Orbits.on) used.add(15)
+        if (TouchLab.specPlay || Modular.drone) used.add(16)
         for (code in used) {
             if (padInst.contains(code)) continue
             val p = (0 until min(12, PADS)).firstOrNull { loops.get(it) == null && takes.get(it) == null && padInst[it] < 0 } ?: return
@@ -4903,17 +4916,17 @@ object Engine {
         private set
     @Volatile private var recLastBar = -1
     /** Zusatz-Spuren im Song: ATMOS, EUKLID, HARMONIZER (an/aus je Takt). */
-    const val ARR_X = 6
+    const val ARR_X = 7
     val arrX = Array(ARR_X) { BooleanArray(ARR_MAX) }
-    val ARR_X_NAMES = arrayOf("ATMOS", "EUKLID", "HARMONIZER", "WOLF", "ARCHITECT", "ORBITS")
+    val ARR_X_NAMES = arrayOf("ATMOS", "EUKLID", "HARMONIZER", "WOLF", "ARCHITECT", "ORBITS", "TOUCH-LAB")
     /** Block-Grenzen im Song-Editor: hier beginnt ein neuer Block (auch wenn davor dasselbe liegt). Spuren 0 … TRK_AUTO−1. */
     val arrBreak = Array(ARR_ROWS + ARR_X) { BooleanArray(ARR_MAX) }
     /** Abschnitte: ab diesem Takt beginnt Abschnitt k ([SECTION_NAMES]), -1 = keiner. */
     val arrSection = IntArray(ARR_MAX) { -1 }
     val SECTION_NAMES = arrayOf("INTRO", "HAUPTTEIL", "AUFBAU", "DROP", "BREAK", "BRIDGE", "ENDING")
 
-    private fun xOn(k: Int): Boolean = when (k) { 0 -> Atmos.on; 1 -> Euclid.on; 2 -> Harmonizer.on; 3 -> Wolf.on; 4 -> Architect.on; else -> Orbits.on }
-    private fun setXOn(k: Int, v: Boolean) { when (k) { 0 -> Atmos.on = v; 1 -> Euclid.on = v; 2 -> Harmonizer.on = v; 3 -> Wolf.switch(v); 4 -> Architect.on = v; else -> Orbits.on = v } }
+    private fun xOn(k: Int): Boolean = when (k) { 0 -> Atmos.on; 1 -> Euclid.on; 2 -> Harmonizer.on; 3 -> Wolf.on; 4 -> Architect.on; 5 -> Orbits.on; else -> TouchLab.specPlay }
+    private fun setXOn(k: Int, v: Boolean) { when (k) { 0 -> Atmos.on = v; 1 -> Euclid.on = v; 2 -> Harmonizer.on = v; 3 -> Wolf.switch(v); 4 -> Architect.on = v; 5 -> Orbits.on = v; else -> TouchLab.specPlay = v } }
 
     /**
      * Song abspielen (aus Baukasten/Editor): Song-Modus nur für diese Wiedergabe – nach ■ sind Pads und Instrumente
