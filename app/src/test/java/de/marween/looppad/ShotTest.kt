@@ -120,6 +120,10 @@ class ShotTest {
         pv.bassLab.tab = 1
         shot(pv, w, h, "funk_${tag}")
         pv.bassLab.close()
+        pv.openVibe(); shot(pv, w, h, "vibe_${tag}"); pv.vibe.close()
+        pv.openChaos(); shot(pv, w, h, "chaos_${tag}"); pv.chaos.close()
+        for (m in 0..4) { pv.openTouch(m); shot(pv, w, h, "touch${m}_${tag}"); pv.touchLab.close() }
+        pv.openOrganism(); shot(pv, w, h, "organism_${tag}"); pv.organism.close()
     }
 
     @Test @Config(qualifiers = "w360dp-h800dp-xxhdpi") fun normal() { pads("n"); dj("n"); song("n") }
