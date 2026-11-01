@@ -8750,6 +8750,7 @@ class PadView(context: Context) : View(context) {
         ed.onScale = { onInstScale?.invoke() }
         ed.onChords = { onInstChords?.invoke() }
         ed.onWaves = { onInstWaves?.invoke() }
+        ed.onTrackPick = { onInstTrackPick?.invoke() }
         ed.onSidechain = { onSidechain?.invoke() }
     }
     // ---------------------------------------------------------------- Tutorial-Tour
@@ -9246,6 +9247,9 @@ class PadView(context: Context) : View(context) {
     var onInstChords: (() -> Unit)? = null
     /** SYNTH-Klangwahl (Liste). */
     var onInstWaves: (() -> Unit)? = null
+    var onInstTrackPick: (() -> Unit)? = null
+    /** Spur im offenen SYNTH-Editor wechseln. */
+    fun synTrackChanged() { instEd.trackChanged(); invalidate() }
     var onSidechain: (() -> Unit)? = null
     /** ACID/DRUM: Noten als MIDI-Datei laden/exportieren (1 = ACID, 2 = DRUM). */
     var onInstMidi: ((Int) -> Unit)? = null

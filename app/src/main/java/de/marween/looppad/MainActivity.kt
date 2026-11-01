@@ -208,6 +208,20 @@ class MainActivity : Activity() {
         pads.onInstScale = { showScaleMenu() }
         pads.onInstChords = { showChordProgression() }
         pads.onInstWaves = { showSynthWaves() }
+        pads.onInstTrackPick = {
+            val st = InstState
+            val desc = arrayOf("Lead", "Fläche", "Bass", "Piano, E-Piano, Orgel, Leads", "zweiter Bass-Sequenzer (MONO/GLIDE)")
+            val items = Array(st.SYN_TRACKS) { (if (it == st.synCur) "● " else "") + (if (it == st.BASS_TRACK) "🎸 " else "🎹 ") + st.synName(it) + " · " + desc[it] + if (st.synTracks[it].hasNotes()) "  ♪" else "" }
+            ui().setTitle("Spur wählen").setItems(items) { _, i ->
+                st.synCur = i
+                pads.synTrackChanged()
+                hint(when (i) {
+                    st.KEYS_TRACK -> "🎹 KEYS · ⚙ SOUND → KLANG: Piano, E-Piano, Orgel, Sync-Lead, Saite · ▦ PRESETS"
+                    st.BASS_TRACK -> "🎸 BASSLINE · MONO mit GLIDE · ⚙ SOUND → KLANG: FM-, Reese-, Sub-, Wobble-Bass · ▦ PRESETS"
+                    else -> "🎹 ${st.synName(i)}"
+                })
+            }.show()
+        }
         pads.onSidechain = { showSidechain() }
         pads.onSlicerSource = { pickSlicerSource() }
         pads.onPanelExport = { showPanelExport(it) }

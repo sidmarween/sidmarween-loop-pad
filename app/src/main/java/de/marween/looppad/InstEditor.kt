@@ -60,6 +60,10 @@ class InstEditor(private val host: View) {
     var onChords: (() -> Unit)? = null
     /** KLANG-Auswahl (Liste mit allen Klängen); ohne = durchschalten. */
     var onWaves: (() -> Unit)? = null
+    /** Spur wählen (SYNTH 1–3, KEYS, BASSLINE), wenn die Knöpfe nicht in die Titelzeile passen. */
+    var onTrackPick: (() -> Unit)? = null
+    /** Nach Spurwechsel von außen: Ansicht neu einpassen. */
+    fun trackChanged() { liveOff(); sel.clear(); insert = -1; col0 = 0; pendingFit = true }
     var onSidechain: (() -> Unit)? = null
 
     private val d = host.resources.displayMetrics.density
@@ -288,8 +292,18 @@ class InstEditor(private val host: View) {
         text.textAlign = Paint.Align.LEFT
         text.textSize = dp(14f)
         text.color = Color.WHITE
-        if (kind == 3) {
-            // Spurwahl: 1 2 3
+        val avail = bRec.left - box.left - dp(16f)
+        val chipsFit = text.measureText("🎹 SYN ") + dp(2f) + InstState.SYN_TRACKS * dp(25f) <= avail
+        if (kind == 3 && !chipsFit) {
+            // schmal: Name der Spur, Antippen = Auswahl
+            for (r in trkRects) r.setEmpty()
+            val nm = "🎹 " + when (InstState.synCur) { InstState.KEYS_TRACK -> "KEYS"; InstState.BASS_TRACK -> "BASS"; else -> "SYN${InstState.synCur + 1}" } + " ▾"
+            var ts = dp(14f)
+            while (ts > dp(9f) && text.measureText(nm) > avail) { ts -= dp(0.5f); text.textSize = ts }
+            c.drawText(nm, box.left + dp(12f), bClose.centerY() - dp(1f), text)
+            text.textSize = dp(14f)
+        } else if (kind == 3) {
+            // Spurwahl: 1 2 3 K B
             val cw = dp(22f)
             val x0 = box.left + dp(12f) + text.measureText("🎹 SYN ") + dp(2f)
             c.drawText("🎹 SYN", box.left + dp(12f), bClose.centerY() - dp(1f), text)
@@ -888,7 +902,7 @@ class InstEditor(private val host: View) {
         val st = InstState
         if (kind == 3) return listOf(
             Toggle({ if (st.synOn) "● AN" else "○ AUS" }, { st.synOn }, { st.synOn = !st.synOn }),
-            Toggle({ "KLANG: " + st.synWaveNames[st.synWave.coerceIn(0, st.synWaveNames.size - 1)] }, { false }, { val f = onWaves; if (f != null) f() else st.synWave = (st.synWave + 1) % st.synWaveNames.size }),
+            Toggle({ "🎛 " + st.synWaveNames[st.synWave.coerceIn(0, st.synWaveNames.size - 1)] }, { false }, { val f = onWaves; if (f != null) f() else st.synWave = (st.synWave + 1) % st.synWaveNames.size }),
             Toggle({ if (st.syn.mono) "MONO (GLIDE)" else "POLY" }, { st.syn.mono }, {
                 st.syn.mono = !st.syn.mono
                 if (st.syn.mono && st.syn.glide < 0.01f) st.syn.glide = 0.2f
@@ -1162,6 +1176,8 @@ class InstEditor(private val host: View) {
         if (kind == 3 && bTitle.contains(x, y)) {
             liveOff()
             val hit = trkRects.indexOfFirst { !it.isEmpty && it.left - dp(2f) <= x && x <= it.right + dp(2f) }
+            val pick = onTrackPick
+            if (hit < 0 && trkRects.all { it.isEmpty } && pick != null) { pick(); haptic(); return }
             InstState.synCur = if (hit >= 0) hit else (InstState.synCur + 1) % InstState.SYN_TRACKS
             sel.clear(); insert = -1; col0 = 0; pendingFit = true
             onHint?.invoke(when (InstState.synCur) {
