@@ -3573,9 +3573,20 @@ class PadView(context: Context) : View(context) {
     }
 
     /** Zeigt am Pad, ob es durch den Effekt läuft (FX) oder trocken bleibt (durchgestrichen) – antippen schaltet um. */
+    /** Kleine FX-Plakette auf den Pads – ausgeblendet (wurde oft aus Versehen getroffen). Effekte: SELECT → FX oder Pad-Menü. */
+    private val showFxBadge = false
+
     private fun drawFxBadge(canvas: Canvas, i: Int) {
         val r = padRects[i]
         if (r.width() <= 0f) return
+        if (!showFxBadge) {
+            // nur ein unauffälliger Punkt, wenn das Pad eigene Effekte an hat (nicht antippbar)
+            if (Engine.padChainActive(i)) {
+                dotPaint.color = overlayColors()[2]
+                canvas.drawCircle(r.right - dp(9f), r.bottom - dp(9f), dp(3.5f), dotPaint)
+            }
+            return
+        }
         val n = Engine.padFxCount(i)
         val on = Engine.padChainActive(i)
         val cols = overlayColors()
@@ -4447,7 +4458,7 @@ class PadView(context: Context) : View(context) {
                         }
                         fxBadgeRect(i, iconRect)
                         iconRect.inset(-dp(3f), -dp(3f))
-                        if (iconRect.contains(x, y)) {
+                        if (showFxBadge && iconRect.contains(x, y)) {
                             // kurz = Effekte des Pads an/aus, lang = Effekte wählen (bis zu 3)
                             fxBadgePointer = id
                             fxBadgePad = i

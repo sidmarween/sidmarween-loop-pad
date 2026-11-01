@@ -1283,6 +1283,10 @@ class MainActivity : Activity() {
         val fxOn = Engine.padFx[p]
         labels.add("✨ Eigene Effekte des Pads (bis zu 3) …")
         actions.add { showPadFxEditor(p) }
+        if (Engine.padFxCount(p) > 0) {
+            labels.add(if (Engine.padChainOn[p]) "✨ Eigene Effekte: AN → ausschalten" else "✨ Eigene Effekte: AUS → einschalten")
+            actions.add { Engine.padChainOn[p] = !Engine.padChainOn[p]; hint(if (Engine.padChainOn[p]) "Pad ${p + 1}: Effekte an" else "Pad ${p + 1}: Effekte aus") }
+        }
         labels.add(if (fxOn) "🎛 XY-Effekt: AN  →  Pad ohne XY-Effekt" else "🎛 XY-Effekt: AUS  →  Pad durch den XY-Effekt")
         actions.add {
             Engine.padFx[p] = !fxOn
