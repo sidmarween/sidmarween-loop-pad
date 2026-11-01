@@ -268,7 +268,7 @@ object InstState {
     var synCutMod: Float get() = syn.cutMod; set(v) { syn.cutMod = v }
     val synWaveNames = arrayOf("SAW", "SQR", "SUPER", "PLUCK", "GLOCKE", "NES ▢", "NES △", "NOISE", "SID", "GB-WAVE", "FM-CHIP",
         "PIANO", "E-PIANO", "ORGEL", "SYNC-LEAD", "REESE", "SUB-BASS", "FM-BASS", "WOBBLE", "SAITE",
-        "WT ANALOG", "WT VOCAL", "WT GROWL", "WT DIGITAL", "WT SAMPLE")
+        "WT ANALOG", "WT VOCAL", "WT GROWL", "WT DIGITAL", "WT SAMPLE", "MAGMA", "FUNK-SLAP")
     fun synIsWt(w: Int) = w in 20..24
     /** Chiptune-Klänge (Klang-Nr. 5–10): Akkorde laufen als schnelles Chip-Arpeggio, Lautstärke in 16 Stufen. */
     fun synIsChip(w: Int) = w in 5..10
@@ -284,6 +284,8 @@ object InstState {
         Triple("Lead", 1, "Square"),
         Triple("Lead", 3, "Pluck"),
         Triple("Lead", 19, "Saite (gezupft: Gitarre, Harfe) – VERST. = Nachklang"),
+        Triple("Bass", 25, "🌋 MAGMA – Viskosität, Krater-Filter, Spucke (Bass-Labor)"),
+        Triple("Bass", 26, "🎸 FUNK-SLAP – Slap/Pop/Ghost, Auto-Wah, sprechender Formant (Bass-Labor)"),
         Triple("Bass", 17, "FM-Bass (DX-Art) – VERST. = Obertöne"),
         Triple("Bass", 15, "Reese-Bass (DnB) – VERST. = Schwebung"),
         Triple("Bass", 16, "Sub-Bass (Sinus, 808) – VERST. = Wärme/Drive"),
@@ -1509,6 +1511,8 @@ class PolySynth(private val sr: Int, private val t: InstState.SynTrack) {
         // Saite (Karplus-Strong)
         var ks: FloatArray? = null
         var kw = 0
+        /** Zustände der Bass-Motoren (MAGMA, FUNK). */
+        val m = FloatArray(24)
     }
 
     private companion object {
@@ -1594,6 +1598,29 @@ class PolySynth(private val sr: Int, private val t: InstState.SynTrack) {
                 v.pa[0] = 1f; v.pd[0] = exp(-1.0 / (0.22 * sr)).toFloat()
                 v.hn = 0.1f * vel
             }
+            26 -> {
+                // FUNK: Slap (Daumen), Pop (Finger, laut/hoch) oder Ghost (leise = gedämpfter Plopp)
+                val mode = if (vel < 0.45f) 2 else if (vel >= 0.88f || v.semi >= 10) 1 else 0
+                java.util.Arrays.fill(v.m, 0f)
+                v.m[0] = mode.toFloat(); v.m[1] = 1f; v.m[2] = 1f; v.m[5] = 1f
+                val len = sr / 12 + 4
+                if (v.ks == null || v.ks!!.size < len) v.ks = FloatArray(len)
+                val buf = v.ks!!
+                java.util.Arrays.fill(buf, 0f)
+                val d = (sr / f).coerceIn(2.0, (buf.size - 3).toDouble())
+                val cnt = d.toInt() + 2
+                var lp = 0f
+                val a = when (mode) { 1 -> 0.9f; 2 -> 0.12f; else -> 0.45f }
+                val amp = when (mode) { 2 -> 0.5f; 1 -> 1.3f; else -> 1.1f }
+                for (i in 0 until cnt) { lp += a * (rnd(v) - lp); buf[i] = lp * amp * 2.2f }
+                v.kw = cnt % buf.size
+                v.nz = 0f
+                v.lp = 0f; v.bp = 0f
+            }
+            25 -> {
+                // MAGMA: Blubber-LFOs neu, Glitch aus
+                java.util.Arrays.fill(v.m, 0f)
+            }
             19 -> {
                 // Saite: Verzögerungsleitung mit gefiltertem Rauschen füllen (CUTOFF = Härte des Anschlags)
                 val len = sr / 12 + 4
@@ -1677,6 +1704,154 @@ class PolySynth(private val sr: Int, private val t: InstState.SynTrack) {
         else -> 0.0
     }
 
+    /** 🌋 MAGMA: Sub-Anker (sauberer Sinus ≤ 62 Hz) + Magma-Oberteil (Falten, Blubbern, Crush) durch Röhre und Krater-Ladder. */
+    private fun magma(v: Voice, f: Double, kick: Float, amtMid: Float, amtHigh: Float, ladK: Float): Double {
+        val bl = BassLab
+        val m = v.m
+        // Spucke: Pitch-Glitches und Noise-Bursts
+        if (m[10] <= 0f && Math.random() < bl.spit * bl.spit * 0.0006) {
+            m[10] = (sr * (0.02 + 0.05 * Math.random())).toFloat()
+            m[11] = 2.0.pow((Math.random() * 24 - 12) / 12).toFloat()
+            m[12] = if (Math.random() < 0.4) 1f else 0f
+        }
+        val glitch = m[10] > 0f
+        if (glitch) m[10]--
+        val ff = f * (1.0 + 1.5 * kick) * (if (glitch) m[11].toDouble() else 1.0)
+        // Anker: phasenstabil, bleibt unberührt
+        var fa = f
+        while (fa > 62.0) fa *= 0.5
+        v.ph[0] += fa / sr; if (v.ph[0] >= 1.0) v.ph[0] -= 1.0
+        val anchor = sinT(v.ph[0])
+        // Blubber-LFOs (3 zufällige, weiche Bewegungen)
+        for (k in 0 until 3) {
+            if (m[6 + k] <= 0f) { m[3 + k] = (Math.random() * 2 - 1).toFloat(); m[6 + k] = (sr / (1.5 + 4.0 * k + 6 * Math.random())).toFloat() }
+            m[6 + k]--
+            m[k] += (m[3 + k] - m[k]) * (0.0006f * (k + 1))
+        }
+        val bub = m[0] * 0.5f + m[1] * 0.3f + m[2] * 0.2f
+        // Oberteil mit FM-Feedback (Spucke)
+        v.ph[1] += ff / sr; if (v.ph[1] >= 1.0) v.ph[1] -= 1.0
+        val x = sinT(v.ph[1] + m[13] * bl.spit * 0.35)
+        val drv = 1f + amtMid * (1.5f + 1.2f * bub) + amtHigh * 6f
+        var y = sinT((x * drv * 0.25).toDouble())
+        y += (1f - amtMid) * 0.25f * x * x
+        if (amtHigh > 0.01f) {
+            v.ph[2] += ff * 2.41 / sr; if (v.ph[2] >= 1.0) v.ph[2] -= 1.0
+            y = y * (1f - amtHigh * 0.5f) + amtHigh * 0.6f * y * sinT(v.ph[2])
+            if (m[15] <= 0f) {
+                val q = 2f.pow(8f - 6f * amtHigh)
+                m[14] = Math.round(y * q) / q
+                m[15] = 1f + amtHigh * 6f
+            }
+            m[15]--
+            y = m[14]
+        }
+        if (glitch && m[12] > 0f) y += rnd(v) * 0.6f
+        // Hochpass: unten bleibt nur der Anker
+        val hpc = (2 * PI * 90.0 / sr).toFloat()
+        m[16] += hpc * (y - m[16])
+        var top = y - m[16]
+        // Röhre
+        val dr = 1.5f + bl.drive * 6f
+        top = (tanh(top * dr + 0.2f) - tanh(0.2f)) * 0.6f / tanh(dr * 0.6f).coerceAtLeast(0.3f)
+        // Krater: 4-Pol-Ladder mit aggressiver Rückkopplung
+        val oct = bl.craterCut * 8.2f + kick * 3f + amtMid * bub * 1.5f
+        val fc = min(0.45 * sr, 40.0 * 2.0.pow(oct.toDouble()))
+        val g = (1 - exp(-2 * PI * fc / sr)).toFloat()
+        val u = tanh(top - ladK * tanh(m[20] * 1.3f))
+        m[17] += g * (u - tanh(m[17]))
+        m[18] += g * (tanh(m[17]) - tanh(m[18]))
+        m[19] += g * (tanh(m[18]) - tanh(m[19]))
+        m[20] += g * (tanh(m[19]) - tanh(m[20]))
+        top = m[20] * (1f + ladK * 0.35f)
+        m[13] = top
+        return (anchor * bl.sub * 0.9f + top * 0.75f).toDouble()
+    }
+
+    /** 🎸 FUNK: Saite (Karplus-Strong) + Slap-Daumen/Pop-Klick/Ghost-Plopp, Auto-Wah, Formant, Phaser, Band-Sättigung, Thumb-Sub. */
+    private fun funk(v: Voice, f: Double, juice: Float, tightT: Double): Double {
+        val bl = BassLab
+        val m = v.m
+        val mode = m[0].toInt()
+        val buf = v.ks ?: return 0.0
+        val sz = buf.size
+        val tSec = v.n.toFloat() / sr
+        val d = (sr / f - 0.5).coerceIn(2.0, (sz - 3).toDouble())
+        var rp = v.kw - d
+        if (rp < 0) rp += sz
+        val i0 = rp.toInt() % sz
+        val i1 = (i0 + 1) % sz
+        val fr = (rp - kotlin.math.floor(rp)).toFloat()
+        val yv = buf[i0] + (buf[i1] - buf[i0]) * fr
+        val tt = if (mode == 2) 0.03 else tightT
+        val loss = exp(-1.0 / (f * tt)).toFloat()
+        val nv = (yv + v.nz) * 0.5f * loss
+        v.nz = yv
+        buf[v.kw] = nv
+        v.kw = (v.kw + 1) % sz
+        var x = nv
+        // Daumen: holziger Pitch-Impuls / Ghost: dumpfer Plopp
+        if (m[2] > 1e-3f) {
+            val pf = f * (1.0 + (if (mode == 2) 1.5 else 4.0) * m[2])
+            v.ph[3] += pf / sr; if (v.ph[3] >= 1.0) v.ph[3] -= 1.0
+            x += sinT(v.ph[3]) * m[2] * (if (mode == 2) 0.6f else 0.7f)
+            m[2] *= exp(-1.0 / ((if (mode == 2) 0.02 else 0.012) * sr)).toFloat()
+        }
+        // Pop: metallischer Klick
+        if (mode == 1 && m[1] > 1e-3f) {
+            v.ph[4] += 3200.0 / sr; if (v.ph[4] >= 1.0) v.ph[4] -= 1.0
+            val nz = rnd(v)
+            m[6] += 0.6f * (nz - m[6])
+            x += ((nz - m[6]) * 0.6f + sinT(v.ph[4]) * 0.4f) * m[1]
+            m[1] *= exp(-1.0 / (0.006 * sr)).toFloat()
+        }
+        // Auto-Wah: schnell auf (Quack), dann unter den Grundwert fallen (Ow)
+        val up = 1f - exp(-tSec / 0.004f)
+        val down = exp(-tSec / (0.12f + 0.3f * (1f - juice)))
+        val wah = up * down
+        val cut = 220.0 * 2.0.pow((0.9 + juice * 4.2 * wah - juice * 1.1 * (1 - down) + (if (mode == 1) 0.8 else 0.0)).coerceIn(-1.0, 6.5))
+        val g = (2 * sin(PI * min(cut, sr * 0.4) / sr)).toFloat()
+        v.lp += g * v.bp
+        val hp = x - v.lp - 0.3f * v.bp
+        v.bp += g * hp
+        var y = v.lp * 0.65f + v.bp * (0.4f + 0.6f * juice)
+        // Formant: U → A beim Anschlag, dann zurück („Yow-Waw“)
+        if (bl.talk > 0.01f) {
+            val p = wah
+            val f1 = 325.0 + (800.0 - 325.0) * p
+            val f2 = 700.0 + (1150.0 - 700.0) * p
+            val g1 = (2 * sin(PI * f1 / sr)).toFloat(); val g2 = (2 * sin(PI * f2 / sr)).toFloat()
+            m[8] += g1 * m[9]; val h1 = x - m[8] - 0.15f * m[9]; m[9] += g1 * h1
+            m[10] += g2 * m[11]; val h2 = x - m[10] - 0.15f * m[11]; m[11] += g2 * h2
+            val form = m[9] * 0.9f + m[11] * 0.55f
+            y = y * (1f - bl.talk) + form * bl.talk * 1.6f
+        }
+        // 6-stufiger Phaser (langsam), Stärke mit dem Juice
+        if (juice > 0.05f) {
+            v.mph += 0.25 / sr; if (v.mph >= 1.0) v.mph -= 1.0
+            val lf = 0.5f + 0.5f * sinT(v.mph)
+            val wc = 300.0 * 2.0.pow(lf * 3.0)
+            val tw = (PI * wc / sr).toFloat()
+            val a = (1f - tw) / (1f + tw)
+            var ap = y
+            for (k in 0 until 6) {
+                val zi = 12 + k
+                val o2 = -a * ap + m[zi]
+                m[zi] = ap + a * o2
+                ap = o2
+            }
+            y += (ap - y) * 0.5f * juice
+        }
+        // Band-Sättigung (Disco-Dirt)
+        val sat = 1f + juice * 2.5f
+        y = tanh(y * sat) / tanh(sat).coerceAtLeast(0.5f)
+        // Thumb-Sub (808-Sinus), klingt mit der Saite aus
+        v.ph[5] += f / sr; if (v.ph[5] >= 1.0) v.ph[5] -= 1.0
+        m[5] *= exp(-1.0 / ((if (mode == 2) 0.04 else tightT * 1.5 + 0.1) * sr)).toFloat()
+        y += sinT(v.ph[5]) * m[5] * bl.thumbSub * 0.8f
+        return y.toDouble()
+    }
+
     private fun saw(v: Voice, k: Int, f: Double): Double {
         val dt = f / sr
         v.ph[k] += dt; if (v.ph[k] >= 1.0) v.ph[k] -= 1.0
@@ -1696,13 +1871,23 @@ class PolySynth(private val sr: Int, private val t: InstState.SynTrack) {
         val atk = (1.0 / ((0.002 + st.atk * st.atk * 2.5) * sr)).toFloat()
         val relC = exp(-1.0 / ((0.02 + st.rel * st.rel * 3.0) * sr)).toFloat()
         val decC = exp(-1.0 / ((if (wave == 3) 0.25 else 0.6) * sr)).toFloat()
-        val sus = when (wave) { 3, 4 -> 0f; 11, 12, 13, 16, 19 -> 1f; 17 -> 0.75f; else -> 0.8f }
+        val sus = when (wave) { 3, 4 -> 0f; 11, 12, 13, 16, 19, 26 -> 1f; 17 -> 0.75f; 25 -> 0.92f; else -> 0.8f }
         val fDec = exp(-1.0 / ((if (wave == 3) 0.12 else 0.35) * sr)).toFloat()
         val q = 1f - st.res * 0.92f
         val vol = st.volNow() * 0.32f
         val spread = st.detune
         val chip = InstState.synIsChip(wave)
-        val noFilter = wave == 4 || wave == 10 || wave in 11..13 || wave == 16 || wave == 17 || wave == 19
+        val noFilter = wave == 4 || wave == 10 || wave in 11..13 || wave == 16 || wave == 17 || wave == 19 || wave == 25 || wave == 26
+        // Bass-Labor
+        val bl = BassLab
+        val kick0 = if (wave == 25) bl.kick else 0f
+        if (wave == 25 && bl.kick > 0.001f) bl.kick *= exp(-n / (0.25 * sr)).toFloat() else if (wave == 25) bl.kick = 0f
+        val mVisc = bl.visc
+        val amtMid = ((mVisc - 0.25f) / 0.35f).coerceIn(0f, 1f).let { it * it * (3 - 2 * it) }
+        val amtHigh = ((mVisc - 0.62f) / 0.33f).coerceIn(0f, 1f).let { it * it * (3 - 2 * it) }
+        val ladK = bl.craterRes * 4.3f
+        val juice = bl.juice
+        val ksTight = 0.1 + bl.tight * bl.tight * 1.6
         // Chip-Arpeggio: 1/32 im Master-Tempo (ohne Tempo: 120 BPM)
         val bpmNow = Engine.currentBpm().let { if (it in 40f..300f) it else 120f }
         val arpTick = max(1L, (sr * 60.0 / bpmNow / 8.0).toLong())
@@ -1962,6 +2147,8 @@ class PolySynth(private val sr: Int, private val t: InstState.SynTrack) {
                             o = sum * 0.8
                         }
                     }
+                    25 -> o = magma(v, f, kick0 * exp(-i / (0.25 * sr)).toFloat(), amtMid, amtHigh, ladK)
+                    26 -> o = funk(v, f, juice, ksTight)
                     1 -> {
                         val dt = f / sr
                         v.ph[0] += dt; if (v.ph[0] >= 1.0) v.ph[0] -= 1.0

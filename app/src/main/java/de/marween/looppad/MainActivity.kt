@@ -740,7 +740,7 @@ class MainActivity : Activity() {
 
     /** Reiter „Instrumente“: ACID 303, DRUM 909 und SYNTH einzeln oder zusammen als Eingang. */
     private fun showInstSourcePicker(p: Int) {
-        val names = arrayOf("🔊 ACID 303 (Bass)", "🥁 DRUM 909 (Drumcomputer)", "🎹 SYNTH, KEYS, BASSLINE", "⬡ EUKLID (Polyrhythmen)", "🌌 ATMOS (Klangteppich)", "🎤 HARMONIZER (Chor)", "🐺 WOLF (Loop-Zerhacker)", "🧬 RHYTHM ARCHITECT")
+        val names = arrayOf("🔊 ACID 303 (Bass)", "🥁 DRUM 909 (Drumcomputer)", "🎹 SYNTH, KEYS, BASSLINE", "⬡ EUKLID (Polyrhythmen)", "🌌 ATMOS (Klangteppich)", "🎤 HARMONIZER (Chor)", "🐺 WOLF (Loop-Zerhacker)", "🧬 RHYTHM ARCHITECT", "🪐 ORBITS")
         val m0 = if (Engine.padSource[p] == 3) Engine.padInstMask[p] else 7
         val checked = BooleanArray(names.size) { (m0 shr it) and 1 != 0 }
         ui()
@@ -1932,65 +1932,67 @@ class MainActivity : Activity() {
     // ================================================================ ACID/DRUM: Presets
 
     /** Die neuen Instrumente: ATMOS, Vocal-Harmonizer, Euklid und Chiptune (Klänge im SYNTH). */
+    /** Alle Instrumente nach Kategorien: erst die Kategorie, dann das Instrument. */
     private fun showMoreInstruments() {
         fun st(on: Boolean) = if (on) "  ● läuft" else ""
-        val items = arrayOf(
-            "🎼 SONG · Teile bauen (Intro, Hauptteil, Ending) & aufnehmen",
-            "🌌 ATMOS · Klangteppich & Drones" + st(Atmos.on),
-            "🎤 VOCAL-HARMONIZER · Chor aus dem Gesang" + st(Harmonizer.on),
-            "⬡ EUKLID · generative Polyrhythmen" + st(Euclid.on),
-            "👾 CHIPTUNE · 8-Bit-Klänge im SYNTH (Presets)",
-            "🎹 KEYS · Piano, E-Piano, Orgel & Leads",
-            "🎸 BASSLINE · zweiter Bass-Sequenzer (FM, Reese, Sub, Wobble)",
-            "🐺 WOLF · Loop-Zerhacker (dreht Loops durch den Wolf)" + st(Wolf.on),
-            "🎲 GROOVE-GENERATOR · kompletter Beat auf Knopfdruck",
-            "🧪 WAVETABLE · Klangformen durchfahren (Growl, Vocal, Digital …)",
-            "🧬 RHYTHM ARCHITECT · Polyrhythmus- & Textur-Synth" + st(Architect.on)
-        )
-        ui().setTitle("🎹 Weitere Instrumente")
-            .setItems(items) { _, w ->
-                when (w - 1) {
-                    -1 -> { if (djMode) switchMode(false); pads.openSongBuilder(); hint("🎼 Teile anlegen, pro Teil die Spuren anschalten, ▶ spielen") }
-                    0 -> openAtmos()
-                    1 -> { if (djMode) dj.openHarm() else pads.openHarm(); hint("▶ AN, dann Akkord-Pads halten – der Gesang des Decks wird zum Chor · XY: Formant und Tuning") }
-                    2 -> { if (djMode) dj.openEuclid() else pads.openEuclid(); hint("▶ START – läuft im Takt des Decks · drei Regler: Schläge, Taktlänge, Morphing") }
-                    4, 5 -> {
-                        if (djMode) switchMode(false)
-                        InstState.synCur = if (w - 1 == 4) InstState.KEYS_TRACK else InstState.BASS_TRACK
-                        pads.openSynthEditor()
-                        showSynthPresets()
-                    }
-                    6 -> {
-                        if (djMode) switchMode(false)
-                        pads.openWolf()
-                        hint(if (Wolf.srcPad >= 0) "🐺 ▶ START – Pad ${Wolf.srcPad + 1} wird im Takt zerhackt · CHAOS / DICHTE / VARIATION" else "🐺 Erst einen Loop auf ein Pad legen, dann QUELLE wählen")
-                    }
-                    7 -> { if (djMode) switchMode(false); showGrooveGen() }
-                    8 -> {
-                        if (djMode) switchMode(false)
-                        pads.openSynthEditor()
-                        showWavetablePresets()
-                    }
-                    9 -> {
-                        if (djMode) switchMode(false)
-                        pads.openArchitect()
-                        hint("🧬 ▶ START · Zellen antippen = Wahrscheinlichkeit 100/75/50/25 %/aus · Spurname = Klang · ◂ ▸ = Spurlänge")
-                    }
-                    else -> {
-                        if (djMode) switchMode(false)
-                        pads.openSynthEditor()
-                        val list = InstPresets.SYNTHS.filter { it.genre == "Chiptune" }
-                        ui().setTitle("👾 Chiptune-Presets")
-                            .setItems(list.map { "${it.name} · ${it.bpm} BPM" }.toTypedArray()) { _, i ->
-                                val p = list[i]
-                                Engine.pushPatternUndo("SYNTH Preset")
-                                InstPresets.applySynth(p)
-                                presetTempo(p.bpm)
-                                hint("👾 ${p.name} – Knopf KLANG wechselt NES ▢ / NES △ / NOISE / SID · ▶ startet")
-                            }.show()
-                    }
+        fun pad() { if (djMode) switchMode(false) }
+        fun synthTrack(t: Int, presets: Boolean) { pad(); InstState.synCur = t; pads.openSynthEditor(); if (presets) showSynthPresets() }
+        class Item(val label: String, val act: () -> Unit)
+        val cats = listOf(
+            "🥁 DRUMS & RHYTHMUS" to listOf(
+                Item("🥁 DRUM 909 · Drumcomputer" + st(InstState.drumOn && InstState.drumHasNotes())) { pad(); pads.openInstEditor(2) },
+                Item("⬡ EUKLID · generative Polyrhythmen" + st(Euclid.on)) { if (djMode) dj.openEuclid() else pads.openEuclid(); hint("▶ START – drei Regler: Schläge, Taktlänge, Morphing") },
+                Item("🧬 RHYTHM ARCHITECT · Polyrhythmus- & Textur-Synth" + st(Architect.on)) { pad(); pads.openArchitect(); hint("🧬 ▶ START · Zellen antippen = Wahrscheinlichkeit 100/75/50/25 %/aus · Spurname = Klang · ◂ ▸ = Spurlänge") },
+                Item("🪐 ORBITS · Gravitations-Synth (Satelliten & Kollisionen)" + st(Orbits.on)) { pad(); pads.openOrbits(); hint("🪐 ▶ START · Satelliten antippen/ziehen · leere Fläche = Gravity Well") },
+                Item("🎲 GROOVE-GENERATOR · kompletter Beat auf Knopfdruck") { pad(); showGrooveGen() }
+            ),
+            "🎸 BASS" to listOf(
+                Item("🔊 ACID 303 · Acid-Bass" + st(InstState.acidOn && InstState.acidHasNotes())) { pad(); pads.openInstEditor(1) },
+                Item("🎸 BASSLINE · zweiter Bass-Sequenzer (FM, Reese, Sub, Wobble)") { synthTrack(InstState.BASS_TRACK, true) },
+                Item("🌋 MAGMA · flüssiger Monster-Bass (Viskosität, Krater, Spucke)") { pad(); pads.openBassLab(0) },
+                Item("🎸 FUNK-SLAP · Slap & Pop, Auto-Wah, sprechender Bass") { pad(); pads.openBassLab(1) }
+            ),
+            "🎹 TASTEN & SYNTHS" to listOf(
+                Item("🎹 SYNTH 1–3 · Lead, Fläche, Bass (polyfon, Akkorde, Arpeggiator)") { synthTrack(0, false) },
+                Item("🎹 KEYS · Piano, E-Piano, Orgel & Leads") { synthTrack(InstState.KEYS_TRACK, true) },
+                Item("🧪 WAVETABLE · Klangformen durchfahren (Growl, Vocal, Digital …)") { pad(); pads.openSynthEditor(); showWavetablePresets() },
+                Item("👾 CHIPTUNE · 8-Bit-Klänge (Presets)") {
+                    pad(); pads.openSynthEditor()
+                    val list = InstPresets.SYNTHS.filter { it.genre == "Chiptune" }
+                    ui().setTitle("👾 Chiptune-Presets")
+                        .setItems(list.map { "${it.name} · ${it.bpm} BPM" }.toTypedArray()) { _, i ->
+                            val p = list[i]
+                            Engine.pushPatternUndo("SYNTH Preset")
+                            InstPresets.applySynth(p)
+                            presetTempo(p.bpm)
+                            hint("👾 ${p.name} – Knopf KLANG wechselt NES ▢ / NES △ / NOISE / SID · ▶ startet")
+                        }.show()
                 }
-            }.show()
+            ),
+            "🌌 FLÄCHEN & STIMME" to listOf(
+                Item("🌌 ATMOS · Klangteppich & Drones" + st(Atmos.on)) { openAtmos() },
+                Item("🎤 VOCAL-HARMONIZER · Chor aus dem Gesang" + st(Harmonizer.on)) { if (djMode) dj.openHarm() else pads.openHarm(); hint("▶ AN, dann Akkord-Pads halten – der Gesang des Decks wird zum Chor · XY: Formant und Tuning") }
+            ),
+            "🛠 WERKZEUGE" to listOf(
+                Item("🐺 WOLF · Loop-Zerhacker" + st(Wolf.on)) {
+                    pad(); pads.openWolf()
+                    hint(if (Wolf.srcPad >= 0) "🐺 ▶ START – Pad ${Wolf.srcPad + 1} wird im Takt zerhackt · CHAOS / DICHTE / VARIATION" else "🐺 Erst einen Loop auf ein Pad legen, dann QUELLE wählen")
+                },
+                Item("🎼 SONG · Teile bauen (Intro, Hauptteil, Ending) & aufnehmen") { pad(); pads.openSongBuilder(); hint("🎼 Teile anlegen, pro Teil die Spuren anschalten, ▶ spielen") },
+                Item("💾 Alle laufenden Spuren als WAVs") { exportAllWaves() }
+            )
+        )
+        val labels = cats.map { (name, items) -> name + "  (" + items.size + ")" + if (items.any { it.label.contains("● läuft") }) "  ●" else "" }.toTypedArray()
+        ui().setTitle("🎹 Instrumente")
+            .setItems(labels) { _, c ->
+                val (name, items) = cats[c]
+                ui().setTitle(name)
+                    .setItems(items.map { it.label }.toTypedArray()) { _, i -> items[i].act() }
+                    .setNegativeButton("Zurück") { _, _ -> showMoreInstruments() }
+                    .show()
+            }
+            .setNegativeButton("Schließen", null)
+            .show()
     }
 
     /** KLANG im SYNTH/KEYS/BASSLINE: alle Klänge nach Gruppen, neue Modelle mit passender Grundeinstellung. */
@@ -4009,7 +4011,7 @@ class MainActivity : Activity() {
 
     /** 💾 Ein Klick: alles, was gerade läuft, einmal im Takt aufnehmen – jede Spur als eigene WAV + Gesamtmix, nach Musik/Marv PAD. */
     private fun exportAllWaves() {
-        val any = (0 until PadView.VISIBLE_PADS).any { Engine.hasLoop(it) } || (0 until InstState.INSTS).any { InstState.instHasNotes(it) } || Euclid.on || Atmos.on || Wolf.on || Architect.on
+        val any = (0 until PadView.VISIBLE_PADS).any { Engine.hasLoop(it) } || (0 until InstState.INSTS).any { InstState.instHasNotes(it) } || Euclid.on || Atmos.on || Wolf.on || Architect.on || Orbits.on
         if (!any) { toast("Noch läuft nichts – erst Pads oder Instrumente füllen"); return }
         if (android.os.Build.VERSION.SDK_INT < 29) { toast("Braucht Android 10 oder neuer – sonst Menü › Exportieren › Song + Stems"); return }
         var bars = 8

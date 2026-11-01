@@ -227,7 +227,7 @@ object Architect {
         v.tail = ty.tail * (1.5f - hard) * (0.6f + 0.8f * air)
         v.tDec = exp(-1.0 / (ty.tDec * (0.4 + 2.2 * air) * sr)).toFloat()
         v.tEnv = 1f
-        v.fq = (2 * sin(PI * min(ty.tHz.toDouble(), sr * 0.4) / sr)).toFloat()
+        v.fq = (2 * sin(PI * min(ty.tHz.toDouble(), sr / 6.0) / sr)).toFloat()
         v.qq = 1f - ty.tQ * 0.9f
         v.lp = 0f; v.bp = 0f
         v.grain = (ty.grain + (1f - hard) * 0.3f).coerceIn(0f, 1f)
