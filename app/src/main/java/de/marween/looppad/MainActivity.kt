@@ -741,7 +741,7 @@ class MainActivity : Activity() {
 
     /** Reiter „Instrumente“: ACID 303, DRUM 909 und SYNTH einzeln oder zusammen als Eingang. */
     private fun showInstSourcePicker(p: Int) {
-        val names = arrayOf("🔊 ACID 303 (Bass)", "🥁 DRUM 909 (Drumcomputer)", "🎹 SYNTH, KEYS, BASSLINE", "⬡ EUKLID (Polyrhythmen)", "🌌 ATMOS (Klangteppich)", "🎤 HARMONIZER (Chor)", "🐺 WOLF (Loop-Zerhacker)", "🧬 RHYTHM ARCHITECT", "🪐 ORBITS", "🖐 TOUCH-LAB")
+        val names = arrayOf("🔊 ACID 303 (Bass)", "🥁 DRUM 909 (Drumcomputer)", "🎹 SYNTH, KEYS, BASSLINE", "⬡ EUKLID (Polyrhythmen)", "🌌 ATMOS (Klangteppich)", "🎤 HARMONIZER (Chor)", "🐺 WOLF (Loop-Zerhacker)", "🧬 RHYTHM ARCHITECT", "🪐 ORBITS", "🖐 TOUCH-LAB", "🚀 FX-GEN", "🤖 VOCODER")
         val m0 = if (Engine.padSource[p] == 3) Engine.padInstMask[p] else 7
         val checked = BooleanArray(names.size) { (m0 shr it) and 1 != 0 }
         ui()
@@ -1956,6 +1956,7 @@ class MainActivity : Activity() {
                 Item("🎹 ORGAN-BASS · Garage/Deep-House-Orgelbass (Show-Me-Love-Stil)") { pad(); pads.openBassLab(2) }
             ),
             "🎹 TASTEN & SYNTHS" to listOf(
+                Item("🎼 CHORD-PAD · Akkorde der Tonart antippen, Bass läuft mit") { pad(); pads.openPerf(1); hint("🎼 Akkord-Tasten antippen · ○ FOLGE AUFNEHMEN → 📝 IN SPUREN schreibt sie in KEYS und BASSLINE") },
                 Item("🎹 SYNTH 1–3 · Lead, Fläche, Bass (polyfon, Akkorde, Arpeggiator)") { synthTrack(0, false) },
                 Item("🎹 KEYS · Piano, E-Piano, Orgel & Leads") { synthTrack(InstState.KEYS_TRACK, true) },
                 Item("🏠 VIBE-SYNTH · House-Stabs, M1-Akkorde, Pump, Acid-Modus") { pad(); pads.openVibe(); hint("🏠 Eine Taste = ein Club-Akkord · PUMP drückt im Takt · STAB ↔ ACID schaltet auf 303-Hybrid") },
@@ -1982,9 +1983,11 @@ class MainActivity : Activity() {
             ),
             "🌌 FLÄCHEN & STIMME" to listOf(
                 Item("🌌 ATMOS · Klangteppich & Drones" + st(Atmos.on)) { openAtmos() },
+                Item("🤖 VOCODER · Roboter-Stimme aus Mikro + Akkord" + st(Vocoder.on)) { pad(); pads.openPerf(2); hint("🤖 ▶ AN, ins Mikro sprechen und eine Akkord-Taste halten (Kopfhörer!)") },
                 Item("🎤 VOCAL-HARMONIZER · Chor aus dem Gesang" + st(Harmonizer.on)) { if (djMode) dj.openHarm() else pads.openHarm(); hint("▶ AN, dann Akkord-Pads halten – der Gesang des Decks wird zum Chor · XY: Formant und Tuning") }
             ),
             "🛠 WERKZEUGE" to listOf(
+                Item("🚀 FX-GENERATOR · Riser, Impacts, Drops im Takt") { pad(); pads.openPerf(0); hint("🚀 Länge wählen, Effekt antippen – er startet auf der nächsten Eins und endet nach N Takten genau auf der Eins") },
                 Item("⚡ CHAOS-TRIGGER · zerlegt den laufenden Mix live (DJ)") {
                     if (djMode) dj.openChaos() else pads.openChaos()
                     hint("⚡ Pads halten = Stutter mit Gravitation · Resonatoren antippen · unten halten = Portal-Warp, loslassen = Drop")
@@ -4067,7 +4070,7 @@ class MainActivity : Activity() {
         if (InstState.drumHasNotes()) list.add("🥁 DRUM 909" to 1)
         for (t in 0 until InstState.SYN_TRACKS) if (InstState.synTracks[t].hasNotes()) list.add("🎹 ${InstState.synName(t)} (${InstState.synWaveNames[InstState.synTracks[t].wave.coerceIn(0, InstState.synWaveNames.size - 1)]})" to if (t < 3) 2 + t else if (t == InstState.KEYS_TRACK) 6 else 7)
         for (p in 0 until PadView.VISIBLE_PADS) if (Engine.hasLoop(p)) list.add("∿ Pad ${p + 1} · ${Engine.padName(p) ?: "Loop"}" to StemRecorder.PAD0 + p)
-        val xs = arrayOf("⬡ EUKLID" to Euclid.on, "🌌 ATMOS" to Atmos.on, "🎤 HARMONIZER" to Harmonizer.on, "🐺 WOLF" to Wolf.on, "🧬 RHYTHM ARCHITECT" to Architect.on, "🪐 ORBITS" to Orbits.on, "🖐 TOUCH-LAB" to (TouchLab.specPlay || Modular.drone))
+        val xs = arrayOf("⬡ EUKLID" to Euclid.on, "🌌 ATMOS" to Atmos.on, "🎤 HARMONIZER" to Harmonizer.on, "🐺 WOLF" to Wolf.on, "🧬 RHYTHM ARCHITECT" to Architect.on, "🪐 ORBITS" to Orbits.on, "🖐 TOUCH-LAB" to (TouchLab.specPlay || Modular.drone), "🚀 FX-GEN" to FxGen.active(), "🤖 VOCODER" to Vocoder.on)
         for ((k, x) in xs.withIndex()) if (x.second) list.add(x.first to StemRecorder.X0 + k)
         if (list.isEmpty()) { toast("Noch kein Instrument mit Inhalt"); return }
         ui().setTitle("💾 Welches Instrument exportieren?")

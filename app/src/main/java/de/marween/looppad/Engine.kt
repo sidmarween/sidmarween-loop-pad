@@ -465,6 +465,11 @@ object Engine {
         synth?.queue(-1, true, semi, 1f, tag)
     }
 
+    /** Live-Ton mit Verzögerung in Frames (Strum). */
+    fun synTrackLiveAt(track: Int, on: Boolean, semi: Int, vel: Float, tag: Int, delay: Long) {
+        synths?.getOrNull(track)?.queue(if (delay <= 0L) -1L else written + delay, on, semi, vel, tag, intArrayOf(0))
+    }
+
     /** Live-Ton auf einer bestimmten Synth-Spur (Bass-Labor-Tasten). */
     fun synTrackLive(track: Int, on: Boolean, semi: Int, vel: Float, tag: Int) {
         synths?.getOrNull(track)?.queue(-1, on, semi, vel, tag)
@@ -837,6 +842,8 @@ object Engine {
         GrooveOrganism.on = false; GrooveOrganism.frozen = false; java.util.Arrays.fill(GrooveOrganism.locked, false)
         TouchLab.specPlay = false; TouchLab.allOff(); for (r in TouchLab.spec) java.util.Arrays.fill(r, 0f)
         Modular.drone = false; Modular.reset()
+        FxGen.stopAll(); Vocoder.on = false; Vocoder.robot = false
+        ChordPad.recorded.clear(); ChordPad.recording = false; ChordPad.root = -1
     }
 
     /** Rendert das Sequenzer-Pattern als nahtlosen Ein-Takt-Loop. */
@@ -2752,7 +2759,7 @@ object Engine {
                 }
                 if (sb >= 0) {
                     if (padSource[sb] == 2) cm = padSrcMask[sb] and (1 shl sb).inv()
-                    if (padSource[sb] == 3) cim = padInstMask[sb] and 0x3FF
+                    if (padSource[sb] == 3) cim = padInstMask[sb] and 0xFFF
                 }
             }
             captureMask = cm
@@ -3091,6 +3098,18 @@ object Engine {
                 TouchLab.render(xL, xR, block, sampleRate, w, seqStart(), seqBar())
                 mixX(9)
             }
+            // FX-GENERATOR: Riser, Impacts, Drops im Takt
+            if (FxGen.active()) {
+                java.util.Arrays.fill(xL, 0, block, 0f); java.util.Arrays.fill(xR, 0, block, 0f)
+                FxGen.render(xL, xR, block, sampleRate, w, seqStart(), seqBar())
+                mixX(10)
+            }
+            // VOCODER: Mikrofon steuert einen Synth-Akkord
+            if (Vocoder.active()) {
+                java.util.Arrays.fill(xL, 0, block, 0f); java.util.Arrays.fill(xR, 0, block, 0f)
+                Vocoder.render(xL, xR, block, sampleRate, if (Vocoder.on) micLatest(block) else null)
+                mixX(11)
+            }
             MasterBus.process(mL, mR, block, sampleRate)
             // Schutz-Limiter: Spitzen (z. B. zwei Decks gleichzeitig) sanft absenken statt hart zu clippen
             safety.process(mL, mR, block)
@@ -3369,7 +3388,7 @@ object Engine {
     @Volatile private var captureInst = 0
     /** Bei Eingang 3: welche Instrumente (Bit 0 ACID 303, Bit 1 DRUM 909, Bit 2 SYNTH, 3 EUKLID, 4 ATMOS, 5 HARMONIZER). */
     val padInstMask = IntArray(PADS) { 7 }
-    val INST_NAMES = arrayOf("ACID 303", "DRUM 909", "SYNTH", "EUKLID", "ATMOS", "HARMONIZER", "WOLF", "ARCHITECT", "ORBITS", "TOUCH-LAB")
+    val INST_NAMES = arrayOf("ACID 303", "DRUM 909", "SYNTH", "EUKLID", "ATMOS", "HARMONIZER", "WOLF", "ARCHITECT", "ORBITS", "TOUCH-LAB", "FX-GEN", "VOCODER")
     private var padRing = FloatArray(0)
 
     fun maskPads(m: Int): List<Int> = (0 until PADS).filter { (m shr it) and 1 != 0 }
@@ -3463,7 +3482,7 @@ object Engine {
             t.mask = padSrcMask[p] and (1 shl p).inv()
             if (t.mask == 0) t.src = 1
         } else if (t.src == 3) {
-            t.mask = padInstMask[p] and 0x3FF
+            t.mask = padInstMask[p] and 0xFFF
             if (t.mask == 0) t.src = 1
         }
         t.live = liveBars != 0
@@ -3624,7 +3643,7 @@ object Engine {
             // Instrument-Eingang: aufgenommene Instrumente ausschalten (sonst doppelt)
             if (bounce && (take.src == 3 || take.src == 1) && !take.oneShot) {
                 val off = ArrayList<String>()
-                val im = if (take.src == 1) 0x3FF else take.mask
+                val im = if (take.src == 1) 0xFFF else take.mask
                 if ((im and 1) != 0 && InstState.acidOn) { InstState.acidOn = false; off.add("303") }
                 if ((im and 2) != 0 && InstState.drumOn) { InstState.drumOn = false; off.add("909") }
                 if ((im and 4) != 0 && InstState.synOn) { InstState.synOn = false; off.add("SYNTH") }
@@ -3635,6 +3654,7 @@ object Engine {
                 if ((im and 128) != 0 && Architect.on) { Architect.on = false; off.add("RHYTHM ARCHITECT") }
                 if ((im and 256) != 0 && Orbits.on) { Orbits.on = false; off.add("ORBITS") }
                 if ((im and 512) != 0 && TouchLab.specPlay) { TouchLab.specPlay = false; off.add("TOUCH-LAB") }
+                if ((im and 2048) != 0 && Vocoder.on) { Vocoder.on = false; off.add("VOCODER") }
                 if (off.isNotEmpty()) onBouncedInst?.invoke(p, off.joinToString(", "))
             }
             onRecorded?.invoke(p, data.copyOf(), sampleRate)
@@ -3684,7 +3704,7 @@ object Engine {
 
     fun instCodeOn(code: Int): Boolean = when (code) {
         in 0 until InstState.INSTS -> InstState.instOn(code)
-        10 -> Euclid.on; 11 -> Atmos.on; 12 -> Harmonizer.on; 13 -> Wolf.on; 14 -> Architect.on; 15 -> Orbits.on; 16 -> TouchLab.specPlay || Modular.drone
+        10 -> Euclid.on; 11 -> Atmos.on; 12 -> Harmonizer.on; 13 -> Wolf.on; 14 -> Architect.on; 15 -> Orbits.on; 16 -> TouchLab.specPlay || Modular.drone; 17 -> FxGen.active(); 18 -> Vocoder.on
         else -> false
     }
 
@@ -3695,6 +3715,8 @@ object Engine {
             13 -> { Wolf.switch(v); if (v && !seqPlaying) transportPlay(false) }
             14 -> { Architect.on = v; if (v && !seqPlaying) transportPlay(false) }
             15 -> { Orbits.on = v; if (v && !seqPlaying) transportPlay(false) }
+            17 -> if (!v) FxGen.stopAll()
+            18 -> Vocoder.on = v
             16 -> { if (TouchLab.mode == TouchLab.SPECTRAL) TouchLab.specPlay = v else Modular.drone = v && TouchLab.mode == TouchLab.MODULAR; if (!v) { TouchLab.specPlay = false; Modular.drone = false; TouchLab.allOff() } }
         }
     }
@@ -3713,6 +3735,7 @@ object Engine {
         if (Architect.on) used.add(14)
         if (Orbits.on) used.add(15)
         if (TouchLab.specPlay || Modular.drone) used.add(16)
+        if (Vocoder.on) used.add(18)
         for (code in used) {
             if (padInst.contains(code)) continue
             val p = (0 until min(12, PADS)).firstOrNull { loops.get(it) == null && takes.get(it) == null && padInst[it] < 0 } ?: return
@@ -4918,17 +4941,17 @@ object Engine {
         private set
     @Volatile private var recLastBar = -1
     /** Zusatz-Spuren im Song: ATMOS, EUKLID, HARMONIZER (an/aus je Takt). */
-    const val ARR_X = 7
+    const val ARR_X = 9
     val arrX = Array(ARR_X) { BooleanArray(ARR_MAX) }
-    val ARR_X_NAMES = arrayOf("ATMOS", "EUKLID", "HARMONIZER", "WOLF", "ARCHITECT", "ORBITS", "TOUCH-LAB")
+    val ARR_X_NAMES = arrayOf("ATMOS", "EUKLID", "HARMONIZER", "WOLF", "ARCHITECT", "ORBITS", "TOUCH-LAB", "FX-GEN", "VOCODER")
     /** Block-Grenzen im Song-Editor: hier beginnt ein neuer Block (auch wenn davor dasselbe liegt). Spuren 0 … TRK_AUTO−1. */
     val arrBreak = Array(ARR_ROWS + ARR_X) { BooleanArray(ARR_MAX) }
     /** Abschnitte: ab diesem Takt beginnt Abschnitt k ([SECTION_NAMES]), -1 = keiner. */
     val arrSection = IntArray(ARR_MAX) { -1 }
     val SECTION_NAMES = arrayOf("INTRO", "HAUPTTEIL", "AUFBAU", "DROP", "BREAK", "BRIDGE", "ENDING")
 
-    private fun xOn(k: Int): Boolean = when (k) { 0 -> Atmos.on; 1 -> Euclid.on; 2 -> Harmonizer.on; 3 -> Wolf.on; 4 -> Architect.on; 5 -> Orbits.on; else -> TouchLab.specPlay }
-    private fun setXOn(k: Int, v: Boolean) { when (k) { 0 -> Atmos.on = v; 1 -> Euclid.on = v; 2 -> Harmonizer.on = v; 3 -> Wolf.switch(v); 4 -> Architect.on = v; 5 -> Orbits.on = v; else -> TouchLab.specPlay = v } }
+    private fun xOn(k: Int): Boolean = when (k) { 0 -> Atmos.on; 1 -> Euclid.on; 2 -> Harmonizer.on; 3 -> Wolf.on; 4 -> Architect.on; 5 -> Orbits.on; 6 -> TouchLab.specPlay; 7 -> false; else -> Vocoder.on }
+    private fun setXOn(k: Int, v: Boolean) { when (k) { 0 -> Atmos.on = v; 1 -> Euclid.on = v; 2 -> Harmonizer.on = v; 3 -> Wolf.switch(v); 4 -> Architect.on = v; 5 -> Orbits.on = v; 6 -> TouchLab.specPlay = v; 7 -> {}; else -> Vocoder.on = v } }
 
     /**
      * Song abspielen (aus Baukasten/Editor): Song-Modus nur für diese Wiedergabe – nach ■ sind Pads und Instrumente
