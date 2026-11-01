@@ -2038,10 +2038,15 @@ class MainActivity : Activity() {
         val pads = (0 until PadView.VISIBLE_PADS).filter { Engine.hasLoop(it) }
         val items = ArrayList<String>()
         items.add("📂 WAV/MP3 laden …")
+        items.add("📚 Aus der Bibliothek (mitgelieferte & eigene Samples) …")
+        items.add("🎵 Aus einem Song der Sammlung (einzelne Schläge) …")
         for (p in pads) items.add("🎚 von Pad ${p + 1} übernehmen" + (Engine.padName(p)?.let { " · $it" } ?: ""))
         if (UserSamples.has(key)) items.add("✕ Sample entfernen (" + (if (euk) "eingebauter Klang" else "909-Klang") + ")")
         ui().setTitle("$name · Sample")
-            .setItems(items.toTypedArray()) { _, w ->
+            .setItems(items.toTypedArray()) { _, w0 ->
+                if (w0 == 1) { voiceFromLibrary(key, name, euk); return@setItems }
+                if (w0 == 2) { voiceFromSong(key, name, euk); return@setItems }
+                val w = if (w0 == 0) 0 else w0 - 2
                 when {
                     w == 0 -> {
                         voiceKey = key
@@ -2058,6 +2063,103 @@ class MainActivity : Activity() {
                     else -> { UserSamples.remove(this, key); hint("$name: wieder der eingebaute Klang"); showVoiceSamples(euk) }
                 }
             }.setNegativeButton("Zurück") { _, _ -> showVoiceSamples(euk) }.show()
+    }
+
+    /** Kurzes Probehören nach dem Zuweisen (909-Stimme bzw. Euklid-Spur). */
+    private fun voicePreview(key: String) {
+        if (key.startsWith("drum:")) Engine.previewDrum(key.substringAfter(':').toIntOrNull() ?: return)
+    }
+
+    private fun voiceFromLibrary(key: String, name: String, euk: Boolean) {
+        class Item(val label: String, val asset: String?, val file: java.io.File?)
+        val list = ArrayList<Item>()
+        // passende Kategorien zuerst: One-Shots (Drums) vor Loops
+        for (smp in SampleLibrary.samples.sortedBy { if (it.oneShot) 0 else 1 }) list.add(Item((if (smp.oneShot) "⚡ " else "∞ ") + smp.category + " · " + smp.title, smp.file, null))
+        try { for (u in Projects.userSamples(this)) list.add(Item("★ Eigene · " + u.category + " · " + u.title, null, u.file)) } catch (ignored: Exception) {}
+        if (list.isEmpty()) { toast("Bibliothek ist leer"); return }
+        ui().setTitle("📚 Bibliothek → $name")
+            .setItems(list.map { it.label }.toTypedArray()) { _, i ->
+                val it = list[i]
+                Thread {
+                    try {
+                        val x = if (it.file != null) AudioFiles.decodeFile(it.file, Engine.sampleRate, 8) else AudioFiles.decodeAsset(this, it.asset!!, Engine.sampleRate, 8)
+                        UserSamples.set(this, key, x, Engine.sampleRate, it.label.substringAfterLast(" · "))
+                        runOnUiThread { voicePreview(key); hint("$name: ${it.label.substringAfterLast(" · ")}"); voiceFromLibrary(key, name, euk) }
+                    } catch (e: Throwable) { runOnUiThread { toast("Laden fehlgeschlagen: ${e.message ?: e}") } }
+                }.start()
+            }.setNegativeButton("Fertig") { _, _ -> showVoiceSamples(euk) }.show()
+    }
+
+    /** Einzelne Schläge aus einem Song der Sammlung: die deutlichsten Anschläge der ersten Minute zur Auswahl. */
+    private fun voiceFromSong(key: String, name: String, euk: Boolean) {
+        val tracks = TrackDb.all().filter { !it.missing }
+        if (tracks.isEmpty()) { toast("Sammlung ist leer – erst Songs hinzufügen"); return }
+        ui().setTitle("🎵 Song wählen → $name")
+            .setItems(tracks.map { it.title }.toTypedArray()) { _, i ->
+                val t = tracks[i]
+                hint("Suche Schläge in „${t.title}“ …")
+                Thread {
+                    try {
+                        val sr = Engine.sampleRate
+                        val x = AudioFiles.decode(this, Uri.parse(t.uri), sr, 75)
+                        val hits = findHits(x, sr)
+                        runOnUiThread { pickHit(key, name, euk, t.title, x, sr, hits) }
+                    } catch (e: Throwable) { runOnUiThread { toast("Song konnte nicht gelesen werden: ${e.message ?: e}") } }
+                }.start()
+            }.setNegativeButton("Zurück") { _, _ -> voiceSampleMenu(key, name, euk) }.show()
+    }
+
+    private class Hit(val at: Int, val low: Float, val high: Float)
+
+    /** Anschläge finden (Energie-Sprung) und grob einordnen: tief (Kick), mittel (Snare/Clap), hell (Hats). */
+    private fun findHits(x: FloatArray, sr: Int): List<Hit> {
+        val hop = sr / 100
+        val n = x.size / hop
+        if (n < 10) return emptyList()
+        val e = FloatArray(n); val lo = FloatArray(n); val hi = FloatArray(n)
+        var lp = 0f; var hp = 0f; var px = 0f
+        val aL = 0.02f
+        for (k in 0 until n) {
+            var s = 0f; var sl = 0f; var sh = 0f
+            for (i in k * hop until (k + 1) * hop) {
+                val v = x[i]
+                lp += aL * (v - lp)
+                hp = 0.9f * (hp + v - px); px = v
+                s += v * v; sl += lp * lp; sh += hp * hp
+            }
+            e[k] = kotlin.math.ln(1e-9f + s); lo[k] = sl / (s + 1e-9f); hi[k] = sh / (s + 1e-9f)
+        }
+        val cand = ArrayList<Pair<Int, Float>>()
+        for (k in 3 until n - 1) {
+            val rise = e[k] - maxOf(e[k - 1], e[k - 2], e[k - 3])
+            if (rise > 1.6f && e[k] >= e[k + 1] - 0.3f) cand.add(k to rise + e[k] * 0.1f)
+        }
+        val out = ArrayList<Hit>()
+        for ((k, _) in cand.sortedByDescending { it.second }) {
+            if (out.any { kotlin.math.abs(it.at / hop - k) < 30 }) continue
+            out.add(Hit(maxOf(0, k * hop - hop / 2), lo[k], hi[k]))
+            if (out.size >= 24) break
+        }
+        return out.sortedBy { it.at }
+    }
+
+    private fun pickHit(key: String, name: String, euk: Boolean, title: String, x: FloatArray, sr: Int, hits: List<Hit>) {
+        if (hits.isEmpty()) { toast("Keine deutlichen Schläge gefunden"); return }
+        val len = (if (key == "euk:3") 1.2 else 0.6) * sr
+        val labels = hits.map { h ->
+            val sec = h.at.toFloat() / sr
+            val kind = when { h.low > 0.55f -> "🔈 tief (Kick/Bass)"; h.high > 0.35f -> "🔔 hell (Hat/Becken)"; else -> "🥁 mittel (Snare/Clap/Perc)" }
+            String.format(java.util.Locale.GERMANY, "%d:%04.1f  %s", (sec / 60).toInt(), sec % 60, kind)
+        }
+        ui().setTitle("„$title“ → $name · antippen = übernehmen & hören")
+            .setItems(labels.toTypedArray()) { _, i ->
+                val h = hits[i]
+                val e = minOf(x.size, h.at + len.toInt())
+                UserSamples.set(this, key, x.copyOfRange(h.at, e), sr, title.take(18) + " @" + labels[i].substringBefore("  "))
+                voicePreview(key)
+                hint("$name: Schlag aus „$title“ – nochmal wählen zum Vergleichen")
+                pickHit(key, name, euk, title, x, sr, hits)
+            }.setNegativeButton("Fertig") { _, _ -> showVoiceSamples(euk) }.show()
     }
 
     private fun showSoundKits() {
