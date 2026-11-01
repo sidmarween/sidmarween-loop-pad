@@ -95,6 +95,9 @@ class BassLabPanel(private val host: View) {
         } else {
             visc.setEmpty(); crater.setEmpty()
             for (i in 0 until 4) { val r = i / 2; val c = i % 2; val sw = (w - g) / 2; sliders[i].set(box.left + pad + c * (sw + g), y + r * (sh + g), box.left + pad + c * (sw + g) + sw, y + r * (sh + g) + sh) }
+            // Funk: große Spieltasten
+            val kt = sliders[3].bottom + dp(36f)
+            for (k in 0 until 8) keys[k].set(keys[k].left, kt, keys[k].right, box.bottom - pad)
         }
     }
 
@@ -135,7 +138,7 @@ class BassLabPanel(private val host: View) {
         btn(c, bPreset, "◀ $pn ▶", true, col)
         if (tab == 0) drawMagma(c) else {
             text.color = Color.argb(180, 255, 255, 255); text.textSize = dp(10f)
-            c.drawText("Tasten unten: oben = POP · Mitte = SLAP · unten = GHOST · über die Tasten wischen = Slide", box.centerX(), sliders[3].bottom + dp(22f), text)
+            c.drawText(fitLabel(text, "oben = POP · Mitte = SLAP · unten = GHOST · wischen = Slide", box.width() - dp(24f), dp(10f), dp(7f)), box.centerX(), sliders[3].bottom + dp(22f), text)
         }
         for (i in 0 until 4) {
             val r = sliders[i]
@@ -229,11 +232,10 @@ class BassLabPanel(private val host: View) {
             c.drawLine(r.left + dp(3f), r.top + r.height() * 2 / 3, r.right - dp(3f), r.top + r.height() * 2 / 3, stroke)
             text.color = Color.WHITE; text.textSize = min(dp(12f), r.width() * 0.32f)
             c.drawText(InstState.scaleNoteNames[Math.floorMod(root + INTS[k], 12)], r.centerX(), r.centerY() + dp(4f), text)
-            if (k == 0) {
-                text.textSize = dp(7.5f); text.color = Color.argb(150, 255, 255, 255)
-                c.drawText("POP", r.centerX(), r.top + dp(11f), text)
-                c.drawText("GHOST", r.centerX(), r.bottom - dp(5f), text)
-            }
+            text.textSize = dp(7.5f); text.color = Color.argb(150, 255, 255, 255)
+            c.drawText("POP", r.centerX(), r.top + dp(11f), text)
+            if (r.height() > dp(150f)) c.drawText("SLAP", r.centerX(), r.top + r.height() / 2 - dp(14f), text)
+            c.drawText("GHOST", r.centerX(), r.bottom - dp(5f), text)
         }
     }
 

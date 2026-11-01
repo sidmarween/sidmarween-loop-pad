@@ -143,6 +143,9 @@ object Orbits {
 
     // ---------------------------------------------------------------- Bahn-Rechnung
     /** Position nach Kepler: Ort (x, y) und Winkel. */
+    /** Position für die Anzeige berechnen (auch wenn ORBITS nicht läuft). */
+    fun placeNow(s: Sat) { place(s) }
+
     private fun place(s: Sat): Double {
         val e = s.e.toDouble().coerceIn(0.0, 0.9)
         val mm = s.m

@@ -68,9 +68,9 @@ class OrbitsPanel(private val host: View) {
         val r1 = arrayOf(bOn, bAdd, bNew, bSync)
         for (i in 0 until 4) r1[i].set(box.left + pad + i * (q + g), row1, box.left + pad + i * (q + g) + q, row1 + bh)
         val row2 = row1 + bh + g
-        bPreset.set(box.left + pad, row2, box.left + pad + w * 0.36f, row2 + bh)
-        bCore.set(bPreset.right + g, row2, bPreset.right + g + w * 0.2f, row2 + bh)
-        bWell.set(bCore.right + g, row2, bCore.right + g + w * 0.2f, row2 + bh)
+        bPreset.set(box.left + pad, row2, box.left + pad + w * 0.3f, row2 + bh)
+        bCore.set(bPreset.right + g, row2, bPreset.right + g + w * 0.19f, row2 + bh)
+        bWell.set(bCore.right + g, row2, bCore.right + g + w * 0.17f, row2 + bh)
         bRec.set(bWell.right + g, row2, box.right - pad - dp(40f) - g, row2 + bh)
         bRecBars.set(bRec.right + g, row2, box.right - pad, row2 + bh)
         // unten: Regler (2 Reihen) und Satelliten-Leiste
@@ -137,8 +137,9 @@ class OrbitsPanel(private val host: View) {
         btn(c, bPreset, "◀ " + (if (Orbits.presetIdx >= 0) Orbits.PRESETS[Orbits.presetIdx].name else "VORLAGE") + " ▶", Orbits.presetIdx >= 0, col)
         btn(c, bCore, "KERN: " + Orbits.CORE_NAMES[Orbits.core], Orbits.core != 2, Color.rgb(255, 200, 120))
         btn(c, bWell, if (Orbits.wellPull) "BRUNNEN ⚡" else "BRUNNEN 🧊", false, if (Orbits.wellPull) Color.rgb(255, 120, 90) else Color.rgb(120, 200, 255))
-        btn(c, bRec, "⏺ AUF PAD", false, Color.rgb(255, 90, 90))
+        btn(c, bRec, "⏺ PAD", false, Color.rgb(255, 90, 90))
         btn(c, bRecBars, "$recBars T", false, Color.rgb(255, 90, 90))
+        if (!Orbits.on) for (s in Orbits.sats) if (s.active) Orbits.placeNow(s)
         drawSpace(c, col)
         // Satelliten-Leiste
         val s = Orbits.sats.getOrNull(sel)
