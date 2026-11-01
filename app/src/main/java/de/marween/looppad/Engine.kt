@@ -2904,7 +2904,7 @@ object Engine {
                 }
                 val dst = if (toFx(p)) bus else out
                 for (i in 0 until block) dst[i] += pb[i]
-                if (stemNow && audible(p)) { val sb = stemBufs[5]; for (i in 0 until block) sb[i] += pb[i] }
+                if (stemNow && audible(p)) { val sb = stemBufs[if (p < 12) StemRecorder.PAD0 + p else 5]; for (i in 0 until block) sb[i] += pb[i] }
                 if (capOn && (captureMask shr p) and 1 != 0) for (i in 0 until block) capBuf[i] += pb[i]
             }
 
@@ -2989,6 +2989,7 @@ object Engine {
             val ciX = captureInst
             fun mixX(bit: Int) {
                 for (i in 0 until block) { mL[i] += xL[i] * vol; mR[i] += xR[i] * vol }
+                if (stemNow) { val sb = stemBufs[StemRecorder.X0 + (bit - 3)]; for (i in 0 until block) sb[i] += (xL[i] + xR[i]) * 0.5f }
                 if ((ciX shr bit) and 1 != 0) addPadRing(xL, xR, w, block)
                 addOutRing(xL, xR, w, block)
             }

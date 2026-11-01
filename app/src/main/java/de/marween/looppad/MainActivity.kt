@@ -99,6 +99,7 @@ class MainActivity : Activity() {
         pads.onTempo = { showTempo() }
         pads.onInstMore = { showMoreInstruments() }
         pads.onToCollection = { exportAllToCollection() }
+        pads.onExportWaves = { exportAllWaves() }
         UserSamples.load(this)
         pads.euclid.onSamples = { showVoiceSamples(true) }
         pads.songBuilder.onPickSection = { bar -> pads.songEd.onPickSection?.invoke(bar) }
@@ -2862,6 +2863,7 @@ class MainActivity : Activity() {
                 add("✂ Slicer: Song-Abschnitt auf 16 Pads zerlegen") { if (djMode) switchMode(false); if (Slicer.data == null) pickSlicerSource() else pads.openSlicer() }
                 add("👻 Ghost-Producer: Genre-Patterns als Live-Remix") { openGhost() }
                 add("💿 Alles in die Sammlung (Pads, Instrumente, Loops – ein Klick)") { exportAllToCollection() }
+                add("💾 Alle laufenden Spuren als einzelne WAVs (ein Klick)") { exportAllWaves() }
                 add("🎼 SONG: Teile bauen (Intro, Hauptteil, Ending), aufnehmen, Spuren-Ansicht") { if (djMode) switchMode(false); pads.openSongBuilder() }
                 add("🌌 ATMOS: Klangteppich & Drones (Übergänge, Intros)") { openAtmos() }
                 add("⬡ EUKLID: generative Polyrhythmen (Perc, Hats, Rim, Pluck)") { if (djMode) dj.openEuclid() else pads.openEuclid(); hint("▶ START – läuft im Takt des Decks · drei Regler: Schläge, Taktlänge, Morphing") }
@@ -3965,7 +3967,7 @@ class MainActivity : Activity() {
         val what = if (hasArrangement()) "Song-Matrix: $bars Takte" else "kein Song angelegt – aktueller Stand, 8 Takte"
         val items = arrayOf(
             "🎵 Ganzer Song als WAV (Stereo, mit allen Effekten)",
-            "🎚 Song + Stems: jede Spur als eigene WAV (ACID, DRUM, SYNTH 1–3, PADS)",
+            "🎚 Song + Stems: jede Spur als eigene WAV (Instrumente, jedes Pad, EUKLID, ATMOS, WOLF …)",
             "🎼 MIDI-Datei: alle Instrument-Spuren über den ganzen Song"
         )
         ui().setTitle("📤 Exportieren · $what · ${secs / 60}:${String.format(Locale.GERMANY, "%02d", secs % 60)} min")
@@ -3999,7 +4001,21 @@ class MainActivity : Activity() {
         startBounce(null, false, toCollection = true, barsOverride = bars)
     }
 
-    private fun startBounce(tree: Uri?, stems: Boolean, share: Boolean = false, toCollection: Boolean = false, barsOverride: Int = 0) {
+    /** 💾 Ein Klick: alles, was gerade läuft, einmal im Takt aufnehmen – jede Spur als eigene WAV + Gesamtmix, nach Musik/Marv PAD. */
+    private fun exportAllWaves() {
+        val any = (0 until PadView.VISIBLE_PADS).any { Engine.hasLoop(it) } || (0 until InstState.INSTS).any { InstState.instHasNotes(it) } || Euclid.on || Atmos.on || Wolf.on
+        if (!any) { toast("Noch läuft nichts – erst Pads oder Instrumente füllen"); return }
+        if (android.os.Build.VERSION.SDK_INT < 29) { toast("Braucht Android 10 oder neuer – sonst Menü › Exportieren › Song + Stems"); return }
+        var bars = 8
+        if (!hasArrangement()) {
+            for (p in 0 until PadView.VISIBLE_PADS) if (Engine.hasLoop(p) && !Engine.isOneShot(p)) bars = maxOf(bars, kotlin.math.ceil(Engine.padBarsLen(p).toDouble()).toInt())
+            for (i in 0 until InstState.INSTS) if (InstState.instOn(i) && InstState.instHasNotes(i)) bars = maxOf(bars, (InstState.instLen(i) + 15) / 16)
+            bars = ((bars + 3) / 4 * 4).coerceAtMost(64)
+        }
+        startBounce(null, true, toMusic = true, barsOverride = bars)
+    }
+
+    private fun startBounce(tree: Uri?, stems: Boolean, share: Boolean = false, toCollection: Boolean = false, barsOverride: Int = 0, toMusic: Boolean = false) {
         if (SetRecorder.recording) { toast("Es läuft schon eine Aufnahme"); return }
         val rate = Engine.sampleRate
         val bpm = Engine.currentBpm().let { if (it > 0f) it else 120f }
@@ -4020,7 +4036,7 @@ class MainActivity : Activity() {
         val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; addView(tv); addView(pb, LinearLayout.LayoutParams(-1, -2).apply { leftMargin = (20 * d).toInt(); rightMargin = (20 * d).toInt() }) }
         var cancelled = false
         var finished = false
-        val dlg = ui().setTitle(if (toCollection) "💿 Wird für die Sammlung aufgenommen" else if (stems) "📤 Song + Stems werden aufgenommen" else "📤 Song wird aufgenommen")
+        val dlg = ui().setTitle(if (toMusic) "💾 Alle Spuren werden als WAVs aufgenommen" else if (toCollection) "💿 Wird für die Sammlung aufgenommen" else if (stems) "📤 Song + Stems werden aufgenommen" else "📤 Song wird aufgenommen")
             .setView(box)
             .setNegativeButton("Abbrechen") { _, _ -> cancelled = true }
             .setCancelable(false)
@@ -4039,6 +4055,40 @@ class MainActivity : Activity() {
             if (toCollection) {
                 tmp.deleteRecursively()
                 if (master != null) masterToCollection(master, "Marv PAD " + stamp(), bpm)
+                return
+            }
+            if (toMusic) {
+                toast("Speichere WAVs …")
+                val padNames = Array(12) { Engine.padName(it) }
+                Thread {
+                    var n = 0
+                    val sub = "Waves " + stamp()
+                    try {
+                        fun clean(x: String) = x.replace(Regex("[^A-Za-z0-9äöüÄÖÜß ._-]+"), "_").trim().take(40)
+                        if (master != null) { ShareAudio.wavToMusic(this, master, "00 Gesamtmix", sub); n++ }
+                        for ((i, f) in stemFiles.withIndex()) {
+                            if (StemRecorder.peak[i] <= 0.0005f) continue
+                            val nm = StemRecorder.NAMES[i]
+                            val label = when {
+                                i in StemRecorder.PAD0 until StemRecorder.PAD0 + 12 -> {
+                                    val p = i - StemRecorder.PAD0
+                                    "Pad %02d".format(p + 1) + (padNames[p]?.let { " - " + clean(it) } ?: "")
+                                }
+                                i in 2..4 || i == 6 || i == 7 -> InstState.synName(if (i <= 4) i - 2 else i - 3)
+                                i == 0 -> "ACID 303"
+                                i == 1 -> "DRUM 909"
+                                else -> nm
+                            }
+                            ShareAudio.wavToMusic(this, f, "%02d ".format(i + 1) + clean(label), sub)
+                            n++
+                        }
+                        master?.delete()
+                        tmp.deleteRecursively()
+                        runOnUiThread { hint("💾 $n WAVs gespeichert in Musik › Marv PAD › $sub (Spuren trocken, Gesamtmix mit Effekten)") }
+                    } catch (e: Exception) {
+                        runOnUiThread { toast("Speichern fehlgeschlagen: ${e.message ?: e}") }
+                    }
+                }.start()
                 return
             }
             if (share || tree == null) {

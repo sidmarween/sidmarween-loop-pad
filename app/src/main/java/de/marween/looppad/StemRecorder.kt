@@ -9,7 +9,11 @@ import kotlin.math.min
  * Der Mischer-Thread schiebt pro Block alle Spuren hinein, ein eigener Thread schreibt die Dateien.
  */
 object StemRecorder {
-    val NAMES = arrayOf("ACID", "DRUM", "SYNTH1", "SYNTH2", "SYNTH3", "PADS", "KEYS", "BASSLINE")
+    /** 0–7 Instrumente (5 = Slicer/Ghost), 8–19 die Pads 1–12 einzeln, 20–23 EUKLID, ATMOS, HARMONIZER, WOLF. */
+    val NAMES = arrayOf("ACID", "DRUM", "SYNTH1", "SYNTH2", "SYNTH3", "SLICER", "KEYS", "BASSLINE") +
+        Array(12) { "PAD%02d".format(it + 1) } + arrayOf("EUKLID", "ATMOS", "HARMONIZER", "WOLF")
+    const val PAD0 = 8
+    const val X0 = 20
     val COUNT = NAMES.size
 
     @Volatile var recording = false
@@ -32,7 +36,7 @@ object StemRecorder {
         rafs = try {
             files.map { f -> RandomAccessFile(f, "rw").apply { setLength(0); write(header(0)) } }
         } catch (e: Exception) { return false }
-        ring = Array(COUNT) { FloatArray(rate * 10) }
+        ring = Array(COUNT) { FloatArray(rate * 3) }
         wPos = 0L; rPos = 0L
         java.util.Arrays.fill(peak, 0f)
         recording = true

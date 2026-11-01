@@ -141,4 +141,24 @@ object ShareAudio {
         progress(1f)
         return uri
     }
+
+    /** WAV unverändert nach Musik/Marv PAD/[sub] kopieren (Android 10+). */
+    fun wavToMusic(ctx: Context, wav: File, name: String, sub: String): Uri {
+        if (Build.VERSION.SDK_INT < 29) throw IllegalStateException("Speichern in „Musik“ braucht Android 10 oder neuer")
+        val cv = ContentValues().apply {
+            put(MediaStore.Audio.Media.DISPLAY_NAME, "$name.wav")
+            put(MediaStore.Audio.Media.TITLE, name)
+            put(MediaStore.Audio.Media.ARTIST, "Marv PAD")
+            put(MediaStore.Audio.Media.MIME_TYPE, "audio/x-wav")
+            put(MediaStore.Audio.Media.RELATIVE_PATH, "Music/Marv PAD/$sub")
+            put(MediaStore.Audio.Media.IS_PENDING, 1)
+        }
+        val res = ctx.contentResolver
+        val uri = res.insert(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, cv) ?: throw IllegalStateException("Musik-Ordner nicht beschreibbar")
+        res.openOutputStream(uri)?.use { o -> wav.inputStream().use { it.copyTo(o, 1 shl 16) } }
+        cv.clear()
+        cv.put(MediaStore.Audio.Media.IS_PENDING, 0)
+        res.update(uri, cv, null, null)
+        return uri
+    }
 }

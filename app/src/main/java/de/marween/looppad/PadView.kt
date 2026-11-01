@@ -2603,15 +2603,20 @@ class PadView(context: Context) : View(context) {
     }
 
     private var mixList: List<MixCh> = emptyList()
+    private val mixExport = RectF()
+    /** 💾 im Mixer: alle laufenden Kanäle als einzelne WAVs speichern (MainActivity). */
+    var onExportWaves: (() -> Unit)? = null
     private val mixStrips = ArrayList<RectF>()
     private val mixOnBtn = ArrayList<RectF>()
     private val mixFader = ArrayList<RectF>()
 
     private fun mixLayoutAll() {
         mixList = mixChannels()
-        val n = mixList.size
+        mixExport.setEmpty()
+        if (mixList.isEmpty()) return
+        // letzter Platz: 💾 alle Kanäle als WAVs
+        val n = mixList.size + 1
         mixStrips.clear(); mixOnBtn.clear(); mixFader.clear()
-        if (n == 0) return
         val r = mixRect
         val minW = dp(54f)
         val perMax = max(1, ((r.width() - dp(8f)) / minW).toInt())
@@ -2622,6 +2627,7 @@ class PadView(context: Context) : View(context) {
         for (k in 0 until n) {
             val row = k / per; val col = k % per
             val st = RectF(r.left + dp(4f) + col * sw + dp(2f), r.top + dp(4f) + row * rh + dp(2f), r.left + dp(4f) + (col + 1) * sw - dp(2f), r.top + dp(4f) + (row + 1) * rh - dp(2f))
+            if (k == n - 1) { mixExport.set(st); continue }
             mixStrips.add(st)
             val bh = min(dp(46f), st.height() * 0.24f)
             mixOnBtn.add(RectF(st.left + dp(3f), st.bottom - bh - dp(3f), st.right - dp(3f), st.bottom - dp(3f)))
@@ -2631,6 +2637,11 @@ class PadView(context: Context) : View(context) {
 
     private fun mixDown(id: Int, x: Float, y: Float) {
         mixLayoutAll()
+        if (!mixExport.isEmpty && mixExport.contains(x, y)) {
+            performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+            onExportWaves?.invoke()
+            return
+        }
         val k = mixStrips.indexOfFirst { RectF(it).apply { inset(-dp(2f), -dp(2f)) }.contains(x, y) }
         if (k < 0) return
         val c = mixList[k]
@@ -2797,6 +2808,22 @@ class PadView(context: Context) : View(context) {
             textPaint.textSize = min(dp(13f), b.height() * 0.42f)
             textPaint.color = if (on) Color.BLACK else alpha(fg, 0.75f)
             canvas.drawText(if (on) "AN" else "AUS", b.centerX(), b.centerY() + textPaint.textSize * 0.36f, textPaint)
+        }
+        if (!mixExport.isEmpty) {
+            val e = mixExport
+            fillPaint.color = alpha(acc, 0.16f)
+            canvas.drawRoundRect(e, dp(8f), dp(8f), fillPaint)
+            strokePaint.strokeWidth = dp(1.4f); strokePaint.color = alpha(acc, 0.9f)
+            canvas.drawRoundRect(e, dp(8f), dp(8f), strokePaint)
+            textPaint.color = fg
+            textPaint.textSize = min(dp(26f), e.width() * 0.4f)
+            canvas.drawText("💾", e.centerX(), e.centerY() - dp(10f), textPaint)
+            textPaint.textSize = min(dp(11f), e.width() * 0.17f)
+            canvas.drawText(fitLabel(textPaint, "ALLE ALS", e.width() - dp(6f), textPaint.textSize, dp(6f)), e.centerX(), e.centerY() + dp(14f), textPaint)
+            canvas.drawText(fitLabel(textPaint, "WAVs", e.width() - dp(6f), textPaint.textSize, dp(6f)), e.centerX(), e.centerY() + dp(28f), textPaint)
+            textPaint.textSize = min(dp(8.5f), e.width() * 0.14f)
+            textPaint.color = alpha(fg, 0.55f)
+            canvas.drawText(fitLabel(textPaint, "je Kanal 1 Datei", e.width() - dp(6f), textPaint.textSize, dp(6f)), e.centerX(), e.bottom - dp(10f), textPaint)
         }
     }
 
