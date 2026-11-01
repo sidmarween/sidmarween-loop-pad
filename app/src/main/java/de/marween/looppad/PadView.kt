@@ -764,7 +764,7 @@ class PadView(context: Context) : View(context) {
         val bH = seqRect.bottom - sp - bTop
         // Platz für den ⤢-Knopf und den Ein-/Ausklapp-Knopf rechts außen freihalten
         val zw = (if (zoomEnabled) dp(30f) + dp(6f) else 0f) + dp(30f) + dp(6f)
-        val bW = min(dp(46f), (seqRect.width() - 2 * sp - zw) / 7.4f)
+        val bW = min(dp(46f), (seqRect.width() - 2 * sp - zw) / 8.5f)
         val bg = dp(6f)
         recBtn.set(seqRect.left + sp, bTop, seqRect.left + sp + bW, bTop + bH)
         playBtn.set(recBtn.right + bg, bTop, recBtn.right + bg + bW, bTop + bH)
@@ -778,7 +778,7 @@ class PadView(context: Context) : View(context) {
         seqFoldBtn.set(fr - dp(30f), bTop, fr, bTop + bH)
         // 💿 Alles in die Sammlung – nur wenn genug Platz ist
         val cw = uW * 1.1f
-        if (seqFoldBtn.left - dp(8f) - cw > mixBtn.right + dp(40f)) colBtn.set(seqFoldBtn.left - dp(8f) - cw, bTop, seqFoldBtn.left - dp(8f), bTop + bH) else colBtn.setEmpty()
+        if (mixBtn.right + bg + cw <= seqFoldBtn.left - dp(4f)) colBtn.set(mixBtn.right + bg, bTop, mixBtn.right + bg + cw, bTop + bH) else colBtn.setEmpty()
         if (SEC_SEQ in secHidden) {
             off(seqRect); for (r in stepRects) off(r)
             for (r in arrayOf(recBtn, playBtn, stopBtn, undoBtn, redoBtn, mixBtn, seqFoldBtn, colBtn)) off(r)
@@ -2905,8 +2905,8 @@ class PadView(context: Context) : View(context) {
         drawMixButton(canvas, cols)
         drawColButton(canvas, cols)
         if (!zoomPads.isEmpty) zoomBtn(canvas, zoomPads, cols)
-        val ix = mixBtn.right + dp(8f)
-        val avail = (if (colBtn.isEmpty) seqFoldBtn.left else colBtn.left) - dp(4f) - ix
+        val ix = (if (colBtn.isEmpty) mixBtn.right else colBtn.right) + dp(8f)
+        val avail = seqFoldBtn.left - dp(4f) - ix
         if (avail < dp(28f)) return
         val cin = Engine.countInBeat()
         val red = Color.rgb(255, 60, 80)
