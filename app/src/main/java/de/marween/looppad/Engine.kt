@@ -2933,7 +2933,9 @@ object Engine {
                     else -> { Slicer.render(rt, block, w); GhostLoop.render(rt, block, w) }
                 }
                 if (duck || stemNow) {
-                    val sb = if (stemNow && !soloed) stemBufs[min(kk, StemRecorder.COUNT - 1)] else null
+                    // Stems: ACID, DRUM, SYNTH1–3, PADS (Slicer), KEYS, BASSLINE
+                    val si = if (kk == 2 + InstState.SYN_TRACKS) 5 else if (kk < 5) kk else kk + 1
+                    val sb = if (stemNow && !soloed) stemBufs[min(si, StemRecorder.COUNT - 1)] else null
                     for (i in 0 until block) {
                         val v = if (duck) scTmp[i] * scEnv[i] else scTmp[i]
                         tgt[i] += v
@@ -5225,6 +5227,7 @@ object Engine {
         j.put("x", org.json.JSONArray().apply { for (row in arrX) put(String(CharArray(ARR_MAX) { if (row[it]) '1' else '0' })) })
         j.put("sections", org.json.JSONArray().apply { arrSection.forEach { put(it) } })
         j.put("breaks", org.json.JSONArray().apply { for (row in arrBreak) put(String(CharArray(ARR_MAX) { if (row[it]) '1' else '0' })) })
+        j.put("insts", InstState.INSTS)
         return j
     }
 
@@ -5248,7 +5251,13 @@ object Engine {
         launchFromJson(j.optJSONArray("launch"))
         j.optJSONArray("x")?.let { a -> for (k in 0 until min(ARR_X, a.length())) { val str = a.optString(k); for (b in 0 until min(ARR_MAX, str.length)) arrX[k][b] = str[b] == '1' } }
         j.optJSONArray("sections")?.let { a -> for (b in 0 until min(ARR_MAX, a.length())) arrSection[b] = a.optInt(b, -1) }
-        j.optJSONArray("breaks")?.let { a -> for (k in 0 until min(arrBreak.size, a.length())) { val str = a.optString(k); for (b in 0 until min(ARR_MAX, str.length)) arrBreak[k][b] = str[b] == '1' } }
+        // ältere Songs hatten weniger Instrument-Spuren: Grenzen der Zusatz-Spuren dahinter verschieben
+        val oldInsts = j.optInt("insts", 5)
+        j.optJSONArray("breaks")?.let { a -> for (k0 in 0 until a.length()) {
+            val k = if (k0 >= ARR_INST + oldInsts) k0 + (InstState.INSTS - oldInsts) else k0
+            if (k !in arrBreak.indices || (k0 < ARR_INST + oldInsts && k >= ARR_INST + InstState.INSTS)) continue
+            val str = a.optString(k0); for (b in 0 until min(ARR_MAX, str.length)) arrBreak[k][b] = str[b] == '1'
+        } }
         val pa = j.optJSONArray("pats")
         if (pa != null) {
             for (i in 0 until min(InstState.INSTS, pa.length())) {

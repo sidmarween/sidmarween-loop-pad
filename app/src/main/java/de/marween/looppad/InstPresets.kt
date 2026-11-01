@@ -346,16 +346,85 @@ object InstPresets {
     // ---------------------------------------------------------------- SYNTH (eigene Presets für Marv PAD)
 
     /** Note: Schritt, Halbton (0 = C4), Länge in Schritten. */
-    class SynNote(val step: Int, val semi: Int, val len: Int, val vel: Float = 1f)
+    /** [chd]: Akkord dieser Note (Index in synChordNames, −1 = Akkord der Spur). */
+    class SynNote(val step: Int, val semi: Int, val len: Int, val vel: Float = 1f, val chd: Int = -1)
     class Synth(
         val genre: String, val name: String, val bpm: Int, val wave: Int, val chord: Int, val oct: Int,
         val cut: Float, val res: Float, val env: Float, val atk: Float, val rel: Float, val det: Float,
-        val bars: Int, val notes: List<SynNote>
+        val bars: Int, val notes: List<SynNote>, val mono: Boolean = false, val glide: Float = 0f
     )
+
+    /** Gruppen, die bei KEYS bzw. BASSLINE oben stehen. */
+    val KEYS_GENRES = listOf("Piano", "E-Piano", "Orgel", "Leads")
+    val BASS_GENRES = listOf("Bassline")
+
+    /** Gleicher Akkord-Rhythmus je Takt: [hits] = Paare (Schritt, Länge), [chords] = Paare (Ton, Akkord: 1 DUR, 2 MOLL, 4 DUR7, 5 MOLL7). */
+    private fun cr(hits: IntArray, vararg chords: Int): List<SynNote> {
+        val out = ArrayList<SynNote>()
+        for (b in 0 until chords.size / 2) for (h in hits.indices step 2)
+            out.add(SynNote(b * 16 + hits[h], chords[b * 2], hits[h + 1], if (h == 0) 1f else 0.82f, chords[b * 2 + 1]))
+        return out
+    }
 
     private fun n(vararg t: Int): List<SynNote> = (t.indices step 3).map { SynNote(t[it], t[it + 1], t[it + 2]) }
 
     val SYNTHS = listOf(
+        // ---- Piano (Klang 11)
+        Synth("Piano", "Pop-Ballade (C · G · Am · F)", 78, 11, 0, 0, 0.55f, 0f, 0f, 0f, 0.35f, 0.3f, 4,
+            cr(intArrayOf(0, 6, 6, 2, 8, 6, 14, 2), 0, 1, -5, 1, -3, 2, -7, 1)),
+        Synth("Piano", "House-Piano (Am7 · Dm7)", 124, 11, 0, 0, 0.85f, 0f, 0f, 0f, 0.15f, 0.25f, 2,
+            cr(intArrayOf(0, 2, 3, 1, 6, 2, 10, 2, 12, 1, 14, 2), -3, 5, 2, 5)),
+        Synth("Piano", "Klavier-Melodie (A-Moll)", 90, 11, 0, 0, 0.6f, 0f, 0f, 0f, 0.4f, 0.3f, 2,
+            n(0, 9, 2, 2, 12, 2, 4, 16, 2, 6, 12, 2, 8, 9, 2, 10, 12, 2, 12, 16, 4, 16, 5, 2, 18, 9, 2, 20, 12, 2, 22, 9, 2, 24, 7, 2, 26, 11, 2, 28, 14, 4)),
+        Synth("Piano", "Gospel-Akkorde (C · Am7 · Dm7 · G7)", 72, 11, 0, 0, 0.5f, 0f, 0f, 0f, 0.45f, 0.35f, 4,
+            cr(intArrayOf(0, 10, 10, 6), 0, 1, -3, 5, 2, 5, -5, 4)),
+        // ---- E-Piano (Klang 12)
+        Synth("E-Piano", "Neo-Soul (Dm7 · G7 · C · Am7)", 85, 12, 0, 0, 0.55f, 0f, 0f, 0f, 0.4f, 0.35f, 4,
+            cr(intArrayOf(0, 6, 10, 4), 2, 5, -5, 4, 0, 1, -3, 5)),
+        Synth("E-Piano", "Lo-Fi-Akkorde (F · Em7 · Dm7 · C)", 72, 12, 0, 0, 0.4f, 0f, 0f, 0.02f, 0.5f, 0.45f, 4,
+            cr(intArrayOf(0, 14), 5, 1, 4, 5, 2, 5, 0, 1)),
+        Synth("E-Piano", "Deep-House-Stab (Cm7)", 122, 12, 0, 0, 0.7f, 0f, 0f, 0f, 0.2f, 0.2f, 1,
+            cr(intArrayOf(3, 1, 6, 2, 11, 1, 14, 2), 0, 5)),
+        Synth("E-Piano", "E-Piano-Melodie (mit Tremolo)", 96, 12, 0, 0, 0.6f, 0f, 0f, 0f, 0.35f, 0.6f, 2,
+            n(0, 12, 3, 3, 14, 1, 4, 16, 2, 6, 19, 2, 8, 16, 4, 12, 14, 2, 14, 12, 2, 16, 9, 3, 19, 11, 1, 20, 12, 2, 22, 14, 2, 24, 7, 8)),
+        // ---- Orgel (Klang 13)
+        Synth("Orgel", "Gospel-Orgel (C · F · G · C)", 90, 13, 0, 0, 0.55f, 0f, 0.35f, 0.02f, 0.15f, 0.25f, 4,
+            cr(intArrayOf(0, 7, 8, 7), 0, 1, -7, 1, -5, 1, 0, 1)),
+        Synth("Orgel", "90er-House-Orgel (Riff)", 124, 13, 0, -1, 0.9f, 0f, 0.6f, 0f, 0.08f, 0.15f, 1,
+            n(0, 0, 2, 3, 0, 1, 6, 12, 1, 8, 0, 2, 11, 10, 1, 12, 7, 2, 14, 3, 2)),
+        Synth("Orgel", "Jazz-Orgel mit Leslie (Am7 · D7)", 110, 13, 0, 0, 0.2f, 0f, 0.5f, 0f, 0.12f, 0.85f, 2,
+            cr(intArrayOf(0, 3, 6, 2, 10, 4), -3, 5, 2, 4)),
+        // ---- Leads
+        Synth("Leads", "Sync-Lead (Electro)", 128, 14, 0, 0, 0.6f, 0.2f, 0.55f, 0.01f, 0.2f, 0.3f, 2,
+            n(0, 12, 2, 2, 15, 2, 4, 19, 2, 6, 17, 1, 7, 15, 1, 8, 12, 4, 12, 10, 2, 14, 12, 2, 16, 12, 2, 18, 15, 2, 20, 22, 2, 22, 19, 2, 24, 17, 4, 28, 15, 4),
+            mono = true, glide = 0.12f),
+        Synth("Leads", "Trance-Lead (Supersaw)", 138, 2, 0, 0, 0.7f, 0.2f, 0.3f, 0.01f, 0.3f, 0.5f, 2,
+            n(0, 9, 3, 3, 9, 1, 4, 16, 2, 6, 12, 2, 8, 9, 3, 11, 9, 1, 12, 14, 2, 14, 12, 2, 16, 5, 3, 19, 5, 1, 20, 12, 2, 22, 9, 2, 24, 7, 3, 27, 7, 1, 28, 11, 2, 30, 14, 2)),
+        Synth("Leads", "Gezupfte Gitarre (Saite)", 100, 19, 0, 0, 0.55f, 0f, 0f, 0f, 0.6f, 0.6f, 2,
+            n(0, 0, 2, 2, 7, 2, 4, 12, 2, 6, 16, 2, 8, 19, 2, 10, 16, 2, 12, 12, 2, 14, 7, 2, 16, -3, 2, 18, 4, 2, 20, 9, 2, 22, 12, 2, 24, 16, 2, 26, 12, 2, 28, 9, 2, 30, 4, 2)),
+        Synth("Leads", "Harfen-Arpeggio (Saite)", 84, 19, 0, 1, 0.8f, 0f, 0f, 0f, 0.7f, 0.8f, 2,
+            n(0, 0, 1, 1, 4, 1, 2, 7, 1, 3, 12, 1, 4, 16, 1, 5, 19, 1, 6, 24, 2, 8, -3, 1, 9, 0, 1, 10, 4, 1, 11, 9, 1, 12, 12, 1, 13, 16, 1, 14, 21, 2,
+              16, -7, 1, 17, -3, 1, 18, 0, 1, 19, 5, 1, 20, 9, 1, 21, 12, 1, 22, 17, 2, 24, -5, 1, 25, -1, 1, 26, 2, 1, 27, 7, 1, 28, 11, 1, 29, 14, 1, 30, 19, 2)),
+        Synth("Leads", "Square-Lead mit Glide", 120, 1, 0, 0, 0.55f, 0.3f, 0.35f, 0f, 0.2f, 0.2f, 2,
+            n(0, 7, 3, 3, 10, 3, 6, 12, 2, 8, 15, 4, 12, 14, 2, 14, 12, 2, 16, 10, 3, 19, 12, 3, 22, 7, 2, 24, 5, 4, 28, 3, 4),
+            mono = true, glide = 0.3f),
+        // ---- Bassline (zweiter Bass-Sequenzer: MONO mit GLIDE)
+        Synth("Bassline", "FM-Bass (Funk)", 110, 17, 0, -1, 0.4f, 0.3f, 0.55f, 0f, 0.1f, 0.2f, 1,
+            n(0, 0, 2, 3, 0, 1, 4, 12, 1, 6, 10, 1, 7, 12, 1, 8, 0, 2, 11, 3, 1, 12, 5, 2, 14, 7, 1, 15, 10, 1), mono = true, glide = 0.15f),
+        Synth("Bassline", "Reese (Drum & Bass)", 174, 15, 0, -2, 0.42f, 0.2f, 0.25f, 0f, 0.2f, 0.5f, 2,
+            n(0, 0, 12, 12, 3, 4, 16, -2, 8, 24, 5, 8), mono = true, glide = 0.35f),
+        Synth("Bassline", "808-Glide (Trap)", 140, 16, 0, -2, 0.5f, 0f, 0f, 0.01f, 0.25f, 0.35f, 2,
+            n(0, 0, 6, 6, 0, 2, 10, -2, 3, 13, 3, 3, 16, 0, 4, 22, 7, 3, 26, 5, 3, 29, 3, 3), mono = true, glide = 0.45f),
+        Synth("Bassline", "Wobble (Dubstep)", 140, 18, 0, -2, 0.22f, 0.55f, 0.75f, 0f, 0.15f, 0.55f, 2,
+            n(0, 0, 8, 8, 0, 4, 12, 3, 4, 16, -2, 8, 24, 5, 4, 28, 3, 4), mono = true, glide = 0.2f),
+        Synth("Bassline", "Rollender Techno-Bass", 132, 0, 0, -1, 0.3f, 0.45f, 0.6f, 0f, 0.08f, 0.15f, 1,
+            n(1, 0, 1, 2, 0, 1, 3, 0, 1, 5, 0, 1, 6, 0, 1, 7, 0, 1, 9, 0, 1, 10, 0, 1, 11, 12, 1, 13, 0, 1, 14, 0, 1, 15, 0, 1), mono = true),
+        Synth("Bassline", "Offbeat-House-Bass", 124, 17, 0, -1, 0.35f, 0.2f, 0.4f, 0f, 0.1f, 0.1f, 1,
+            n(2, 0, 2, 6, 0, 2, 10, 0, 2, 14, 3, 2), mono = true, glide = 0.1f),
+        Synth("Bassline", "Moog-Funk (Saw)", 105, 0, 0, -1, 0.35f, 0.45f, 0.6f, 0f, 0.12f, 0.15f, 1,
+            n(0, 0, 2, 2, 12, 1, 3, 10, 1, 4, 7, 2, 7, 5, 1, 8, 3, 2, 10, 5, 1, 11, 7, 2, 14, 10, 1, 15, 12, 1), mono = true, glide = 0.25f),
+        Synth("Bassline", "Psytrance-Rolle (FM)", 142, 17, 0, -1, 0.3f, 0.35f, 0.7f, 0f, 0.05f, 0.1f, 1,
+            n(1, 0, 1, 2, 0, 1, 3, 0, 1, 5, 0, 1, 6, 0, 1, 7, 0, 1, 9, 0, 1, 10, 0, 1, 11, 0, 1, 13, 0, 1, 14, 0, 1, 15, -2, 1), mono = true),
         Synth("Flächen", "Moll-Flächen (Am · Dm · Em · Am)", 120, 2, 2, 0, 0.55f, 0.2f, 0.25f, 0.45f, 0.6f, 0.45f, 4,
             n(0, -3, 16, 16, 2, 16, 32, 4, 16, 48, -3, 16)),
         Synth("Flächen", "Ambient Dur (C · F · Am · G)", 90, 2, 1, 0, 0.45f, 0.15f, 0.2f, 0.7f, 0.85f, 0.6f, 4,
@@ -427,6 +496,7 @@ object InstPresets {
         st.synCut = p.cut; st.synRes = p.res; st.synEnv = p.env; st.synAtk = p.atk; st.synRel = p.rel; st.synDetune = p.det
         st.synLen = (p.bars * 16).coerceIn(16, InstState.MAX)
         st.synOn = true
+        st.syn.mono = p.mono; st.syn.glide = p.glide
         for (nt in p.notes) for (j in 0 until nt.len) {
             val k = nt.step + j
             if (k !in 0 until st.synLen) break
@@ -434,11 +504,12 @@ object InstPresets {
             st.synTie[k] = j > 0
             st.synSemi[k] = nt.semi
             st.synVel[k] = nt.vel
+            st.synChd[k] = if (nt.chd >= 0) nt.chd + 1 else 0
         }
         // kurze Patterns auf 4 Takte spiegeln (falls später verlängert wird)
         for (k in st.synLen until InstState.MAX) {
             val s0 = k % st.synLen
-            st.synGate[k] = st.synGate[s0]; st.synTie[k] = st.synTie[s0] && s0 != 0; st.synSemi[k] = st.synSemi[s0]; st.synVel[k] = st.synVel[s0]
+            st.synGate[k] = st.synGate[s0]; st.synTie[k] = st.synTie[s0] && s0 != 0; st.synSemi[k] = st.synSemi[s0]; st.synVel[k] = st.synVel[s0]; st.synChd[k] = st.synChd[s0]
         }
     }
 }

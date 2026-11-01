@@ -58,6 +58,8 @@ class InstEditor(private val host: View) {
     var onScale: (() -> Unit)? = null
     /** Akkordfolge erzeugen (SYNTH). */
     var onChords: (() -> Unit)? = null
+    /** KLANG-Auswahl (Liste mit allen Klängen); ohne = durchschalten. */
+    var onWaves: (() -> Unit)? = null
     var onSidechain: (() -> Unit)? = null
 
     private val d = host.resources.displayMetrics.density
@@ -103,6 +105,7 @@ class InstEditor(private val host: View) {
     private val inst: Int get() = if (kind == 3) InstState.synInst else (kind - 1).coerceIn(0, 1)
     /** SYNTH: Titel antippen = nächste Synth-Spur */
     private val bTitle = RectF()
+    private val trkRects = Array(InstState.SYN_TRACKS) { RectF() }
     /** Taktleiste über der Matrix: tippen = Einfügemarke, ziehen = Zeitbereich markieren */
     private val ruler = RectF()
     /** Senkrechter Bildlauf rechts (Piano-Roll): ziehen = Tonhöhenbereich wählen */
@@ -290,19 +293,20 @@ class InstEditor(private val host: View) {
             c.drawText("🎹 SYN", box.left + dp(12f), bClose.centerY() - dp(1f), text)
             for (t in 0 until InstState.SYN_TRACKS) {
                 tmp.set(x0 + t * (cw + dp(3f)), bClose.top - dp(1f), x0 + t * (cw + dp(3f)) + cw, bClose.centerY() + dp(3f))
+                trkRects[t].set(tmp)
                 val on = t == InstState.synCur
                 fill.color = if (on) acc else Color.rgb(40, 42, 50)
                 c.drawRoundRect(tmp, dp(5f), dp(5f), fill)
                 text.textAlign = Paint.Align.CENTER
                 text.color = if (on) Color.BLACK else if (InstState.synTracks[t].hasNotes()) Color.WHITE else Color.argb(120, 255, 255, 255)
-                c.drawText("${t + 1}", tmp.centerX(), tmp.centerY() + dp(4.5f), text)
+                c.drawText(InstState.synShort(t), tmp.centerX(), tmp.centerY() + dp(4.5f), text)
                 text.textAlign = Paint.Align.LEFT
                 text.color = Color.WHITE
             }
         } else c.drawText(when (kind) { 1 -> "🔊 ACID 303"; else -> "🥁 DRUM 909" }, box.left + dp(12f), bClose.centerY() - dp(1f), text)
         text.textSize = dp(9.5f)
         text.color = Color.argb(180, 255, 255, 255)
-        c.drawText((if (kind == 3) "Spur ${InstState.synCur + 1} · " else "") + "${len / 16} Takt" + (if (len > 16) "e" else "") + " · ${len} Schritte", box.left + dp(12f), bClose.centerY() + dp(12f), text)
+        c.drawText((if (kind == 3) InstState.synName(InstState.synCur) + (if (InstState.syn.mono) " · MONO" else "") + " · " else "") + "${len / 16} Takt" + (if (len > 16) "e" else "") + " · ${len} Schritte", box.left + dp(12f), bClose.centerY() + dp(12f), text)
         text.textAlign = Paint.Align.CENTER
         btn(c, bRec, if (Engine.seqRecording) "● REC" else "●", Engine.seqRecording, Color.rgb(225, 40, 50))
         btn(c, bPlay, if (Engine.seqPlaying) "■" else "▶", Engine.seqPlaying, acc)
@@ -839,6 +843,7 @@ class InstEditor(private val host: View) {
             Slider("ATTACK", { st.synAtk }, { st.synAtk = it }, { v -> "${((0.002 + v * v * 2.5) * 1000).toInt()} ms" }),
             Slider("RELEASE", { st.synRel }, { st.synRel = it }, { v -> "${((0.02 + v * v * 3.0) * 1000).toInt()} ms" }),
             Slider("VERSTIMMUNG", { st.synDetune }, { st.synDetune = it }, ::pct),
+            Slider("GLIDE (nur MONO)", { st.syn.glide }, { st.syn.glide = it }, { v -> if (v < 0.01f) "aus" else "${((0.004 + v * v * 0.4) * 1000).toInt()} ms" }),
             Slider("OKTAVE", { (st.synOct + 3) / 5f }, { st.synOct = Math.round(it * 5) - 3 }, { v -> val o = Math.round(v * 5) - 3; (if (o > 0) "+" else "") + "$o" }),
             Slider("SWING (alle)", { Engine.swing }, { Engine.swing = it }, { v -> "${50 + (v * 25).toInt()} %" }),
             Slider("SWING DIESER SPUR", { InstState.grooveSwing[InstState.synInst].let { if (it < 0f) 0f else 0.04f + it * 0.96f } }, { InstState.grooveSwing[InstState.synInst] = if (it < 0.03f) -1f else ((it - 0.04f) / 0.96f).coerceIn(0f, 1f) }, { v -> if (v < 0.03f) "wie global" else "${50 + (((v - 0.04f) / 0.96f).coerceIn(0f, 1f) * 25).toInt()} %" }),
@@ -881,7 +886,12 @@ class InstEditor(private val host: View) {
         val st = InstState
         if (kind == 3) return listOf(
             Toggle({ if (st.synOn) "● AN" else "○ AUS" }, { st.synOn }, { st.synOn = !st.synOn }),
-            Toggle({ "KLANG: " + st.synWaveNames[st.synWave] }, { false }, { st.synWave = (st.synWave + 1) % st.synWaveNames.size }),
+            Toggle({ "KLANG: " + st.synWaveNames[st.synWave.coerceIn(0, st.synWaveNames.size - 1)] }, { false }, { val f = onWaves; if (f != null) f() else st.synWave = (st.synWave + 1) % st.synWaveNames.size }),
+            Toggle({ if (st.syn.mono) "MONO (GLIDE)" else "POLY" }, { st.syn.mono }, {
+                st.syn.mono = !st.syn.mono
+                if (st.syn.mono && st.syn.glide < 0.01f) st.syn.glide = 0.2f
+                onHint?.invoke(if (st.syn.mono) "MONO: eine Stimme, Töne gleiten ineinander (Regler GLIDE) – typisch für Basslines und Leads" else "POLY: Akkorde und mehrere Töne gleichzeitig")
+            }),
             Toggle({ "AKKORD: " + st.synChordNames[st.synChord] }, { st.synChord != 0 }, { st.synChord = (st.synChord + 1) % st.synChordNames.size }),
             Toggle({ "🎼 AKKORDFOLGE" }, { false }, { onChords?.invoke() }),
             Toggle({ "👻 ANDERE SPUREN" }, { ghosts }, { ghosts = !ghosts; onHint?.invoke(if (ghosts) "Andere Spuren (ACID, SYNTH) blass im Hintergrund, rote Linien = Bass Drum" else "Andere Spuren ausgeblendet") }),
@@ -1149,9 +1159,14 @@ class InstEditor(private val host: View) {
         val st = InstState
         if (kind == 3 && bTitle.contains(x, y)) {
             liveOff()
-            InstState.synCur = (InstState.synCur + 1) % InstState.SYN_TRACKS
+            val hit = trkRects.indexOfFirst { !it.isEmpty && it.left - dp(2f) <= x && x <= it.right + dp(2f) }
+            InstState.synCur = if (hit >= 0) hit else (InstState.synCur + 1) % InstState.SYN_TRACKS
             sel.clear(); insert = -1; col0 = 0; pendingFit = true
-            onHint?.invoke("SYNTH-Spur ${InstState.synCur + 1} (${InstState.synSoundNames[InstState.synCur]}-Klang voreingestellt) · eigene Noten, eigener Klang, eigene Patterns A–D · Titel antippen = nächste Spur")
+            onHint?.invoke(when (InstState.synCur) {
+                InstState.KEYS_TRACK -> "🎹 KEYS: Piano, E-Piano, Orgel, Leads · ⚙ SOUND → KLANG wählt das Instrument · ▦ PRESETS"
+                InstState.BASS_TRACK -> "🎸 BASSLINE: zweiter Bass-Sequenzer (MONO mit GLIDE) · FM-, Reese-, Sub-, Wobble-Bass · ▦ PRESETS"
+                else -> "SYNTH-Spur ${InstState.synCur + 1} (${InstState.synSoundNames[InstState.synCur]}-Klang voreingestellt) · eigene Noten, eigener Klang, eigene Patterns A–D"
+            })
             haptic()
             return
         }

@@ -83,7 +83,7 @@ class SongBuilder(private val host: View, private val ed: SongEditor) {
     /** Spuren, die man im Baukasten schalten kann. */
     private fun tracks(): List<Int> {
         val out = ArrayList<Int>()
-        for (i in listOf(1, 0, 2, 3, 4)) if (i < InstState.INSTS) {
+        for (i in listOf(1, 0) + (2 until InstState.INSTS)) {
             val t = Engine.TRK_INST + i
             if ((0 until InstState.PATS).any { InstState.patHasNotes(i, it) } || used(t)) out.add(t)
         }

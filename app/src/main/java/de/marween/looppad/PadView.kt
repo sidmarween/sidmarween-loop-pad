@@ -2387,12 +2387,13 @@ class PadView(context: Context) : View(context) {
 
     /** Pad-Name groß im Pad (Drum-Modus). */
     private fun instPadName(code: Int): String = when (code) {
-        0 -> "BASS 303"; 1 -> "DRUMS 909"; in 2..9 -> "SYNTH ${code - 1}"
+        0 -> "BASS 303"; 1 -> "DRUMS 909"; in 2..9 -> InstState.synName(code - 2)
         10 -> "EUKLID"; 11 -> "ATMOS"; else -> "HARMONIZER"
     }
-    private fun instPadIcon(code: Int): String = when (code) { 0 -> "🔊"; 1 -> "🥁"; in 2..9 -> "🎹"; 10 -> "⬡"; 11 -> "🌌"; else -> "🎤" }
+    private fun instPadIcon(code: Int): String = when (code) { 0 -> "🔊"; 1 -> "🥁"; 2 + InstState.BASS_TRACK -> "🎸"; in 2..9 -> "🎹"; 10 -> "⬡"; 11 -> "🌌"; else -> "🎤" }
     private fun instPadColor(code: Int): Int = when (code) {
         0 -> Color.rgb(90, 190, 255); 1 -> Color.rgb(255, 150, 70); 2 -> Color.rgb(200, 140, 255); 3 -> Color.rgb(240, 120, 200); 4 -> Color.rgb(120, 230, 140)
+        5 -> Color.rgb(255, 215, 110); 6 -> Color.rgb(90, 230, 220)
         10 -> Color.rgb(255, 170, 90); 11 -> Color.rgb(140, 170, 255); else -> Color.rgb(255, 120, 190)
     }
 
@@ -2541,7 +2542,7 @@ class PadView(context: Context) : View(context) {
 
     private fun mixChannels(): List<MixCh> {
         val out = ArrayList<MixCh>()
-        for (i in listOf(1, 0, 2, 3, 4)) if (i < InstState.INSTS && InstState.instHasNotes(i)) out.add(MixCh(1, i))
+        for (i in listOf(1, 0) + (2 until InstState.INSTS)) if (InstState.instHasNotes(i)) out.add(MixCh(1, i))
         for (k in 0 until 3) if (when (k) { 0 -> Euclid.on; 1 -> Atmos.on || Atmos.active(); else -> Harmonizer.on }) out.add(MixCh(2, k))
         for (p in 0 until VISIBLE_PADS) if (Engine.hasLoop(p)) out.add(MixCh(0, p))
         return out
@@ -2549,7 +2550,7 @@ class PadView(context: Context) : View(context) {
 
     private fun chName(c: MixCh): String = when (c.kind) {
         0 -> Engine.padName(c.idx)?.take(12) ?: "Pad ${c.idx + 1}"
-        1 -> when (c.idx) { 0 -> "BASS 303"; 1 -> "DRUMS 909"; else -> "SYNTH ${c.idx - 1}" }
+        1 -> when (c.idx) { 0 -> "BASS 303"; 1 -> "DRUMS 909"; else -> InstState.synName(c.idx - 2) }
         else -> arrayOf("EUKLID", "ATMOS", "HARMONIZER")[c.idx]
     }
     private fun chSub(c: MixCh): String = when (c.kind) {
@@ -2559,7 +2560,7 @@ class PadView(context: Context) : View(context) {
     }
     private fun chIcon(c: MixCh): String = when (c.kind) {
         0 -> if (Engine.isOneShot(c.idx)) "⚡" else "∿"
-        1 -> when (c.idx) { 0 -> "🔊"; 1 -> "🥁"; else -> "🎹" }
+        1 -> when (c.idx) { 0 -> "🔊"; 1 -> "🥁"; 2 + InstState.BASS_TRACK -> "🎸"; else -> "🎹" }
         else -> arrayOf("⬡", "🌌", "🎤")[c.idx]
     }
     private fun chOn(c: MixCh): Boolean = when (c.kind) {
@@ -2596,7 +2597,7 @@ class PadView(context: Context) : View(context) {
     }
     private fun chColor(c: MixCh): Int = when (c.kind) {
         0 -> padAccent(c.idx)
-        1 -> intArrayOf(Color.rgb(90, 190, 255), Color.rgb(255, 150, 70), Color.rgb(200, 140, 255), Color.rgb(240, 120, 200), Color.rgb(120, 230, 140))[c.idx.coerceIn(0, 4)]
+        1 -> instPadColor(c.idx)
         else -> intArrayOf(Color.rgb(255, 170, 90), Color.rgb(140, 170, 255), Color.rgb(255, 120, 190))[c.idx]
     }
 
@@ -8748,6 +8749,7 @@ class PadView(context: Context) : View(context) {
         ed.onKits = { onInstKits?.invoke(ed.kindNow()) }
         ed.onScale = { onInstScale?.invoke() }
         ed.onChords = { onInstChords?.invoke() }
+        ed.onWaves = { onInstWaves?.invoke() }
         ed.onSidechain = { onSidechain?.invoke() }
     }
     // ---------------------------------------------------------------- Tutorial-Tour
@@ -9242,6 +9244,8 @@ class PadView(context: Context) : View(context) {
     var onInstScale: (() -> Unit)? = null
     /** Akkordfolge für die Synth-Spur erzeugen. */
     var onInstChords: (() -> Unit)? = null
+    /** SYNTH-Klangwahl (Liste). */
+    var onInstWaves: (() -> Unit)? = null
     var onSidechain: (() -> Unit)? = null
     /** ACID/DRUM: Noten als MIDI-Datei laden/exportieren (1 = ACID, 2 = DRUM). */
     var onInstMidi: ((Int) -> Unit)? = null

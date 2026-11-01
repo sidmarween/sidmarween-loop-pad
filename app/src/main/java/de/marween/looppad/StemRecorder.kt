@@ -9,7 +9,7 @@ import kotlin.math.min
  * Der Mischer-Thread schiebt pro Block alle Spuren hinein, ein eigener Thread schreibt die Dateien.
  */
 object StemRecorder {
-    val NAMES = arrayOf("ACID", "DRUM", "SYNTH1", "SYNTH2", "SYNTH3", "PADS")
+    val NAMES = arrayOf("ACID", "DRUM", "SYNTH1", "SYNTH2", "SYNTH3", "PADS", "KEYS", "BASSLINE")
     val COUNT = NAMES.size
 
     @Volatile var recording = false

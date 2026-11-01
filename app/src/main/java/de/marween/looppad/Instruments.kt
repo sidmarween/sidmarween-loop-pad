@@ -178,6 +178,9 @@ object InstState {
         @Volatile var cutMod = 0f
         /** Transponierung in Halbtönen (Ghost-Producer: an die Tonart des Tracks angepasst). */
         @Volatile var transpose = 0
+        /** MONO: nur eine Stimme, Tonhöhe gleitet ([glide] = Portamento-Zeit) – für Basslines. */
+        @Volatile var mono = false
+        @Volatile var glide = 0f
         @Volatile var cutAuto = Float.NaN
         @Volatile var volAuto = Float.NaN
         fun cutNow() = cutAuto.let { if (it.isNaN()) cut else it }
@@ -188,9 +191,12 @@ object InstState {
         }
         fun hasNotes() = (0 until len).any { gate[it] }
         fun soundDefaults(kind: Int) {
+            mono = false; glide = 0f
             when (kind) {
                 1 -> { wave = 2; oct = 0; cut = 0.45f; res = 0.15f; atk = 0.45f; rel = 0.6f; vol = 0.45f; detune = 0.5f; env = 0.15f; chord = 0 } // Fläche
                 2 -> { wave = 0; oct = -1; cut = 0.32f; res = 0.35f; atk = 0f; rel = 0.12f; vol = 0.65f; detune = 0.08f; env = 0.55f; chord = 0 } // Bass
+                3 -> { wave = 11; oct = 0; cut = 0.6f; res = 0f; atk = 0f; rel = 0.3f; vol = 0.6f; detune = 0.3f; env = 0f; chord = 0 } // Keys (Piano)
+                4 -> { wave = 17; oct = -1; cut = 0.4f; res = 0.3f; atk = 0f; rel = 0.12f; vol = 0.65f; detune = 0.2f; env = 0.5f; chord = 0; mono = true; glide = 0.2f } // Bassline
                 else -> { wave = 2; oct = 0; cut = 0.55f; res = 0.25f; atk = 0.05f; rel = 0.35f; vol = 0.6f; detune = 0.35f; env = 0.4f; chord = 0 }
             }
         }
@@ -205,6 +211,7 @@ object InstState {
             j.put("vol", vol.toDouble()); j.put("detune", detune.toDouble()); j.put("env", env.toDouble())
             j.put("chd", JSONArray().apply { chd.forEach { put(it) } })
             j.put("arp", arp); j.put("arpRate", arpRate); j.put("arpOct", arpOct)
+            j.put("mono", mono); j.put("glide", glide.toDouble())
             return j
         }
         fun fromJson(j: JSONObject) {
@@ -219,15 +226,21 @@ object InstState {
             rel = j.optDouble("rel", 0.35).toFloat(); vol = j.optDouble("vol", 0.6).toFloat(); detune = j.optDouble("detune", 0.35).toFloat(); env = j.optDouble("env", 0.4).toFloat()
             j.optJSONArray("chd")?.let { a -> for (k in 0 until min(MAX, a.length())) chd[k] = a.optInt(k) }
             arp = j.optInt("arp", 0); arpRate = j.optInt("arpRate", 1); arpOct = j.optInt("arpOct", 1)
+            mono = j.optBoolean("mono", false); glide = j.optDouble("glide", 0.0).toFloat()
         }
     }
 
-    const val SYN_TRACKS = 3
+    const val SYN_TRACKS = 5
+    /** Spur 4 = KEYS (Piano, E-Piano, Orgel, Leads), Spur 5 = BASSLINE (zweiter Bass-Sequenzer neben der 303). */
+    const val KEYS_TRACK = 3
+    const val BASS_TRACK = 4
+    fun synName(t: Int): String = when (t) { KEYS_TRACK -> "KEYS"; BASS_TRACK -> "BASSLINE"; else -> "SYNTH ${t + 1}" }
+    fun synShort(t: Int): String = when (t) { KEYS_TRACK -> "K"; BASS_TRACK -> "B"; else -> "${t + 1}" }
     val synTracks = Array(SYN_TRACKS) { SynTrack().apply { soundDefaults(it) } }
     /** Die Synth-Spur, die Editor, Touchpad und Presets gerade bearbeiten. */
     @Volatile var synCur = 0
     val syn: SynTrack get() = synTracks[synCur.coerceIn(0, SYN_TRACKS - 1)]
-    val synSoundNames = arrayOf("Lead", "Fläche", "Bass")
+    val synSoundNames = arrayOf("Lead", "Fläche", "Bass", "Piano", "Bass-Sequenzer")
 
     val synSemi: IntArray get() = syn.semi
     val synGate: BooleanArray get() = syn.gate
@@ -253,9 +266,45 @@ object InstState {
     var synDetune: Float get() = syn.detune; set(v) { syn.detune = v }
     var synEnv: Float get() = syn.env; set(v) { syn.env = v }
     var synCutMod: Float get() = syn.cutMod; set(v) { syn.cutMod = v }
-    val synWaveNames = arrayOf("SAW", "SQR", "SUPER", "PLUCK", "GLOCKE", "NES ▢", "NES △", "NOISE", "SID", "GB-WAVE", "FM-CHIP")
-    /** Chiptune-Klänge (Klang-Nr. ≥ 5): Akkorde laufen als schnelles Chip-Arpeggio, Lautstärke in 16 Stufen. */
-    fun synIsChip(w: Int) = w >= 5
+    val synWaveNames = arrayOf("SAW", "SQR", "SUPER", "PLUCK", "GLOCKE", "NES ▢", "NES △", "NOISE", "SID", "GB-WAVE", "FM-CHIP",
+        "PIANO", "E-PIANO", "ORGEL", "SYNC-LEAD", "REESE", "SUB-BASS", "FM-BASS", "WOBBLE", "SAITE")
+    /** Chiptune-Klänge (Klang-Nr. 5–10): Akkorde laufen als schnelles Chip-Arpeggio, Lautstärke in 16 Stufen. */
+    fun synIsChip(w: Int) = w in 5..10
+    /** Auswahl-Liste der Klänge (Gruppe, Klang-Nr., Beschreibung). */
+    val synWaveGroups = listOf(
+        Triple("Tasten", 11, "Konzertflügel – Anschlag, Saiten, Hammer"),
+        Triple("Tasten", 12, "E-Piano (Rhodes-Art, FM) – VERSTIMMUNG = Tremolo"),
+        Triple("Tasten", 13, "Orgel (Zugriegel) – CUTOFF = Register, VERST. = Leslie"),
+        Triple("Tasten", 4, "FM-Glocke"),
+        Triple("Lead", 14, "Sync-Lead – schneidend, FILTER-HÜLLK. = Sync-Fahrt"),
+        Triple("Lead", 2, "Supersaw (Trance)"),
+        Triple("Lead", 0, "Saw (analog)"),
+        Triple("Lead", 1, "Square"),
+        Triple("Lead", 3, "Pluck"),
+        Triple("Lead", 19, "Saite (gezupft: Gitarre, Harfe) – VERST. = Nachklang"),
+        Triple("Bass", 17, "FM-Bass (DX-Art) – VERST. = Obertöne"),
+        Triple("Bass", 15, "Reese-Bass (DnB) – VERST. = Schwebung"),
+        Triple("Bass", 16, "Sub-Bass (Sinus, 808) – VERST. = Wärme/Drive"),
+        Triple("Bass", 18, "Wobble (Dubstep) – VERST. = Tempo, FILTER-HÜLLK. = Tiefe"),
+        Triple("Chiptune", 5, "NES-Puls"), Triple("Chiptune", 6, "NES-Dreieck"), Triple("Chiptune", 7, "Noise"),
+        Triple("Chiptune", 8, "SID (C64)"), Triple("Chiptune", 9, "Game-Boy-Wave"), Triple("Chiptune", 10, "FM-Chip")
+    )
+
+    /** Passende Grundeinstellung beim Wählen eines neuen Klangs (nur für die Klänge ab 11). */
+    fun waveDefaults(t: SynTrack, w: Int) {
+        t.wave = w
+        when (w) {
+            11 -> { t.cut = 0.6f; t.res = 0f; t.env = 0f; t.atk = 0f; t.rel = 0.3f; t.detune = 0.3f }
+            12 -> { t.cut = 0.55f; t.res = 0f; t.env = 0f; t.atk = 0f; t.rel = 0.35f; t.detune = 0.25f }
+            13 -> { t.cut = 0.45f; t.res = 0f; t.env = 0.3f; t.atk = 0.02f; t.rel = 0.12f; t.detune = 0.2f }
+            14 -> { t.cut = 0.6f; t.res = 0.2f; t.env = 0.5f; t.atk = 0.02f; t.rel = 0.25f; t.detune = 0.3f }
+            15 -> { t.cut = 0.42f; t.res = 0.2f; t.env = 0.25f; t.atk = 0f; t.rel = 0.15f; t.detune = 0.45f }
+            16 -> { t.cut = 0.5f; t.res = 0f; t.env = 0f; t.atk = 0.02f; t.rel = 0.2f; t.detune = 0.25f }
+            17 -> { t.cut = 0.4f; t.res = 0.3f; t.env = 0.5f; t.atk = 0f; t.rel = 0.12f; t.detune = 0.2f }
+            18 -> { t.cut = 0.25f; t.res = 0.55f; t.env = 0.7f; t.atk = 0f; t.rel = 0.15f; t.detune = 0.3f }
+            19 -> { t.cut = 0.6f; t.res = 0f; t.env = 0f; t.atk = 0f; t.rel = 0.4f; t.detune = 0.6f }
+        }
+    }
     val synChordNames = arrayOf("EINZELN", "DUR", "MOLL", "SUS4", "DUR7", "MOLL7", "OKTAVE", "VERM.")
     /** Kurzname hinter dem Grundton (C, Cm, C7 …). */
     val chordSuffix = arrayOf("", "", "m", "sus4", "7", "m7", "8", "°")
@@ -412,6 +461,34 @@ object InstState {
         for (i in STEPS until MAX) { synGate[i] = synGate[i % STEPS]; synTie[i] = synTie[i % STEPS]; synSemi[i] = synSemi[i % STEPS]; synVel[i] = synVel[i % STEPS] }
     }
 
+    /** Zufalls-Bassline (BASSLINE-Spur): drei Stile – Offbeat (House), rollende 16tel (Techno/Psy), Funk mit Oktavsprüngen. */
+    fun bassRandom() {
+        synClear()
+        val r = java.util.Random()
+        val style = r.nextInt(3)
+        val minor = intArrayOf(0, 0, 0, 12, 7, 3, 10, -2, 5)
+        var k = 0
+        while (k < STEPS) {
+            val hit = when (style) {
+                0 -> k % 4 == 2 || (k % 2 == 1 && r.nextFloat() < 0.18f)
+                1 -> k % 4 != 0
+                else -> k == 0 || r.nextFloat() < 0.5f
+            }
+            if (!hit) { k++; continue }
+            synGate[k] = true
+            synSemi[k] = when (style) {
+                1 -> if (r.nextFloat() < 0.82f) 0 else intArrayOf(12, 7, 3)[r.nextInt(3)]
+                0 -> if (r.nextFloat() < 0.6f) 0 else minor[r.nextInt(minor.size)]
+                else -> minor[r.nextInt(minor.size)]
+            }
+            synVel[k] = if (r.nextFloat() < 0.3f) 1f else 0.72f + r.nextFloat() * 0.15f
+            val hold = when (style) { 0 -> if (r.nextFloat() < 0.5f) 1 else 0; 1 -> 0; else -> if (r.nextFloat() < 0.3f) 1 + r.nextInt(2) else 0 }
+            for (h in 1..hold) if (k + h < STEPS) { synGate[k + h] = true; synTie[k + h] = true; synSemi[k + h] = synSemi[k] }
+            k += 1 + hold
+        }
+        for (i in STEPS until MAX) { synGate[i] = synGate[i % STEPS]; synTie[i] = synTie[i % STEPS]; synSemi[i] = synSemi[i % STEPS]; synVel[i] = synVel[i % STEPS] }
+    }
+
     // ---------------------------------------------------------------- Projekte
 
     // ---------------------------------------------------------------- Patterns A–D je Instrument
@@ -419,7 +496,7 @@ object InstState {
     /** Instrumente mit Pattern-Speicher: 0 = ACID, 1 = DRUM, 2.. = SYNTH-Spuren. */
     const val INSTS = 2 + SYN_TRACKS
     const val PATS = 4
-    val instNames = Array(INSTS) { when (it) { 0 -> "ACID"; 1 -> "DRUM"; else -> "SYNTH ${it - 1}" } }
+    val instNames = Array(INSTS) { when (it) { 0 -> "ACID"; 1 -> "DRUM"; else -> synName(it - 2) } }
     private fun trk(inst: Int) = synTracks[(inst - 2).coerceIn(0, SYN_TRACKS - 1)]
     fun patLetter(p: Int) = "ABCD"[p.coerceIn(0, PATS - 1)].toString()
 
@@ -1391,12 +1468,14 @@ class PolySynth(private val sr: Int, private val t: InstState.SynTrack) {
         var tag = 0
         var semi = 0
         var freq = 220.0
+        /** Zielton beim Gleiten (MONO + GLIDE). */
+        var tgt = 220.0
         var vel = 1f
         var gate = false
         var env = 0f
         var stage = 0      // 0 Attack, 1 Decay/Sustain, 2 Release
         var fenv = 0f
-        val ph = DoubleArray(5)
+        val ph = DoubleArray(16)
         var mph = 0.0
         var lp = 0f
         var bp = 0f
@@ -1409,6 +1488,37 @@ class PolySynth(private val sr: Int, private val t: InstState.SynTrack) {
         var lfsr = 1
         var nz = 0f
         var vph = 0.0
+        // Teiltöne (Piano) und Hüllkurven der Modelle
+        val inc = DoubleArray(16)
+        val pa = FloatArray(16)
+        val pd = FloatArray(16)
+        var np = 0
+        /** Hammer-/Klick-Rauschen (Piano, Orgel). */
+        var hn = 0f
+        var nlp = 0f
+        var rnd = 22222
+        // Saite (Karplus-Strong)
+        var ks: FloatArray? = null
+        var kw = 0
+    }
+
+    private companion object {
+        const val TN = 4096
+        val SIN = FloatArray(TN + 1) { kotlin.math.sin(2 * PI * it / TN).toFloat() }
+        /** Sinus aus der Tabelle, Phase in Umdrehungen. */
+        fun sinT(p: Double): Float {
+            val x = (p - kotlin.math.floor(p)) * TN
+            val i = min(x.toInt(), TN - 1)
+            val fr = (x - i).toFloat()
+            return SIN[i] + (SIN[i + 1] - SIN[i]) * fr
+        }
+        const val TWO_PI_INV = 1.0 / (2 * PI)
+        // Orgel-Zugriegel: 16' 8' 5⅓' 4' 2⅔' 2' 1⅗' 1⅓' 1'
+        val ORG_R = doubleArrayOf(0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 5.0, 6.0, 8.0)
+        val ORG_JAZZ = floatArrayOf(0.8f, 1f, 0.6f, 0f, 0f, 0f, 0f, 0f, 0f)
+        val ORG_GOSPEL = floatArrayOf(1f, 1f, 1f, 0.6f, 0.3f, 0.4f, 0f, 0f, 0f)
+        val ORG_FULL = floatArrayOf(1f, 1f, 1f, 1f, 0.8f, 0.8f, 0.6f, 0.6f, 0.7f)
+        val WOB_MULT = doubleArrayOf(0.5, 1.0, 1.5, 2.0, 3.0, 4.0)
     }
 
     private val queue = ArrayList<Ev>()
@@ -1416,6 +1526,9 @@ class PolySynth(private val sr: Int, private val t: InstState.SynTrack) {
     private val voices = Array(10) { Voice() }
     private var ageCtr = 0L
     private val det = doubleArrayOf(0.0, -0.11, 0.11, -0.05, 0.05)
+    private val orgW = FloatArray(9)
+    /** Leslie-Rotor (gemeinsam für alle Orgel-Stimmen). */
+    private var leslie = 0.0
 
     private fun hz(semi: Int): Double = 440.0 * 2.0.pow((60 + 12 * t.oct + t.transpose + semi - 69) / 12.0)
 
@@ -1429,13 +1542,97 @@ class PolySynth(private val sr: Int, private val t: InstState.SynTrack) {
         for (v in voices) if (v.active) { v.gate = false; v.stage = 2 }
     }
 
+    private fun rnd(v: Voice): Float {
+        v.rnd = v.rnd * 1664525 + 1013904223
+        return ((v.rnd ushr 8) / 16777216f) * 2f - 1f
+    }
+
+    /** Anschlag: Modell-Zustand je Klang neu aufsetzen (Teiltöne, Hüllkurven, Saite). */
+    private fun noteInit(v: Voice, vel: Float) {
+        val f = v.tgt
+        when (t.wave) {
+            11 -> {
+                // Flügel: 10 leicht unharmonische Teiltöne (Saitensteife), hohe klingen schneller ab,
+                // Anschlag macht heller; die drei tiefsten doppelt (zweite Saite, leichte Schwebung) + Hammer-Geräusch
+                val bright = (t.cutNow() * (0.45f + 0.55f * vel)).coerceIn(0f, 1f)
+                val t0 = (3.5 * (261.6 / f).pow(0.5)).coerceIn(0.6, 10.0)
+                val bInh = 0.00035 * (f / 261.6).pow(0.5).coerceIn(0.3, 3.0)
+                var n = 0
+                for (k in 1..10) {
+                    val fk = f * k * kotlin.math.sqrt(1.0 + bInh * k * k)
+                    if (fk > sr * 0.45) break
+                    v.inc[n] = fk / sr
+                    v.pa[n] = ((1.0 / k.toDouble().pow(2.4 - 1.6 * bright)) * (0.4 + 0.6 * abs(kotlin.math.sin(PI * k / 7.3)))).toFloat()
+                    v.pd[n] = exp(-1.0 / (t0 / (1.0 + 0.45 * (k - 1)) * sr)).toFloat()
+                    n++
+                }
+                val base = n
+                val dt = 1.0 + 0.0004 + t.detune * 0.0012
+                for (k in 0 until min(3, base)) { v.inc[n] = v.inc[k] * dt; v.pa[n] = v.pa[k] * 0.7f; v.pd[n] = v.pd[k]; n++ }
+                v.np = n
+                for (k in 0 until n) v.ph[k] = 0.0
+                v.hn = 0.22f * vel * (0.5f + bright)
+            }
+            12 -> {
+                // E-Piano: Lautstärke, FM-Index und „Tine“-Anschlag klingen getrennt ab
+                v.pa[0] = 1f; v.pd[0] = exp(-1.0 / ((2.8 * (261.6 / f).pow(0.4)).coerceIn(0.6, 7.0) * sr)).toFloat()
+                v.pa[1] = 1f; v.pd[1] = exp(-1.0 / (0.5 * sr)).toFloat()
+                v.pa[2] = 1f; v.pd[2] = exp(-1.0 / (0.06 * sr)).toFloat()
+                for (k in 0 until 3) v.ph[k] = 0.0
+            }
+            13 -> {
+                // Orgel: Perkussion (2⅔'-Ton, kurz) über FILTER-HÜLLKURVE, kleiner Tasten-Klick
+                v.pa[0] = 1f; v.pd[0] = exp(-1.0 / (0.22 * sr)).toFloat()
+                v.hn = 0.1f * vel
+            }
+            19 -> {
+                // Saite: Verzögerungsleitung mit gefiltertem Rauschen füllen (CUTOFF = Härte des Anschlags)
+                val len = sr / 12 + 4
+                if (v.ks == null || v.ks!!.size < len) v.ks = FloatArray(len)
+                val buf = v.ks!!
+                java.util.Arrays.fill(buf, 0f)
+                val d = (sr / f).coerceIn(2.0, (buf.size - 3).toDouble())
+                val cnt = d.toInt() + 2
+                var lp = 0f
+                val a = 0.12f + 0.88f * t.cutNow() * (0.5f + 0.5f * vel)
+                for (i in 0 until cnt) { lp += a * (rnd(v) - lp); buf[i] = lp * (0.6f + 0.4f * vel) * 2.6f }
+                v.kw = cnt % buf.size
+                v.nz = 0f
+            }
+        }
+    }
+
     private fun apply(e: Ev) {
         val iv = e.iv ?: InstState.synChordIv[t.chord.coerceIn(0, InstState.synChordIv.size - 1)]
         if (!e.on) {
             for (v in voices) if (v.active && v.tag == e.tag && v.gate) { v.gate = false; v.stage = 2 }
             return
         }
-        val chip = t.wave >= 5
+        val chip = InstState.synIsChip(t.wave)
+        if (t.mono && !chip) {
+            // MONO: eine Stimme, neue Note gleitet vom alten Ton (GLIDE), Hüllkurve setzt ohne Knacken neu an
+            val v = voices[0]
+            for (k in 1 until voices.size) if (voices[k].active) { voices[k].gate = false; voices[k].stage = 2 }
+            val sounding = v.active && v.env > 0.001f
+            val legato = v.active && v.gate
+            v.active = true
+            v.tag = e.tag
+            v.semi = e.semi
+            v.tgt = hz(e.semi)
+            if (!(t.glide > 0.01f && sounding)) v.freq = v.tgt
+            v.vel = e.vel
+            v.gate = true
+            v.age = ++ageCtr
+            v.arpIv = null
+            v.n = 0L
+            if (!sounding) {
+                for (k in v.ph.indices) v.ph[k] = Math.random()
+                v.mph = 0.0
+                v.lp = 0f; v.bp = 0f
+            }
+            if (!legato) { v.stage = 0; v.fenv = 1f; noteInit(v, e.vel) }
+            return
+        }
         // Chiptune: Akkord als EINE Stimme, die die Töne schnell durchläuft (wie auf NES/Game Boy/C64)
         val list = if (chip && iv.size > 1) intArrayOf(0) else iv
         for (o in list) {
@@ -1445,6 +1642,7 @@ class PolySynth(private val sr: Int, private val t: InstState.SynTrack) {
             v.tag = e.tag
             v.semi = e.semi + o
             v.freq = hz(v.semi)
+            v.tgt = v.freq
             v.vel = e.vel
             v.gate = true
             v.stage = 0
@@ -1460,6 +1658,7 @@ class PolySynth(private val sr: Int, private val t: InstState.SynTrack) {
                 v.mph = 0.0
                 v.lp = 0f; v.bp = 0f
             }
+            noteInit(v, e.vel)
         }
     }
 
@@ -1467,6 +1666,12 @@ class PolySynth(private val sr: Int, private val t: InstState.SynTrack) {
         t < dt -> { val x = t / dt; x + x - x * x - 1.0 }
         t > 1.0 - dt -> { val x = (t - 1.0) / dt; x * x + x + x + 1.0 }
         else -> 0.0
+    }
+
+    private fun saw(v: Voice, k: Int, f: Double): Double {
+        val dt = f / sr
+        v.ph[k] += dt; if (v.ph[k] >= 1.0) v.ph[k] -= 1.0
+        return 2.0 * v.ph[k] - 1.0 - blep(v.ph[k], dt)
     }
 
     fun render(out: FloatArray, n: Int, w: Long) {
@@ -1482,21 +1687,48 @@ class PolySynth(private val sr: Int, private val t: InstState.SynTrack) {
         val atk = (1.0 / ((0.002 + st.atk * st.atk * 2.5) * sr)).toFloat()
         val relC = exp(-1.0 / ((0.02 + st.rel * st.rel * 3.0) * sr)).toFloat()
         val decC = exp(-1.0 / ((if (wave == 3) 0.25 else 0.6) * sr)).toFloat()
-        val sus = if (wave == 3) 0f else if (wave == 4) 0.0f else 0.8f
+        val sus = when (wave) { 3, 4 -> 0f; 11, 12, 13, 16, 19 -> 1f; 17 -> 0.75f; else -> 0.8f }
         val fDec = exp(-1.0 / ((if (wave == 3) 0.12 else 0.35) * sr)).toFloat()
         val q = 1f - st.res * 0.92f
         val vol = st.volNow() * 0.32f
         val spread = st.detune
-        val chip = wave >= 5
+        val chip = InstState.synIsChip(wave)
+        val noFilter = wave == 4 || wave == 10 || wave in 11..13 || wave == 16 || wave == 17 || wave == 19
         // Chip-Arpeggio: 1/32 im Master-Tempo (ohne Tempo: 120 BPM)
         val bpmNow = Engine.currentBpm().let { if (it in 40f..300f) it else 120f }
         val arpTick = max(1L, (sr * 60.0 / bpmNow / 8.0).toLong())
         // NES-Puls: Tastgrad 12,5 / 25 / 50 % · ab 75 % langsame PWM-Fahrt
         val duty = when { spread < 0.25f -> 0.125; spread < 0.5f -> 0.25; spread < 0.75f -> 0.5; else -> -1.0 }
         val pwmRate = 0.3 + spread * 3.0
+        // Gleiten (MONO)
+        val glc = if (st.mono && st.glide > 0.01f) (1.0 - exp(-1.0 / ((0.004 + st.glide * st.glide * 0.4) * sr))) else 1.0
+        // Orgel-Register über CUTOFF: Jazz → Gospel → volles Werk
+        var orgNorm = 1f
+        if (wave == 13) {
+            val r = st.cutNow().coerceIn(0f, 1f)
+            var sum = 0f
+            for (k in 0 until 9) {
+                orgW[k] = if (r < 0.5f) ORG_JAZZ[k] + (ORG_GOSPEL[k] - ORG_JAZZ[k]) * r * 2f else ORG_GOSPEL[k] + (ORG_FULL[k] - ORG_GOSPEL[k]) * (r - 0.5f) * 2f
+                sum += orgW[k]
+            }
+            orgNorm = 1f / (sum * 0.55f + 0.4f)
+        }
+        val lesRate = 0.7 + spread * 6.0
+        val pianoHd = exp(-1.0 / (0.006 * sr)).toFloat()
+        val clickHd = exp(-1.0 / (0.002 * sr)).toFloat()
+        val ksT = 0.3 + spread * spread * 7.0
+        val wobRate = bpmNow / 60.0 * WOB_MULT[(spread * 5.999f).toInt().coerceIn(0, 5)]
+        val fmRatio = if (spread < 0.33f) 1.0 else if (spread < 0.66f) 2.0 else 3.0
         var ei = 0
         for (i in 0 until n) {
             while (ei < evs.size && (evs[ei].frame < 0 || evs[ei].frame <= w + i)) { apply(evs[ei]); ei++ }
+            var lesV = 0f
+            var lesA = 1f
+            if (wave == 13) {
+                leslie += lesRate / sr; if (leslie >= 1.0) leslie -= 1.0
+                lesV = sinT(leslie)
+                lesA = 1f - 0.22f * spread * (0.5f + 0.5f * sinT(leslie + 0.25))
+            }
             var mix = 0f
             for (v in voices) {
                 if (!v.active) continue
@@ -1509,7 +1741,11 @@ class PolySynth(private val sr: Int, private val t: InstState.SynTrack) {
                 val ai = v.arpIv
                 if (ai != null) {
                     val k = ((v.n / arpTick) % ai.size).toInt()
-                    if (k != v.arpIdx) { v.arpIdx = k; v.freq = hz(v.arpBase + ai[k]) }
+                    if (k != v.arpIdx) { v.arpIdx = k; v.freq = hz(v.arpBase + ai[k]); v.tgt = v.freq }
+                }
+                if (v.freq != v.tgt) {
+                    v.freq += (v.tgt - v.freq) * glc
+                    if (abs(v.tgt - v.freq) < 0.005) v.freq = v.tgt
                 }
                 v.n++
                 var f = v.freq
@@ -1521,6 +1757,7 @@ class PolySynth(private val sr: Int, private val t: InstState.SynTrack) {
                         f *= 1.0 + 0.006 * vd * kotlin.math.sin(2 * PI * v.vph)
                     }
                 }
+                var wobLfo = 0f
                 var o: Double
                 when (wave) {
                     5, 8 -> {
@@ -1577,6 +1814,121 @@ class PolySynth(private val sr: Int, private val t: InstState.SynTrack) {
                         }
                         o = v.nz.toDouble()
                     }
+                    11 -> {
+                        // Flügel
+                        var sum = 0f
+                        for (k in 0 until v.np) {
+                            v.ph[k] += v.inc[k]; if (v.ph[k] >= 1.0) v.ph[k] -= 1.0
+                            sum += v.pa[k] * sinT(v.ph[k])
+                            v.pa[k] *= v.pd[k]
+                        }
+                        if (v.hn > 1e-4f) {
+                            v.nlp += 0.35f * (rnd(v) - v.nlp)
+                            sum += v.nlp * v.hn
+                            v.hn *= pianoHd
+                        }
+                        o = sum * 0.5
+                    }
+                    12 -> {
+                        // E-Piano (FM): Körper 1:1 mit abklingendem Index + metallischer Anschlag (14:1), Tremolo über VERSTIMMUNG
+                        val vel = v.vel
+                        val bright = st.cutNow()
+                        v.ph[0] += f / sr; if (v.ph[0] >= 1.0) v.ph[0] -= 1.0
+                        v.ph[1] += f / sr; if (v.ph[1] >= 1.0) v.ph[1] -= 1.0
+                        v.ph[2] += f * 14.0 / sr; if (v.ph[2] >= 1.0) v.ph[2] -= 1.0
+                        val i1 = (0.25 + 1.8 * vel * bright) * (0.3 + 0.7 * v.pa[1])
+                        val body = sinT(v.ph[0] + i1 * sinT(v.ph[1]) * TWO_PI_INV)
+                        val tine = sinT(v.ph[0] + 2.2 * sinT(v.ph[2]) * TWO_PI_INV) * v.pa[2] * 0.35f * vel
+                        v.mph += 4.8 / sr; if (v.mph >= 1.0) v.mph -= 1.0
+                        val trem = 1f - spread * 0.55f * (0.5f + 0.5f * sinT(v.mph))
+                        o = tanh(((body * v.pa[0] + tine) * trem * (1f + vel * 0.8f)).toDouble()) * 0.85
+                        v.pa[0] *= v.pd[0]; v.pa[1] *= v.pd[1]; v.pa[2] *= v.pd[2]
+                    }
+                    13 -> {
+                        // Orgel (Zugriegel + Leslie)
+                        val fv = f * (1.0 + 0.0035 * spread * lesV)
+                        var sum = 0f
+                        for (k in 0 until 9) {
+                            val wk = orgW[k]
+                            if (wk < 0.01f) continue
+                            val fk = fv * ORG_R[k]
+                            if (fk > sr * 0.45) continue
+                            v.ph[k] += fk / sr; if (v.ph[k] >= 1.0) v.ph[k] -= 1.0
+                            sum += wk * sinT(v.ph[k])
+                        }
+                        sum *= orgNorm
+                        if (st.env > 0.03f && v.pa[0] > 1e-4f) {
+                            v.ph[9] += fv * 3.0 / sr; if (v.ph[9] >= 1.0) v.ph[9] -= 1.0
+                            sum += v.pa[0] * st.env * 0.8f * sinT(v.ph[9])
+                            v.pa[0] *= v.pd[0]
+                        }
+                        if (v.hn > 1e-4f) { sum += rnd(v) * v.hn; v.hn *= clickHd }
+                        o = (sum * lesA).toDouble() * 0.8
+                    }
+                    14 -> {
+                        // Sync-Lead: Slave-Säge an der Master-Phase neu gestartet, Verhältnis über VERSTIMMUNG + Filter-Hüllkurve
+                        val dt0 = f / sr
+                        val ratio = 1.5 + spread * 2.5 + st.env * 4.0 * v.fenv
+                        val dt1 = dt0 * ratio
+                        v.ph[0] += dt0
+                        if (v.ph[0] >= 1.0) { v.ph[0] -= 1.0; v.ph[1] = v.ph[0] * ratio }
+                        else { v.ph[1] += dt1; if (v.ph[1] >= 1.0) v.ph[1] -= kotlin.math.floor(v.ph[1]) }
+                        o = (2.0 * v.ph[1] - 1.0 - blep(v.ph[1], dt1)) * 0.6 + (2.0 * v.ph[0] - 1.0 - blep(v.ph[0], dt0)) * 0.25
+                    }
+                    15 -> {
+                        // Reese: zwei gegeneinander verstimmte Sägen + Sub eine Oktave tiefer
+                        val d = 0.0015 + spread * 0.008
+                        o = 0.42 * (saw(v, 0, f * (1 - d)) + saw(v, 1, f * (1 + d)))
+                        v.ph[2] += f * 0.5 / sr; if (v.ph[2] >= 1.0) v.ph[2] -= 1.0
+                        o += 0.4 * sinT(v.ph[2])
+                    }
+                    16 -> {
+                        // Sub-Bass: Sinus, VERSTIMMUNG = Sättigung (Obertöne für kleine Lautsprecher)
+                        v.ph[0] += f / sr; if (v.ph[0] >= 1.0) v.ph[0] -= 1.0
+                        val dr = 1.0 + spread * 3.0
+                        o = tanh(sinT(v.ph[0]) * dr) / tanh(dr) * 0.95
+                    }
+                    17 -> {
+                        // FM-Bass: Modulator (1:1, 2:1 oder 3:1 über VERSTIMMUNG) mit Rückkopplung (RESONANZ), Index folgt der Filter-Hüllkurve
+                        v.mph += f * fmRatio / sr; if (v.mph >= 1.0) v.mph -= 1.0
+                        val mod = sinT(v.mph + v.nz * (0.05 + st.res * 0.2))
+                        v.nz = mod
+                        val idx = 0.3 + st.env * 6.0 * v.fenv + st.cutNow() * 1.5
+                        v.ph[0] += f / sr; if (v.ph[0] >= 1.0) v.ph[0] -= 1.0
+                        v.ph[1] += f * 0.5 / sr; if (v.ph[1] >= 1.0) v.ph[1] -= 1.0
+                        o = sinT(v.ph[0] + idx * mod * TWO_PI_INV) * 0.72 + sinT(v.ph[1]) * 0.28
+                    }
+                    18 -> {
+                        // Wobble: Säge + Rechteck, Filter-LFO im Songtempo (VERSTIMMUNG = 1/2 … 4 pro Schlag)
+                        o = 0.4 * (saw(v, 0, f * 0.997) + saw(v, 1, f * 1.003))
+                        val dt = f / sr
+                        v.ph[2] += dt; if (v.ph[2] >= 1.0) v.ph[2] -= 1.0
+                        var sq = if (v.ph[2] < 0.5) 1.0 else -1.0
+                        sq += blep(v.ph[2], dt); sq -= blep((v.ph[2] + 0.5) % 1.0, dt)
+                        o += 0.35 * sq
+                        v.mph += wobRate / sr; if (v.mph >= 1.0) v.mph -= 1.0
+                        wobLfo = 0.5f - 0.5f * sinT(v.mph + 0.25)
+                    }
+                    19 -> {
+                        // Saite (Karplus-Strong): Nachklang über VERSTIMMUNG, Tonhöhe auch beim Gleiten sauber
+                        val buf = v.ks
+                        if (buf == null) o = 0.0 else {
+                            val sz = buf.size
+                            val d = (sr / f - 0.5).coerceIn(2.0, (sz - 3).toDouble())
+                            var rp = v.kw - d
+                            if (rp < 0) rp += sz
+                            val i0 = rp.toInt() % sz
+                            val i1 = (i0 + 1) % sz
+                            val fr = (rp - kotlin.math.floor(rp)).toFloat()
+                            val y = buf[i0] + (buf[i1] - buf[i0]) * fr
+                            val loss = exp(-1.0 / (f * ksT)).toFloat()
+                            val nv = (y + v.nz) * 0.5f * loss
+                            v.nz = y
+                            buf[v.kw] = nv
+                            v.kw = (v.kw + 1) % sz
+                            o = nv.toDouble()
+                        }
+                    }
                     1 -> {
                         val dt = f / sr
                         v.ph[0] += dt; if (v.ph[0] >= 1.0) v.ph[0] -= 1.0
@@ -1586,12 +1938,7 @@ class PolySynth(private val sr: Int, private val t: InstState.SynTrack) {
                     }
                     2 -> {
                         o = 0.0
-                        for (k in 0 until 5) {
-                            val fk = f * (1.0 + det[k] * spread * 0.12)
-                            val dt = fk / sr
-                            v.ph[k] += dt; if (v.ph[k] >= 1.0) v.ph[k] -= 1.0
-                            o += 2.0 * v.ph[k] - 1.0 - blep(v.ph[k], dt)
-                        }
+                        for (k in 0 until 5) o += saw(v, k, f * (1.0 + det[k] * spread * 0.12))
                         o *= 0.32
                     }
                     4 -> {
@@ -1603,19 +1950,13 @@ class PolySynth(private val sr: Int, private val t: InstState.SynTrack) {
                     }
                     else -> {
                         // SAW / PLUCK: zwei leicht verstimmte Sägezähne
-                        o = 0.0
-                        for (k in 0 until 2) {
-                            val fk = f * (1.0 + (if (k == 0) -1 else 1) * spread * 0.006)
-                            val dt = fk / sr
-                            v.ph[k] += dt; if (v.ph[k] >= 1.0) v.ph[k] -= 1.0
-                            o += 2.0 * v.ph[k] - 1.0 - blep(v.ph[k], dt)
-                        }
-                        o *= 0.5
+                        o = 0.5 * (saw(v, 0, f * (1.0 - spread * 0.006)) + saw(v, 1, f * (1.0 + spread * 0.006)))
                     }
                 }
                 var s = o.toFloat()
-                if (wave != 4 && wave != 10 && !(chip && wave != 8 && st.cutNow() > 0.97f)) {
-                    val oct = st.cutNow() * 7.5f + st.env * 4.5f * v.fenv + st.cutMod * 2.5f
+                if (!noFilter && !(chip && wave != 8 && st.cutNow() > 0.97f)) {
+                    val oct = if (wave == 18) st.cutNow() * 7.5f + st.env * 6f * wobLfo + st.cutMod * 2.5f
+                              else st.cutNow() * 7.5f + st.env * 4.5f * v.fenv + st.cutMod * 2.5f
                     val fc = min(0.42f * sr, 60f * 2f.pow(oct))
                     val g = (2.0 * kotlin.math.sin(PI * fc / sr)).toFloat().coerceAtMost(1.1f)
                     // Chamberlin-SVF (Tiefpass)

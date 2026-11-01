@@ -207,6 +207,7 @@ class MainActivity : Activity() {
         pads.onInstKits = { k -> if (k == 1) showAcidSounds() else showSoundKits() }
         pads.onInstScale = { showScaleMenu() }
         pads.onInstChords = { showChordProgression() }
+        pads.onInstWaves = { showSynthWaves() }
         pads.onSidechain = { showSidechain() }
         pads.onSlicerSource = { pickSlicerSource() }
         pads.onPanelExport = { showPanelExport(it) }
@@ -1910,7 +1911,9 @@ class MainActivity : Activity() {
             "🌌 ATMOS · Klangteppich & Drones" + st(Atmos.on),
             "🎤 VOCAL-HARMONIZER · Chor aus dem Gesang" + st(Harmonizer.on),
             "⬡ EUKLID · generative Polyrhythmen" + st(Euclid.on),
-            "👾 CHIPTUNE · 8-Bit-Klänge im SYNTH (Presets)"
+            "👾 CHIPTUNE · 8-Bit-Klänge im SYNTH (Presets)",
+            "🎹 KEYS · Piano, E-Piano, Orgel & Leads",
+            "🎸 BASSLINE · zweiter Bass-Sequenzer (FM, Reese, Sub, Wobble)"
         )
         ui().setTitle("🎹 Weitere Instrumente")
             .setItems(items) { _, w ->
@@ -1919,6 +1922,12 @@ class MainActivity : Activity() {
                     0 -> openAtmos()
                     1 -> { if (djMode) dj.openHarm() else pads.openHarm(); hint("▶ AN, dann Akkord-Pads halten – der Gesang des Decks wird zum Chor · XY: Formant und Tuning") }
                     2 -> { if (djMode) dj.openEuclid() else pads.openEuclid(); hint("▶ START – läuft im Takt des Decks · drei Regler: Schläge, Taktlänge, Morphing") }
+                    4, 5 -> {
+                        if (djMode) switchMode(false)
+                        InstState.synCur = if (w - 1 == 4) InstState.KEYS_TRACK else InstState.BASS_TRACK
+                        pads.openSynthEditor()
+                        showSynthPresets()
+                    }
                     else -> {
                         if (djMode) switchMode(false)
                         pads.openSynthEditor()
@@ -1936,17 +1945,38 @@ class MainActivity : Activity() {
             }.show()
     }
 
+    /** KLANG im SYNTH/KEYS/BASSLINE: alle Klänge nach Gruppen, neue Modelle mit passender Grundeinstellung. */
+    private fun showSynthWaves() {
+        val st = InstState
+        val list = st.synWaveGroups
+        val items = list.map { (g, w, d) -> (if (st.synWave == w) "● " else "") + "$g · ${st.synWaveNames[w]} – $d" }.toTypedArray()
+        ui().setTitle("🎛 Klang · ${st.synName(st.synCur)}")
+            .setItems(items) { _, i ->
+                val w = list[i].second
+                Engine.pushPatternUndo("SYNTH Klang")
+                if (w >= 11) st.waveDefaults(st.syn, w) else st.synWave = w
+                if (list[i].first == "Bass" && !st.syn.mono) { st.syn.mono = true; if (st.syn.glide < 0.01f) st.syn.glide = 0.15f }
+                pads.invalidate()
+                hint("🎛 ${st.synWaveNames[w]} – ${list[i].third}" + if (st.syn.mono) " · MONO (GLIDE-Regler)" else "")
+            }
+            .setNegativeButton("Abbrechen", null)
+            .show()
+    }
+
     private fun showSynthPresets() {
-        val genres = InstPresets.SYNTHS.map { it.genre }.distinct()
-        val items = listOf("🎲 Zufallsmelodie", "🎼 Akkordfolge erzeugen (Pop, House, Trance …)") + genres.map { g -> "$g (${InstPresets.SYNTHS.count { it.genre == g }})" } + listOf("📥 Eigene MIDI-Datei laden …")
+        val cur = InstState.synCur
+        val pref = when (cur) { InstState.KEYS_TRACK -> InstPresets.KEYS_GENRES; InstState.BASS_TRACK -> InstPresets.BASS_GENRES; else -> emptyList() }
+        val genres = pref + InstPresets.SYNTHS.map { it.genre }.distinct().filter { it !in pref }
+        val bassRnd = cur == InstState.BASS_TRACK
+        val items = listOf(if (bassRnd) "🎲 Zufalls-Bassline" else "🎲 Zufallsmelodie", "🎼 Akkordfolge erzeugen (Pop, House, Trance …)") + genres.map { g -> "$g (${InstPresets.SYNTHS.count { it.genre == g }})" } + listOf("📥 Eigene MIDI-Datei laden …")
         ui()
-            .setTitle("🎹 SYNTH · Presets")
+            .setTitle("${if (cur == InstState.BASS_TRACK) "🎸" else "🎹"} ${InstState.synName(cur)} · Presets")
             .setItems(items.toTypedArray()) { _, w ->
                 when {
                     w == 0 -> {
                         Engine.pushPatternUndo("SYNTH Zufall")
-                        InstState.synRandom()
-                        hint("🎲 Neue Zufallsmelodie – nochmal für eine andere")
+                        if (bassRnd) InstState.bassRandom() else InstState.synRandom()
+                        hint(if (bassRnd) "🎲 Neue Bassline – nochmal für eine andere · Stil wechselt (Offbeat, rollend, Funk)" else "🎲 Neue Zufallsmelodie – nochmal für eine andere")
                     }
                     w == items.size - 1 -> showInstMidi(3)
                     w == 1 -> showChordProgression()
@@ -1959,7 +1989,7 @@ class MainActivity : Activity() {
                                 Engine.pushPatternUndo("SYNTH Preset")
                                 InstPresets.applySynth(p)
                                 presetTempo(p.bpm)
-                                hint("SYNTH: ${p.name} – Klang ${InstState.synWaveNames[p.wave]}" + if (p.chord != 0) " · Akkord ${InstState.synChordNames[p.chord]}" else "")
+                                hint("${InstState.synName(InstState.synCur)}: ${p.name} – Klang ${InstState.synWaveNames[p.wave]}" + (if (p.mono) " · MONO/GLIDE" else "") + if (p.chord != 0) " · Akkord ${InstState.synChordNames[p.chord]}" else "")
                             }.show()
                     }
                 }
@@ -4048,7 +4078,7 @@ class MainActivity : Activity() {
         box.addView(bar(Engine.scRelease, { Engine.scRelease = it }) { "${(60 + it * 440).toInt()} ms" })
         box.addView(label("Wird weggedrückt"))
         box.addView(check("ACID-Bass", Engine.scAcid) { Engine.scAcid = it })
-        for (t in Engine.scSyn.indices) box.addView(check("SYNTH ${t + 1}", Engine.scSyn[t]) { Engine.scSyn[t] = it })
+        for (t in Engine.scSyn.indices) box.addView(check(InstState.synName(t), Engine.scSyn[t]) { Engine.scSyn[t] = it })
         box.addView(check("Pads (Loops & Samples)", Engine.scPads) { Engine.scPads = it })
         ui().setTitle("〽 Sidechain-Pumpen")
             .setView(android.widget.ScrollView(this).apply { addView(box) })
@@ -4067,7 +4097,7 @@ class MainActivity : Activity() {
             val ch = (0 until pr.degrees.size).joinToString(" – ") { st.progChordName(pr, it, root) }
             pr.name + "\n   " + ch
         }.toTypedArray()
-        ui().setTitle("🎼 Akkordfolge (SYNTH ${st.synCur + 1}) · Grundton ${st.scaleNoteNames[root]}")
+        ui().setTitle("🎼 Akkordfolge (${st.synName(st.synCur)}) · Grundton ${st.scaleNoteNames[root]}")
             .setItems(labels) { _, w ->
                 val pr = prs[w]
                 ui().setTitle("Grundton der Tonart").setItems(st.scaleNoteNames.map { it + if (pr.minor) "-Moll" else "-Dur" }.toTypedArray()) { _, r ->
@@ -4077,7 +4107,7 @@ class MainActivity : Activity() {
                             st.writeProgression(pr, r, if (l == 0) 16 else 8, rh)
                             pads.invalidate()
                             val ch = (0 until pr.degrees.size).joinToString(" – ") { st.progChordName(pr, it, r) }
-                            hint("🎼 $ch in SYNTH ${st.synCur + 1} – Tipp: ARP an für eine Tonfolge, andere Spur für Bass")
+                            hint("🎼 $ch in ${st.synName(st.synCur)} – Tipp: ARP an für eine Tonfolge, andere Spur für Bass")
                         }.show()
                     }.show()
                 }.show()
@@ -4900,7 +4930,7 @@ class MainActivity : Activity() {
         ui().setTitle(if (kind == 0) "🎤 Summen → Melodie: Länge" else "🥁 Beatbox → Drums: Länge").setItems(labels) { _, w ->
             val bars = barsOpt[w]
             if (kind == 0) {
-                val names = Array(InstState.SYN_TRACKS) { "SYNTH ${it + 1} · ${InstState.synSoundNames.getOrElse(it) { "" }}" + if (InstState.synTracks[it].hasNotes()) " (wird ersetzt)" else "" }
+                val names = Array(InstState.SYN_TRACKS) { "${InstState.synName(it)} · ${InstState.synSoundNames.getOrElse(it) { "" }}" + if (InstState.synTracks[it].hasNotes()) " (wird ersetzt)" else "" }
                 ui().setTitle("In welche Spur?").setItems(names) { _, t -> micCapture(0, bars, t) }.show()
             } else micCapture(1, bars, 0)
         }.setNegativeButton("Abbrechen", null).show()
@@ -4997,7 +5027,7 @@ class MainActivity : Activity() {
         }
         t.on = true
         st.synCur = track
-        return if (placed == 0) "Töne erkannt, aber außerhalb des Takts – nochmal versuchen" else "🎤 $placed Noten in SYNTH ${track + 1}" + (if (octShift != 0) " (Oktave angepasst)" else "") + " · ↶ UNDO macht es rückgängig"
+        return if (placed == 0) "Töne erkannt, aber außerhalb des Takts – nochmal versuchen" else "🎤 $placed Noten in ${InstState.synName(track)}" + (if (octShift != 0) " (Oktave angepasst)" else "") + " · ↶ UNDO macht es rückgängig"
     }
 
     /** Beatbox in die Drum-Machine (BD, SD, CH). */
@@ -5080,7 +5110,7 @@ class MainActivity : Activity() {
         check(box, "🎹 Stimmen-Synth an (singen oder summen → Synth spielt mit)", Engine.voiceSynthOn) { on -> if (on) Engine.voiceSynthOn = true else Engine.voiceSynthStop() }
         note(box, "Spur (Klang):", Color.WHITE)
         val rg = android.widget.RadioGroup(this)
-        for (i in 0 until InstState.SYN_TRACKS) rg.addView(android.widget.RadioButton(this).apply { id = 7300 + i; text = "SYNTH ${i + 1} · ${InstState.synSoundNames.getOrElse(i) { "" }}"; setTextColor(Color.WHITE) })
+        for (i in 0 until InstState.SYN_TRACKS) rg.addView(android.widget.RadioButton(this).apply { id = 7300 + i; text = "${InstState.synName(i)} · ${InstState.synSoundNames.getOrElse(i) { "" }}"; setTextColor(Color.WHITE) })
         rg.check(7300 + Engine.voiceSynthTrack)
         rg.setOnCheckedChangeListener { _, id -> Engine.voiceSynthStop(); Engine.voiceSynthTrack = id - 7300; Engine.voiceSynthOn = true }
         box.addView(rg)
