@@ -211,10 +211,10 @@ class WolfPanel(private val host: View) {
                 if (Wolf.on) onHint?.invoke("🐺 WOLF zerhackt Pad ${Wolf.srcPad + 1} im Takt – CHAOS und DICHTE aufdrehen, 📌 behält einen guten Takt")
             }
             bSrc.contains(x, y) -> { haptic(); onPickSource?.invoke() }
-            bNew.contains(x, y) -> { haptic(); Wolf.setHold(false); Wolf.reroll(); onHint?.invoke("🎲 Neue Zufallsfolge") }
+            bNew.contains(x, y) -> { haptic(); Wolf.holdBar(false); Wolf.reroll(); onHint?.invoke("🎲 Neue Zufallsfolge") }
             bHold.contains(x, y) -> {
                 haptic()
-                Wolf.setHold(!Wolf.hold)
+                Wolf.holdBar(!Wolf.hold)
                 onHint?.invoke(if (Wolf.hold) "📌 Dieser Takt wiederholt sich – nochmal tippen lässt den Wolf wieder los" else "Der Wolf variiert wieder")
             }
             bPreset.contains(x, y) -> {

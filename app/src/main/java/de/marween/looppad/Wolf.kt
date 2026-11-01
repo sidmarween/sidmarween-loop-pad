@@ -95,7 +95,7 @@ object Wolf {
     @Volatile private var curBar = 0L
 
     /** BEHALTEN an/aus: der gerade laufende Takt wiederholt sich. */
-    fun setHold(v: Boolean) {
+    fun holdBar(v: Boolean) {
         heldKey = if (v) rawKey(curBar) else Long.MIN_VALUE
         hold = v
         replan()

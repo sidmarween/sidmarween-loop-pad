@@ -1959,7 +1959,7 @@ class PolySynth(private val sr: Int, private val t: InstState.SynTrack) {
                                 val b0 = tb[ix] + (tb[ix + 1] - tb[ix]) * q
                                 sum += a0 + (b0 - a0) * fr
                             }
-                            o = sum * 0.5
+                            o = sum * 0.8
                         }
                     }
                     1 -> {
