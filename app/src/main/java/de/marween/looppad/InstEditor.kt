@@ -677,7 +677,7 @@ class InstEditor(private val host: View) {
         for ((ti, t) in st.synTracks.withIndex()) {
             if (kind == 3 && ti == st.synCur) continue
             if (!t.on || !t.hasNotes()) continue
-            out.add(GSrc(t.gate, t.tie, t.semi, t.len, GHOST_COLS[1 + ti % 3], "SYN ${ti + 1}", synBase(t) - myBase))
+            out.add(GSrc(t.gate, t.tie, t.semi, t.len, GHOST_COLS[1 + ti % 3], InstState.synName(ti).replace("SYNTH ", "SYN "), synBase(t) - myBase))
         }
         return out
     }
