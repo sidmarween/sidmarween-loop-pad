@@ -109,6 +109,17 @@ class ShotTest {
         for (k in 0 until 16) Wolf.planView[k] = if (k % 5 == 3) (k % 9) + 1 else 0
         shot(pv, w, h, "wolf_${tag}")
         pv.wolf.close()
+        pv.openArchitect()
+        shot(pv, w, h, "arch_${tag}")
+        pv.architect.close()
+        pv.openOrbits()
+        shot(pv, w, h, "orbits_${tag}")
+        pv.orbits.close()
+        pv.openBassLab(0)
+        shot(pv, w, h, "magma_${tag}")
+        pv.bassLab.tab = 1
+        shot(pv, w, h, "funk_${tag}")
+        pv.bassLab.close()
     }
 
     @Test @Config(qualifiers = "w360dp-h800dp-xxhdpi") fun normal() { pads("n"); dj("n"); song("n") }
