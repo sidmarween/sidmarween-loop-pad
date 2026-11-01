@@ -818,10 +818,10 @@ object Engine {
         st.synCur = 0
         java.util.Arrays.fill(st.curPat, 0)
         // Zusatz-Instrumente aus und zurückgesetzt
-        Euclid.on = false; Euclid.presetIdx = -1; Euclid.density = 0.45f; Euclid.complexity = 0.5f; Euclid.morph = 0.4f; Euclid.level = 0.7f
+        Euclid.on = false; Euclid.density = 0.45f; Euclid.complexity = 0.5f; Euclid.morph = 0.4f; Euclid.level = 0.7f
         Euclid.poly = false; Euclid.kit = 0; java.util.Arrays.fill(Euclid.laneOn, true)
-        Atmos.on = false; Atmos.presetIdx = -1
-        Harmonizer.on = false; Harmonizer.presetIdx = -1
+        Atmos.on = false
+        Harmonizer.on = false
         Wolf.on = false; Wolf.srcPad = -1; Wolf.presetIdx = -1; Wolf.hold = false
         Architect.on = false; Architect.presetIdx = -1
         for (t in 0 until Architect.T) { java.util.Arrays.fill(Architect.steps[t], 0); java.util.Arrays.fill(Architect.acc[t], false) }
