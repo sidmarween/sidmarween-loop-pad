@@ -116,11 +116,11 @@ class TouchPanel(private val host: View) {
         // Optionen je Modus
         val ol = Array(5) { "" }
         when (mode) {
-            TouchLab.MORPH -> {}
-            TouchLab.TERRAIN -> { ol[0] = TouchLab.TERRAINS[TouchLab.terrain]; ol[1] = "ORBIT ${(TouchLab.orbit * 100).toInt()}" }
-            TouchLab.SPECTRAL -> { ol[0] = if (TouchLab.specPlay) "■ STOP" else "▶ PLAY"; ol[1] = "${TouchLab.specBars} TAKT" + if (TouchLab.specBars > 1) "E" else ""; ol[2] = if (TouchLab.specScale) "TONLEITER" else "FREI"; ol[3] = if (erase) "⌫ RADIER" else "✏ MALEN"; ol[4] = "🎲 / LEER" }
-            TouchLab.GESTURE -> { ol[0] = "KLANG: " + TouchLab.G_SOUNDS[TouchLab.gSound] }
-            TouchLab.MODULAR -> { ol[0] = if (Modular.drone) "DRONE AN" else "DRONE AUS"; ol[1] = "⟲ PATCH" }
+            TouchLab.MORPH -> { ol[0] = "VORLAGE ▸" }
+            TouchLab.TERRAIN -> { ol[0] = TouchLab.TERRAINS[TouchLab.terrain]; ol[1] = "ORBIT ${(TouchLab.orbit * 100).toInt()}"; ol[2] = "VORLAGE ▸" }
+            TouchLab.SPECTRAL -> { ol[0] = if (TouchLab.specPlay) "■ STOP" else "▶ PLAY"; ol[1] = "${TouchLab.specBars} TAKT" + if (TouchLab.specBars > 1) "E" else ""; ol[2] = if (TouchLab.specScale) "TONLEITER" else "FREI"; ol[3] = if (erase) "⌫ RADIER" else "✏ MALEN"; ol[4] = "VORLAGE ▸" }
+            TouchLab.GESTURE -> { ol[0] = "KLANG: " + TouchLab.G_SOUNDS[TouchLab.gSound]; ol[1] = "VORLAGE ▸" }
+            TouchLab.MODULAR -> { ol[0] = if (Modular.drone) "DRONE AN" else "DRONE AUS"; ol[1] = "PATCH ▸" }
         }
         for (k in 0 until 5) if (ol[k].isNotEmpty()) btn(c, opts[k], ol[k], (mode == TouchLab.SPECTRAL && k == 0 && TouchLab.specPlay) || (mode == TouchLab.MODULAR && k == 0 && Modular.drone), col)
         btn(c, bRec, "⏺ PAD", false, Color.rgb(255, 90, 90))
@@ -427,7 +427,19 @@ class TouchPanel(private val host: View) {
     private fun option(o: Int) {
         haptic()
         when (mode) {
-            TouchLab.TERRAIN -> when (o) {
+            TouchLab.MORPH -> if (o == 0) {
+                morphP = (morphP + 1) % MORPH_P.size
+                val p = MORPH_P[morphP]
+                for (k in 0 until 4) TouchLab.corners[k] = TouchLab.MODELS.indexOf(p.second[k]).coerceAtLeast(0)
+                TouchLab.mx = 0.5f; TouchLab.my = 0.5f
+                onHint?.invoke("🎚 ${p.first} – Finger von Ecke zu Ecke ziehen, während du spielst")
+            }
+            TouchLab.TERRAIN -> if (o == 2) {
+                terrP = (terrP + 1) % TERR_P.size
+                val p = TERR_P[terrP]
+                TouchLab.terrain = p.second; TouchLab.orbit = p.third; TouchLab.space = p.fourth
+                onHint?.invoke("🏔 ${p.first}")
+            } else when (o) {
                 0 -> { TouchLab.terrain = (TouchLab.terrain + 1) % TouchLab.TERRAINS.size; onHint?.invoke("Landschaft: ${TouchLab.TERRAINS[TouchLab.terrain]}") }
                 1 -> { TouchLab.orbit = if (TouchLab.orbit > 0.85f) 0.1f else TouchLab.orbit + 0.15f; onHint?.invoke("Orbit ${(TouchLab.orbit * 100).toInt()} % – größer = obertonreicher") }
             }
@@ -436,16 +448,54 @@ class TouchPanel(private val host: View) {
                 1 -> TouchLab.specBars = if (TouchLab.specBars == 1) 2 else if (TouchLab.specBars == 2) 4 else 1
                 2 -> { TouchLab.specScale = !TouchLab.specScale; onHint?.invoke(if (TouchLab.specScale) "Bänder auf der Tonleiter (immer harmonisch)" else "Bänder frei verteilt (Klangfarben, Geräusche)") }
                 3 -> erase = !erase
-                4 -> { if (TouchLab.spec.any { r -> r.any { it > 0f } } && lastRnd) { for (r in TouchLab.spec) java.util.Arrays.fill(r, 0f); lastRnd = false; onHint?.invoke("Leer") } else { specRandom(); lastRnd = true; onHint?.invoke("🎲 Neues Bild – nochmal tippen = leeren") } }
+                4 -> { specP = (specP + 1) % SPEC_NAMES.size; specPreset(specP); onHint?.invoke("🎨 ${SPEC_NAMES[specP]}" + if (!TouchLab.specPlay) " – ▶ PLAY zum Hören" else "") }
             }
             TouchLab.GESTURE -> if (o == 0) TouchLab.gSound = (TouchLab.gSound + 1) % TouchLab.G_SOUNDS.size
+                else if (o == 1) {
+                    gestP = (gestP + 1) % GEST_P.size
+                    val p = GEST_P[gestP]
+                    TouchLab.gSound = p.second; TouchLab.space = p.third
+                    onHint?.invoke("👋 ${p.first}")
+                }
             TouchLab.MODULAR -> when (o) {
                 0 -> Modular.drone = !Modular.drone
-                1 -> { Modular.reset(); onHint?.invoke("Grund-Patch: OSC 1 → FILTER → DRIVE → AUSGANG, LFO → Cutoff") }
+                1 -> { Modular.applyPatch(Modular.patchIdx + 1); onHint?.invoke("🔌 Patch: ${Modular.PATCHES[Modular.patchIdx].name} – Tasten oder DRONE zum Hören") }
             }
         }
     }
     private var lastRnd = false
+    // ---- Vorlagen
+    private var morphP = -1; private var terrP = -1; private var specP = -1; private var gestP = -1
+    private val MORPH_P = listOf(
+        "Acid ↔ Vocal (Drop-Wechsel)" to arrayOf("ACID", "VOCAL", "ANALOG", "METALL"),
+        "Bass-Morph" to arrayOf("SUB", "ACID", "ANALOG", "SUPERSAW"),
+        "Metall-Atmosphäre" to arrayOf("METALL", "RAUSCHEN", "ORGEL", "VOCAL"),
+        "Chip-Rave" to arrayOf("CHIP", "SUPERSAW", "ACID", "METALL"),
+        "Orgel-House" to arrayOf("ORGEL", "ANALOG", "VOCAL", "SUB"),
+        "Trance-Fläche" to arrayOf("SUPERSAW", "VOCAL", "ORGEL", "RAUSCHEN")
+    )
+    private data class Q<A, B, C, D>(val first: A, val second: B, val third: C, val fourth: D)
+    private val TERR_P = listOf(
+        Q("Weicher Pad (Hügel, kleine Bahn)", 0, 0.15f, 0.45f),
+        Q("Glas-Lead (Kristall)", 1, 0.4f, 0.3f),
+        Q("Sägender Bass (Dünen, große Bahn)", 2, 0.8f, 0.1f),
+        Q("Chaos-FX (Chaos)", 3, 0.6f, 0.5f)
+    )
+    private val GEST_P = listOf(Triple("Ausdrucks-Lead", 0, 0.3f), Triple("Schwebende Fläche", 1, 0.6f), Triple("Finger-Bass", 2, 0.05f))
+    private val SPEC_NAMES = arrayOf("Arpeggio-Treppe", "Akkord-Stabs", "Melodie-Wanderung", "Riser (aufwärts)", "Pulsierende Fläche", "Leer")
+    private fun specPreset(k: Int) {
+        val sp = TouchLab.spec
+        for (r in sp) java.util.Arrays.fill(r, 0f)
+        val rnd = java.util.Random(k * 31L + 7)
+        when (k) {
+            0 -> for (s in 0 until TouchLab.NS) { val b = (s * 5 + 3) % 25 + 5; sp[s][b] = 1f; sp[s][(b + 5) % TouchLab.NB] = 0.5f }
+            1 -> for (s in 0 until TouchLab.NS) if (s % 8 < 3 || s % 8 == 6) for (b in intArrayOf(5, 7, 10, 12, 15)) sp[s][b] = 0.85f
+            2 -> { var b = 15; for (s in 0 until TouchLab.NS) { b = (b + rnd.nextInt(5) - 2).coerceIn(5, TouchLab.NB - 5); if (s % 4 != 3) { sp[s][b] = 1f; sp[s][b - 5] = 0.35f } } }
+            3 -> for (s in 0 until TouchLab.NS) { val b = 3 + s * (TouchLab.NB - 6) / TouchLab.NS; sp[s][b] = 1f; sp[s][(b + 1).coerceAtMost(TouchLab.NB - 1)] = 0.6f; sp[s][2] = 0.4f }
+            4 -> for (s in 0 until TouchLab.NS) for (b in intArrayOf(0, 5, 10, 12, 17, 22)) sp[s][b] = (0.4f + 0.5f * kotlin.math.abs(kotlin.math.sin(s * Math.PI / 8))).toFloat() * (1f - b / 40f)
+            else -> {}
+        }
+    }
 
     private fun surfDown(id: Int, x: Float, y: Float, size: Float) {
         val fx = ((x - surf.left) / surf.width()).coerceIn(0f, 1f)

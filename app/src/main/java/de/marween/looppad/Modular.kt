@@ -38,6 +38,24 @@ object Modular {
     }
     init { reset() }
 
+    /** Patch-Vorlagen: Name, Kabel (Ausgang, Eingang), Regler. */
+    class Patch(val name: String, val cables: List<IntArray>, val knob: FloatArray)
+    val PATCHES = listOf(
+        Patch("Grund-Patch (Subtraktiv)", listOf(intArrayOf(0, 3), intArrayOf(4, 5), intArrayOf(5, 8), intArrayOf(3, 4)), floatArrayOf(0f, 0.5f, 0.5f, 0.3f, 0.45f, 0.3f, 0.5f, 0.8f)),
+        Patch("FM-Glocke", listOf(intArrayOf(1, 0), intArrayOf(0, 7), intArrayOf(6, 8)), floatArrayOf(0f, 0.75f, 0.5f, 0.2f, 0.6f, 0.2f, 0.45f, 0.75f)),
+        Patch("Acid-Linie", listOf(intArrayOf(0, 3), intArrayOf(3, 4), intArrayOf(4, 5), intArrayOf(5, 8)), floatArrayOf(0f, 0.5f, 0.5f, 0.55f, 0.25f, 0.6f, 0.4f, 0.8f)),
+        Patch("Rausch-Sturm", listOf(intArrayOf(2, 3), intArrayOf(3, 4), intArrayOf(4, 7), intArrayOf(6, 8)), floatArrayOf(0f, 0.5f, 0.8f, 0.15f, 0.5f, 0.2f, 0.7f, 0.7f)),
+        Patch("Dub-Delay-Stab", listOf(intArrayOf(0, 3), intArrayOf(1, 3), intArrayOf(4, 7), intArrayOf(6, 8), intArrayOf(3, 6)), floatArrayOf(0.6f, 0.4f, 0.5f, 0.05f, 0.35f, 0.4f, 0.55f, 0.75f)),
+        Patch("Rückkopplungs-Monster", listOf(intArrayOf(0, 5), intArrayOf(5, 3), intArrayOf(4, 0), intArrayOf(4, 8), intArrayOf(3, 1)), floatArrayOf(1f, 0.3f, 0.5f, 0.6f, 0.55f, 0.8f, 0.5f, 0.6f))
+    )
+    @Volatile var patchIdx = -1
+    fun applyPatch(i: Int) {
+        val k = Math.floorMod(i, PATCHES.size); val p = PATCHES[k]
+        patchIdx = k
+        cables.clear(); for (c in p.cables) cables.add(c.copyOf())
+        for (j in 0 until 8) knob[j] = p.knob[j]
+    }
+
     fun connect(out: Int, inp: Int) {
         if (cables.any { it[0] == out && it[1] == inp }) return
         cables.add(intArrayOf(out, inp))

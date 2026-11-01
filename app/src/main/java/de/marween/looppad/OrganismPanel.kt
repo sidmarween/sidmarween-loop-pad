@@ -24,6 +24,7 @@ class OrganismPanel(private val host: View) {
 
     private val box = RectF()
     private val bClose = RectF()
+    private val bPreset = RectF()
     private val btns = Array(5) { RectF() }
     private val sliders = Array(4) { RectF() }
     private val SL = arrayOf("MUTATION", "DICHTE", "GHOST-NOTES", "AKZENTE")
@@ -43,6 +44,7 @@ class OrganismPanel(private val host: View) {
         val pad = dp(10f); val g = dp(6f); val bh = dp(40f)
         val w = box.width() - 2 * pad
         bClose.set(box.right - pad - bh, box.top + pad, box.right - pad, box.top + pad + bh)
+        bPreset.set(box.left + pad + dp(118f), box.top + pad, bClose.left - dp(6f), box.top + pad + bh)
         val r1 = bClose.bottom + dp(20f)
         val bw = (w - 4 * g) / 5
         for (k in 0 until 5) btns[k].set(box.left + pad + k * (bw + g), r1, box.left + pad + k * (bw + g) + bw, r1 + bh)
@@ -75,12 +77,13 @@ class OrganismPanel(private val host: View) {
         c.drawRoundRect(box, dp(14f), dp(14f), stroke)
         text.textAlign = Paint.Align.LEFT
         text.textSize = dp(16f); text.color = Color.WHITE
-        c.drawText("🧫 GROOVE ORGANISM · 909", box.left + dp(12f), bClose.centerY() + dp(5f), text)
+        c.drawText("🧫 ORGANISM", box.left + dp(12f), bClose.centerY() + dp(5f), text)
         text.textSize = dp(10f); text.color = Color.argb(190, 255, 255, 255)
         val o = GrooveOrganism
         c.drawText(fitLabel(text, (if (o.on) (if (o.frozen) "eingefroren" else "lebt") else "schläft") + " · Generation ${o.generation}" + (if (o.lastChange.isNotEmpty()) " · zuletzt ${o.lastChange}" else ""), box.width() - dp(24f), dp(10f), dp(7f)), box.left + dp(12f), bClose.bottom + dp(13f), text)
         text.textAlign = Paint.Align.CENTER
         btn(c, bClose, "✕", false, acc)
+        btn(c, bPreset, "◀ " + (if (o.presetIdx >= 0) o.PRESETS[o.presetIdx].name else "REGEL-VORLAGE") + " ▶", o.presetIdx >= 0, col)
         btn(c, btns[0], if (o.on) "■ RUHE" else "▶ LEBEN", o.on, Color.rgb(140, 230, 170))
         btn(c, btns[1], "❄ EINFRIEREN", o.frozen, Color.rgb(140, 200, 255))
         btn(c, btns[2], "⟲ ZURÜCK", false, col)
@@ -135,6 +138,11 @@ class OrganismPanel(private val host: View) {
                 val o = GrooveOrganism
                 when {
                     bClose.contains(x, y) -> { close(); haptic() }
+                    bPreset.contains(x, y) -> {
+                        haptic()
+                        o.applyPreset(if (o.presetIdx < 0) 0 else if (x < bPreset.centerX()) o.presetIdx - 1 else o.presetIdx + 1)
+                        onHint?.invoke("🧫 Regeln: ${o.PRESETS[o.presetIdx].name} · 909-Beats wählst du im 909-Editor (▦ PRESETS)")
+                    }
                     btns[0].contains(x, y) -> {
                         haptic()
                         if (o.on) o.on = false else { o.start(); if (!Engine.seqPlaying) Engine.transportPlay(false) }

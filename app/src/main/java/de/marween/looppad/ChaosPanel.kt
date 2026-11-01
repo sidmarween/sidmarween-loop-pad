@@ -28,6 +28,7 @@ class ChaosPanel(private val host: View) {
 
     private val box = RectF()
     private val bClose = RectF()
+    private val bPreset = RectF()
     private val pads = Array(16) { RectF() }
     private val res = Array(8) { RectF() }
     private val sliders = Array(4) { RectF() }
@@ -47,6 +48,7 @@ class ChaosPanel(private val host: View) {
     private fun set(i: Int, v: Float) {
         val c = v.coerceIn(0f, 1f)
         when (i) { 0 -> Chaos.marrow = c; 1 -> Chaos.material = c; 2 -> Chaos.scratch = c; else -> Chaos.wet = c }
+        Chaos.presetIdx = -1
     }
 
     private fun layout(a: RectF) {
@@ -54,6 +56,7 @@ class ChaosPanel(private val host: View) {
         val pad = dp(10f); val g = dp(5f); val bh = dp(40f)
         val w = box.width() - 2 * pad
         bClose.set(box.right - pad - bh, box.top + pad, box.right - pad, box.top + pad + bh)
+        bPreset.set(box.left + pad + dp(118f), box.top + pad, bClose.left - dp(6f), box.top + pad + bh)
         val lw = dp(34f)
         val gTop = box.top + pad + bh + dp(34f)
         val pw = (w - lw - 3 * g) / 4
@@ -100,13 +103,14 @@ class ChaosPanel(private val host: View) {
         c.drawRoundRect(box, dp(14f), dp(14f), stroke)
         text.textAlign = Paint.Align.LEFT
         text.textSize = dp(16f); text.color = Color.WHITE
-        c.drawText("⚡ CHAOS-TRIGGER", box.left + dp(12f), bClose.centerY() + dp(5f), text)
+        c.drawText("⚡ CHAOS", box.left + dp(12f), bClose.centerY() + dp(5f), text)
         text.textSize = dp(10f); text.color = Color.argb(190, 255, 255, 255)
         val bpm = Engine.currentBpm()
         val st = "zerlegt den laufenden Master" + (if (bpm > 0f) " · ${bpm.toInt()} BPM" else "") + " · Tonart ${InstState.scaleNoteNames[Math.floorMod(Chaos.rootPc, 12)]}" +
             (if (Chaos.padHeld >= 0) " · Stutter ×${String.format(java.util.Locale.GERMANY, "%.1f", Chaos.stutterRate)}" else "")
         c.drawText(fitLabel(text, st, box.width() - dp(24f), dp(10f), dp(7f)), box.left + dp(12f), bClose.bottom + dp(13f), text)
         btn(c, bClose, "✕", false, acc)
+        btn(c, bPreset, "◀ " + (if (Chaos.presetIdx >= 0) Chaos.PRESETS[Chaos.presetIdx].name else "VORLAGE") + " ▶", Chaos.presetIdx >= 0, col)
         // Spalten-Köpfe + Reihen
         text.textAlign = Paint.Align.CENTER
         text.textSize = dp(9f)
@@ -190,6 +194,12 @@ class ChaosPanel(private val host: View) {
                 if (r >= 0) { Chaos.tapRes(r); haptic(); return }
                 for (s in 0 until 4) if (sliders[s].contains(x, y)) { drag = s; lastX = x; return }
                 if (e.actionMasked == MotionEvent.ACTION_DOWN && bClose.contains(x, y)) { close(); haptic() }
+                if (e.actionMasked == MotionEvent.ACTION_DOWN && bPreset.contains(x, y)) {
+                    haptic()
+                    val cur = Chaos.presetIdx
+                    Chaos.applyPreset(if (cur < 0) 0 else if (x < bPreset.centerX()) cur - 1 else cur + 1)
+                    onHint?.invoke("⚡ ${Chaos.PRESETS[Chaos.presetIdx].name}")
+                }
             }
             MotionEvent.ACTION_MOVE -> {
                 for (pI in 0 until e.pointerCount) {

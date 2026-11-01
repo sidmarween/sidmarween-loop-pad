@@ -60,6 +60,8 @@ class InstEditor(private val host: View) {
     var onChords: (() -> Unit)? = null
     /** KLANG-Auswahl (Liste mit allen Klängen); ohne = durchschalten. */
     var onWaves: (() -> Unit)? = null
+    /** 💾 dieses Instrument allein als WAV exportieren (Art: 1 ACID, 2 DRUM, 3 SYNTH-Spur). */
+    var onExport: ((Int) -> Unit)? = null
     /** Spur wählen (SYNTH 1–3, KEYS, BASSLINE), wenn die Knöpfe nicht in die Titelzeile passen. */
     var onTrackPick: (() -> Unit)? = null
     /** Nach Spurwechsel von außen: Ansicht neu einpassen. */
@@ -920,7 +922,8 @@ class InstEditor(private val host: View) {
             }),
             Toggle({ "FX-BUS" }, { st.synFx }, { st.synFx = !st.synFx }),
             Toggle({ "SKALA: " + st.scaleLabel() }, { st.scaleType != 0 }, { onScale?.invoke() }),
-            Toggle({ "🎲 ZUFALL" }, { false }, { Engine.pushPatternUndo("SYNTH Zufall"); st.synRandom() })
+            Toggle({ "🎲 ZUFALL" }, { false }, { Engine.pushPatternUndo("SYNTH Zufall"); st.synRandom() }),
+            Toggle({ "💾 WAV" }, { false }, { onExport?.invoke(3) })
         )
         return if (mel) listOf(
             Toggle({ if (st.acidOn) "● AN" else "○ AUS" }, { st.acidOn }, { st.acidOn = !st.acidOn }),
@@ -929,7 +932,8 @@ class InstEditor(private val host: View) {
             Toggle({ "FX-BUS" }, { st.acidFx }, { st.acidFx = !st.acidFx }),
             Toggle({ "👻 ANDERE SPUREN" }, { ghosts }, { ghosts = !ghosts }),
             Toggle({ "SKALA: " + st.scaleLabel() }, { st.scaleType != 0 }, { onScale?.invoke() }),
-            Toggle({ "🎲 ZUFALL" }, { false }, { Engine.pushPatternUndo("ACID Zufall"); st.acidRandom() })
+            Toggle({ "🎲 ZUFALL" }, { false }, { Engine.pushPatternUndo("ACID Zufall"); st.acidRandom() }),
+            Toggle({ "💾 WAV" }, { false }, { onExport?.invoke(1) })
         ) else listOf(
             Toggle({ if (st.drumOn) "● AN" else "○ AUS" }, { st.drumOn }, { st.drumOn = !st.drumOn }),
             Toggle({ "FX-BUS" }, { st.drumFx }, { st.drumFx = !st.drumFx }),
@@ -942,7 +946,8 @@ class InstEditor(private val host: View) {
                 onHint?.invoke("${st.drumLong[v]}: Klang „${st.drumModelName(v)}“ (nochmal tippen = nächster)")
             }),
             Toggle({ "🎛 KITS" }, { false }, { onKits?.invoke() }),
-            Toggle({ "▦ " + (if (st.drumPreset >= 0) st.presetNames[st.drumPreset] else "PRESET") }, { false }, { Engine.pushPatternUndo("DRUM Preset"); st.drumApplyPreset(st.drumPreset + 1) })
+            Toggle({ "▦ " + (if (st.drumPreset >= 0) st.presetNames[st.drumPreset] else "PRESET") }, { false }, { Engine.pushPatternUndo("DRUM Preset"); st.drumApplyPreset(st.drumPreset + 1) }),
+            Toggle({ "💾 WAV" }, { false }, { onExport?.invoke(2) })
         )
     }
 

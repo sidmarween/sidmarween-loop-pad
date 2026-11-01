@@ -100,6 +100,7 @@ class MainActivity : Activity() {
         pads.onInstMore = { showMoreInstruments() }
         pads.onToCollection = { exportAllToCollection() }
         pads.onExportWaves = { exportAllWaves() }
+        pads.onExportStem = { stem, name -> exportInstrument(stem, name) }
         UserSamples.load(this)
         pads.euclid.onSamples = { showVoiceSamples(true) }
         pads.songBuilder.onPickSection = { bar -> pads.songEd.onPickSection?.invoke(bar) }
@@ -1993,7 +1994,8 @@ class MainActivity : Activity() {
                     hint(if (Wolf.srcPad >= 0) "🐺 ▶ START – Pad ${Wolf.srcPad + 1} wird im Takt zerhackt · CHAOS / DICHTE / VARIATION" else "🐺 Erst einen Loop auf ein Pad legen, dann QUELLE wählen")
                 },
                 Item("🎼 SONG · Teile bauen (Intro, Hauptteil, Ending) & aufnehmen") { pad(); pads.openSongBuilder(); hint("🎼 Teile anlegen, pro Teil die Spuren anschalten, ▶ spielen") },
-                Item("💾 Alle laufenden Spuren als WAVs") { exportAllWaves() }
+                Item("💾 Alle laufenden Spuren als WAVs") { exportAllWaves() },
+                Item("💾 Ein Instrument exportieren (WAV + Sammlung)") { showExportInstrument() }
             )
         )
         val labels = cats.map { (name, items) -> name + "  (" + items.size + ")" + if (items.any { it.label.contains("● läuft") }) "  ●" else "" }.toTypedArray()
@@ -2886,6 +2888,7 @@ class MainActivity : Activity() {
                 add("👻 Ghost-Producer: Genre-Patterns als Live-Remix") { openGhost() }
                 add("💿 Alles in die Sammlung (Pads, Instrumente, Loops – ein Klick)") { exportAllToCollection() }
                 add("💾 Alle laufenden Spuren als einzelne WAVs (ein Klick)") { exportAllWaves() }
+                add("💾 Ein Instrument exportieren (WAV + Sammlung)") { showExportInstrument() }
                 add("🎼 SONG: Teile bauen (Intro, Hauptteil, Ending), aufnehmen, Spuren-Ansicht") { if (djMode) switchMode(false); pads.openSongBuilder() }
                 add("🌌 ATMOS: Klangteppich & Drones (Übergänge, Intros)") { openAtmos() }
                 add("⬡ EUKLID: generative Polyrhythmen (Perc, Hats, Rim, Pluck)") { if (djMode) dj.openEuclid() else pads.openEuclid(); hint("▶ START – läuft im Takt des Decks · drei Regler: Schläge, Taktlänge, Morphing") }
@@ -4038,7 +4041,41 @@ class MainActivity : Activity() {
         startBounce(null, true, toMusic = true, barsOverride = bars)
     }
 
-    private fun startBounce(tree: Uri?, stems: Boolean, share: Boolean = false, toCollection: Boolean = false, barsOverride: Int = 0, toMusic: Boolean = false) {
+    /** 💾 Ein Instrument allein exportieren: Spur [stem] (StemRecorder-Index) einmal im Takt aufnehmen → WAV in Musik/Marv PAD + Sammlung. */
+    fun exportInstrument(stem: Int, name: String) {
+        if (android.os.Build.VERSION.SDK_INT < 29) { toast("Braucht Android 10 oder neuer"); return }
+        var bars = 8
+        if (!hasArrangement()) {
+            for (i in 0 until InstState.INSTS) if (InstState.instHasNotes(i)) bars = maxOf(bars, (InstState.instLen(i) + 15) / 16)
+            for (p in 0 until PadView.VISIBLE_PADS) if (Engine.hasLoop(p) && !Engine.isOneShot(p)) bars = maxOf(bars, kotlin.math.ceil(Engine.padBarsLen(p).toDouble()).toInt())
+            bars = ((bars + 3) / 4 * 4).coerceAtMost(32)
+        }
+        // das Instrument muss laufen
+        when (stem) {
+            0 -> InstState.acidOn = true; 1 -> InstState.drumOn = true
+            2, 3, 4 -> InstState.synTracks[stem - 2].on = true
+            6 -> InstState.synTracks[InstState.KEYS_TRACK].on = true; 7 -> InstState.synTracks[InstState.BASS_TRACK].on = true
+        }
+        hint("💾 $name: läuft einmal $bars Takte durch und wird allein aufgenommen …")
+        startBounce(null, true, toMusic = true, barsOverride = bars, onlyStem = stem, onlyName = name)
+    }
+
+    /** Liste aller Instrumente mit Inhalt zum Einzel-Export. */
+    private fun showExportInstrument() {
+        val list = ArrayList<Pair<String, Int>>()
+        if (InstState.acidHasNotes()) list.add("🔊 ACID 303" to 0)
+        if (InstState.drumHasNotes()) list.add("🥁 DRUM 909" to 1)
+        for (t in 0 until InstState.SYN_TRACKS) if (InstState.synTracks[t].hasNotes()) list.add("🎹 ${InstState.synName(t)} (${InstState.synWaveNames[InstState.synTracks[t].wave.coerceIn(0, InstState.synWaveNames.size - 1)]})" to if (t < 3) 2 + t else if (t == InstState.KEYS_TRACK) 6 else 7)
+        for (p in 0 until PadView.VISIBLE_PADS) if (Engine.hasLoop(p)) list.add("∿ Pad ${p + 1} · ${Engine.padName(p) ?: "Loop"}" to StemRecorder.PAD0 + p)
+        val xs = arrayOf("⬡ EUKLID" to Euclid.on, "🌌 ATMOS" to Atmos.on, "🎤 HARMONIZER" to Harmonizer.on, "🐺 WOLF" to Wolf.on, "🧬 RHYTHM ARCHITECT" to Architect.on, "🪐 ORBITS" to Orbits.on, "🖐 TOUCH-LAB" to (TouchLab.specPlay || Modular.drone))
+        for ((k, x) in xs.withIndex()) if (x.second) list.add(x.first to StemRecorder.X0 + k)
+        if (list.isEmpty()) { toast("Noch kein Instrument mit Inhalt"); return }
+        ui().setTitle("💾 Welches Instrument exportieren?")
+            .setItems(list.map { it.first }.toTypedArray()) { _, i -> exportInstrument(list[i].second, list[i].first.substringAfter(' ').substringBefore(" (")) }
+            .setNegativeButton("Abbrechen", null).show()
+    }
+
+    private fun startBounce(tree: Uri?, stems: Boolean, share: Boolean = false, toCollection: Boolean = false, barsOverride: Int = 0, toMusic: Boolean = false, onlyStem: Int = -1, onlyName: String = "") {
         if (SetRecorder.recording) { toast("Es läuft schon eine Aufnahme"); return }
         val rate = Engine.sampleRate
         val bpm = Engine.currentBpm().let { if (it > 0f) it else 120f }
@@ -4078,6 +4115,21 @@ class MainActivity : Activity() {
             if (toCollection) {
                 tmp.deleteRecursively()
                 if (master != null) masterToCollection(master, "Marv PAD " + stamp(), bpm)
+                return
+            }
+            if (toMusic && onlyStem >= 0) {
+                val f = stemFiles.getOrNull(onlyStem)
+                if (f == null || StemRecorder.peak[onlyStem] <= 0.0005f) { toast("$onlyName war still – nichts exportiert (läuft das Instrument?)"); master?.delete(); tmp.deleteRecursively(); return }
+                val title = "$onlyName " + stamp()
+                Thread {
+                    try {
+                        val safe = title.replace(Regex("[^A-Za-z0-9äöüÄÖÜß ._-]+"), "_").trim()
+                        ShareAudio.wavToMusic(this, f, safe, "Instrumente")
+                        master?.delete()
+                        for ((i, o) in stemFiles.withIndex()) if (i != onlyStem) o.delete()
+                        runOnUiThread { masterToCollection(f, title, bpm); hint("💾 $onlyName gespeichert: Musik › Marv PAD › Instrumente und in der Sammlung („Eigene Aufnahmen“) · trocken, ohne Master-Effekte") }
+                    } catch (e: Exception) { runOnUiThread { toast("Export fehlgeschlagen: ${e.message ?: e}") } }
+                }.start()
                 return
             }
             if (toMusic) {

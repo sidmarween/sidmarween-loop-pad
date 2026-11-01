@@ -18,6 +18,20 @@ object GrooveOrganism {
     @Volatile var anchor = true
     /** gesperrte Stimmen (BD SD LT MT HT RS CP CH OH CR RD) */
     val locked = BooleanArray(InstState.DV)
+    class Rules(val name: String, val mutation: Float, val density: Float, val ghosts: Float, val accents: Float, val anchor: Boolean, val lockedVoices: IntArray)
+    val PRESETS = listOf(
+        Rules("Minimal (sanft)", 0.2f, 0.4f, 0.5f, 0.2f, true, intArrayOf(1, 6)),
+        Rules("House-Groove", 0.35f, 0.5f, 0.4f, 0.3f, true, intArrayOf(6)),
+        Rules("Techno rollend", 0.45f, 0.65f, 0.3f, 0.45f, true, intArrayOf()),
+        Rules("Broken Beat (wild)", 0.75f, 0.6f, 0.5f, 0.5f, false, intArrayOf()),
+        Rules("Nur Hats & Percussion", 0.6f, 0.6f, 0.45f, 0.35f, true, intArrayOf(0, 1, 6))
+    )
+    @Volatile var presetIdx = -1
+    fun applyPreset(i: Int) {
+        val k = Math.floorMod(i, PRESETS.size); val p = PRESETS[k]
+        presetIdx = k; mutation = p.mutation; density = p.density; ghosts = p.ghosts; accents = p.accents; anchor = p.anchor
+        java.util.Arrays.fill(locked, false); for (v in p.lockedVoices) if (v in locked.indices) locked[v] = true
+    }
     @Volatile var generation = 0
     @Volatile var lastChange = ""
     /** zuletzt geänderte Zellen (Anzeige): Stimme*100+Schritt */

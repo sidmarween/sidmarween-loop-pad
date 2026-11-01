@@ -2613,6 +2613,14 @@ class PadView(context: Context) : View(context) {
     private val mixExport = RectF()
     /** 💾 im Mixer: alle laufenden Kanäle als einzelne WAVs speichern (MainActivity). */
     var onExportWaves: (() -> Unit)? = null
+    /** 💾 ein Kanal / Instrument allein exportieren (StemRecorder-Index, Name). */
+    var onExportStem: ((Int, String) -> Unit)? = null
+    private fun chStem(c: MixCh): Int = when (c.kind) {
+        0 -> if (c.idx < 12) StemRecorder.PAD0 + c.idx else 5
+        1 -> when (c.idx) { 0 -> 0; 1 -> 1; else -> (c.idx - 2).let { t -> if (t < 3) 2 + t else if (t == InstState.KEYS_TRACK) 6 else 7 } }
+        else -> StemRecorder.X0 + c.idx
+    }
+    private fun mixSaveRect(k: Int): RectF { val st = mixStrips[k]; return RectF(st.right - dp(22f), st.top + dp(34f), st.right - dp(3f), st.top + dp(52f)) }
     private val mixStrips = ArrayList<RectF>()
     private val mixOnBtn = ArrayList<RectF>()
     private val mixFader = ArrayList<RectF>()
@@ -2653,6 +2661,7 @@ class PadView(context: Context) : View(context) {
         if (k < 0) return
         val c = mixList[k]
         performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+        if (RectF(mixSaveRect(k)).apply { inset(-dp(6f), -dp(6f)) }.contains(x, y)) { onExportStem?.invoke(chStem(c), chName(c)); return }
         if (RectF(mixOnBtn[k]).apply { inset(-dp(3f), -dp(3f)) }.contains(x, y) || y < mixFader[k].top - dp(4f)) {
             val v = !chOn(c)
             chSetOn(c, v)
@@ -2771,6 +2780,11 @@ class PadView(context: Context) : View(context) {
             textPaint.textSize = min(dp(8.5f), st.width() * 0.16f)
             textPaint.color = alpha(fg, 0.5f)
             canvas.drawText(fitLabel(textPaint, chSub(c), st.width() - dp(6f), textPaint.textSize, dp(6f)), st.centerX(), st.top + dp(29f), textPaint)
+            run {
+                val sv = mixSaveRect(k)
+                textPaint.textSize = min(dp(12f), sv.height() * 0.8f); textPaint.color = alpha(fg, 0.75f)
+                canvas.drawText("💾", sv.centerX(), sv.bottom - dp(3f), textPaint)
+            }
             // Fader + Pegel
             val f = mixFader[k]
             val g = chGain(c)
@@ -8825,6 +8839,11 @@ class PadView(context: Context) : View(context) {
         ed.onScale = { onInstScale?.invoke() }
         ed.onChords = { onInstChords?.invoke() }
         ed.onWaves = { onInstWaves?.invoke() }
+        ed.onExport = { k ->
+            val t = InstState.synCur
+            val stem = when (k) { 1 -> 0; 2 -> 1; else -> if (t < 3) 2 + t else if (t == InstState.KEYS_TRACK) 6 else 7 }
+            onExportStem?.invoke(stem, when (k) { 1 -> "ACID 303"; 2 -> "DRUM 909"; else -> InstState.synName(t) })
+        }
         ed.onTrackPick = { onInstTrackPick?.invoke() }
         ed.onSidechain = { onSidechain?.invoke() }
     }

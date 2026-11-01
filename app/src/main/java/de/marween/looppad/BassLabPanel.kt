@@ -34,7 +34,8 @@ class BassLabPanel(private val host: View) {
     var tab = 0
     private val box = RectF()
     private val bClose = RectF(); private val tMagma = RectF(); private val tFunk = RectF(); private val tOrgan = RectF()
-    private val bOn = RectF(); private val bNotes = RectF(); private val bPreset = RectF()
+    private val bOn = RectF(); private val bNotes = RectF(); private val bPreset = RectF(); private val bLine = RectF()
+    private var lineIdx = -1
     private val visc = RectF()
     private val sliders = Array(6) { RectF() }
     private val crater = RectF()
@@ -86,9 +87,10 @@ class BassLabPanel(private val host: View) {
         tFunk.set(tMagma.right + g, r1, tMagma.right + g + tw3, r1 + bh)
         tOrgan.set(tFunk.right + g, r1, box.right - pad, r1 + bh)
         val r2 = r1 + bh + g
-        bOn.set(box.left + pad, r2, box.left + pad + w * 0.27f, r2 + bh)
-        bNotes.set(bOn.right + g, r2, bOn.right + g + w * 0.2f, r2 + bh)
-        bPreset.set(bNotes.right + g, r2, box.right - pad, r2 + bh)
+        bOn.set(box.left + pad, r2, box.left + pad + w * 0.22f, r2 + bh)
+        bNotes.set(bOn.right + g, r2, bOn.right + g + w * 0.16f, r2 + bh)
+        bLine.set(bNotes.right + g, r2, bNotes.right + g + w * 0.16f, r2 + bh)
+        bPreset.set(bLine.right + g, r2, box.right - pad, r2 + bh)
         var y = r2 + bh + dp(10f)
         val sh = dp(42f)
         val keyH = dp(92f)
@@ -146,6 +148,7 @@ class BassLabPanel(private val host: View) {
         val running = t.on && Engine.seqPlaying
         btn(c, bOn, if (running) "■ STOPP" else "▶ BASSLINE", running, Color.rgb(140, 230, 170))
         btn(c, bNotes, "✏ NOTEN", false, col)
+        btn(c, bLine, "♪ LINIE", false, col)
         val pn = when (tab) {
             0 -> BassLab.mPreset.let { if (it >= 0) BassLab.MAGMA_PRESETS[it].name else "VORLAGE" }
             1 -> BassLab.fPreset.let { if (it >= 0) BassLab.FUNK_PRESETS[it].name else "VORLAGE" }
@@ -361,6 +364,26 @@ class BassLabPanel(private val host: View) {
                 if (t.on && Engine.seqPlaying) { Engine.transportStop() } else { t.on = true; if (!Engine.seqPlaying) Engine.transportPlay(false) }
             }
             bNotes.contains(x, y) -> { haptic(); close(); onEditNotes?.invoke() }
+            bLine.contains(x, y) -> {
+                haptic()
+                // Noten-Vorlagen aus den Bassline-Presets, der Motor (Klang) bleibt
+                val list = InstPresets.SYNTHS.filter { it.genre == "Bassline" || it.genre == "Bass" }
+                lineIdx = (lineIdx + 1) % list.size
+                val p = list[lineIdx]
+                val t = InstState.synTracks[InstState.BASS_TRACK]
+                val keep = floatArrayOf(t.cut, t.res, t.env, t.atk, t.rel, t.detune, t.vol); val w0 = t.wave; val oct = t.oct; val gl = t.glide
+                Engine.pushPatternUndo("Bass-Linie")
+                val old = InstState.synCur
+                InstState.synCur = InstState.BASS_TRACK
+                InstPresets.applySynth(p)
+                InstState.synCur = old
+                t.wave = w0; t.oct = oct; t.mono = true; t.glide = gl
+                t.cut = keep[0]; t.res = keep[1]; t.env = keep[2]; t.atk = keep[3]; t.rel = keep[4]; t.detune = keep[5]; t.vol = keep[6]
+                if (tab == 1) { for (k in 0 until t.len) if (t.gate[k] && !t.tie[k] && k % 4 == 3) t.vel[k] = 0.35f }
+                t.on = true
+                if (!Engine.seqPlaying) Engine.transportPlay(false)
+                onHint?.invoke("♪ Linie ${lineIdx + 1}/${list.size}: ${p.name} · ${p.bpm} BPM")
+            }
             bPreset.contains(x, y) -> {
                 haptic()
                 val left = x < bPreset.centerX()

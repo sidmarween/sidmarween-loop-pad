@@ -41,6 +41,21 @@ object Chaos {
     @Volatile var scratchFlash = 0f
     @Volatile var rootPc = 9
 
+    class Preset(val name: String, val marrow: Float, val material: Float, val scratch: Float, val wet: Float)
+    val PRESETS = listOf(
+        Preset("Sauber – nur Stutter", 0f, 0.5f, 0f, 1f),
+        Preset("Metall-Glocken aus dem Track", 0.45f, 0.9f, 0f, 1f),
+        Preset("Holz-Percussion", 0.4f, 0.5f, 0.1f, 1f),
+        Preset("Ton-Gefäße (Udu)", 0.35f, 0.15f, 0f, 1f),
+        Preset("Turntablism", 0f, 0.5f, 0.75f, 1f),
+        Preset("Voller Chaos-Modus", 0.35f, 0.75f, 0.55f, 0.85f)
+    )
+    @Volatile var presetIdx = -1
+    fun applyPreset(i: Int) {
+        val k = Math.floorMod(i, PRESETS.size); val p = PRESETS[k]
+        presetIdx = k; marrow = p.marrow; material = p.material; scratch = p.scratch; wet = p.wet
+    }
+
     val ROW_DIV = intArrayOf(8, 16, 32, 64)
     val COL_NAMES = arrayOf("↗ HOCH", "→ GERADE", "↘ RUNTER", "⇶ BESCHL.")
 
