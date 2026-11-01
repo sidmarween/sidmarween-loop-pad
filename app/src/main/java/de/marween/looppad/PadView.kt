@@ -951,6 +951,7 @@ class PadView(context: Context) : View(context) {
         if (euclid.isOpen) euclid.draw(canvas, RectF(dp(6f), insetTop + dp(6f), width - dp(6f), height - insetBottom - dp(6f)), overlayColors()[2])
         if (harm.isOpen) harm.draw(canvas, RectF(dp(6f), insetTop + dp(6f), width - dp(6f), height - insetBottom - dp(6f)), overlayColors()[2])
         if (atmos.isOpen) atmos.draw(canvas, RectF(dp(6f), insetTop + dp(6f), width - dp(6f), height - insetBottom - dp(6f)), overlayColors()[2])
+        if (wolf.isOpen) wolf.draw(canvas, RectF(dp(6f), insetTop + dp(6f), width - dp(6f), height - insetBottom - dp(6f)), overlayColors()[2])
         if (!masterPanel.isOpen) drawMasterButton(canvas)
         if (masterPanel.isOpen) masterPanel.draw(canvas, RectF(dp(6f), insetTop + dp(6f), width - dp(6f), height - insetBottom - dp(6f)), overlayColors()[2])
         drawInfo(canvas)
@@ -1149,7 +1150,7 @@ class PadView(context: Context) : View(context) {
     /** MASTER-Knopf oben: leuchtet, wenn die Kette aktiv ist; Balken zeigt die Limiter-Reduktion. */
     private fun drawMasterButton(canvas: Canvas) {
         val r = masterBtn
-        if (r.width() <= 0f || kbPad >= 0 || edPad >= 0 || instEd.isOpen || slicer.isOpen || station.isOpen || launcher.isOpen || ghost.isOpen || atmos.isOpen || harm.isOpen || euclid.isOpen || songEd.isOpen || songBuilder.isOpen) return
+        if (r.width() <= 0f || kbPad >= 0 || edPad >= 0 || instEd.isOpen || slicer.isOpen || station.isOpen || launcher.isOpen || ghost.isOpen || atmos.isOpen || wolf.isOpen || harm.isOpen || euclid.isOpen || songEd.isOpen || songBuilder.isOpen) return
         val cols = overlayColors()
         val active = MasterBus.anyOn()
         val rr = dp(8f)
@@ -1513,7 +1514,7 @@ class PadView(context: Context) : View(context) {
         strokePaint.strokeCap = Paint.Cap.BUTT
     }
 
-    private fun focusBlocked(): Boolean = kbPad >= 0 || edPad >= 0 || instEd.isOpen || masterPanel.isOpen || slicer.isOpen || station.isOpen || launcher.isOpen || ghost.isOpen || atmos.isOpen || harm.isOpen || euclid.isOpen || songEd.isOpen || songBuilder.isOpen
+    private fun focusBlocked(): Boolean = kbPad >= 0 || edPad >= 0 || instEd.isOpen || masterPanel.isOpen || slicer.isOpen || station.isOpen || launcher.isOpen || ghost.isOpen || atmos.isOpen || wolf.isOpen || harm.isOpen || euclid.isOpen || songEd.isOpen || songBuilder.isOpen
 
     private fun sectionRect(sec: Int, out: RectF) {
         when (sec) {
@@ -2388,13 +2389,13 @@ class PadView(context: Context) : View(context) {
     /** Pad-Name groß im Pad (Drum-Modus). */
     private fun instPadName(code: Int): String = when (code) {
         0 -> "BASS 303"; 1 -> "DRUMS 909"; in 2..9 -> InstState.synName(code - 2)
-        10 -> "EUKLID"; 11 -> "ATMOS"; else -> "HARMONIZER"
+        10 -> "EUKLID"; 11 -> "ATMOS"; 13 -> "WOLF"; else -> "HARMONIZER"
     }
-    private fun instPadIcon(code: Int): String = when (code) { 0 -> "🔊"; 1 -> "🥁"; 2 + InstState.BASS_TRACK -> "🎸"; in 2..9 -> "🎹"; 10 -> "⬡"; 11 -> "🌌"; else -> "🎤" }
+    private fun instPadIcon(code: Int): String = when (code) { 0 -> "🔊"; 1 -> "🥁"; 2 + InstState.BASS_TRACK -> "🎸"; in 2..9 -> "🎹"; 10 -> "⬡"; 11 -> "🌌"; 13 -> "🐺"; else -> "🎤" }
     private fun instPadColor(code: Int): Int = when (code) {
         0 -> Color.rgb(90, 190, 255); 1 -> Color.rgb(255, 150, 70); 2 -> Color.rgb(200, 140, 255); 3 -> Color.rgb(240, 120, 200); 4 -> Color.rgb(120, 230, 140)
         5 -> Color.rgb(255, 215, 110); 6 -> Color.rgb(90, 230, 220)
-        10 -> Color.rgb(255, 170, 90); 11 -> Color.rgb(140, 170, 255); else -> Color.rgb(255, 120, 190)
+        10 -> Color.rgb(255, 170, 90); 11 -> Color.rgb(140, 170, 255); 13 -> Color.rgb(255, 120, 60); else -> Color.rgb(255, 120, 190)
     }
 
     /** Instrument-Pad: zeigt, welches Instrument hier liegt und ob es läuft. */
@@ -2543,7 +2544,7 @@ class PadView(context: Context) : View(context) {
     private fun mixChannels(): List<MixCh> {
         val out = ArrayList<MixCh>()
         for (i in listOf(1, 0) + (2 until InstState.INSTS)) if (InstState.instHasNotes(i)) out.add(MixCh(1, i))
-        for (k in 0 until 3) if (when (k) { 0 -> Euclid.on; 1 -> Atmos.on || Atmos.active(); else -> Harmonizer.on }) out.add(MixCh(2, k))
+        for (k in 0 until 4) if (when (k) { 0 -> Euclid.on; 1 -> Atmos.on || Atmos.active(); 2 -> Harmonizer.on; else -> Wolf.on }) out.add(MixCh(2, k))
         for (p in 0 until VISIBLE_PADS) if (Engine.hasLoop(p)) out.add(MixCh(0, p))
         return out
     }
@@ -2551,7 +2552,7 @@ class PadView(context: Context) : View(context) {
     private fun chName(c: MixCh): String = when (c.kind) {
         0 -> Engine.padName(c.idx)?.take(12) ?: "Pad ${c.idx + 1}"
         1 -> when (c.idx) { 0 -> "BASS 303"; 1 -> "DRUMS 909"; else -> InstState.synName(c.idx - 2) }
-        else -> arrayOf("EUKLID", "ATMOS", "HARMONIZER")[c.idx]
+        else -> arrayOf("EUKLID", "ATMOS", "HARMONIZER", "WOLF")[c.idx]
     }
     private fun chSub(c: MixCh): String = when (c.kind) {
         0 -> "Pad ${c.idx + 1} · " + if (Engine.isOneShot(c.idx)) "⚡" else "∞ Loop"
@@ -2561,39 +2562,39 @@ class PadView(context: Context) : View(context) {
     private fun chIcon(c: MixCh): String = when (c.kind) {
         0 -> if (Engine.isOneShot(c.idx)) "⚡" else "∿"
         1 -> when (c.idx) { 0 -> "🔊"; 1 -> "🥁"; 2 + InstState.BASS_TRACK -> "🎸"; else -> "🎹" }
-        else -> arrayOf("⬡", "🌌", "🎤")[c.idx]
+        else -> arrayOf("⬡", "🌌", "🎤", "🐺")[c.idx]
     }
     private fun chOn(c: MixCh): Boolean = when (c.kind) {
         0 -> !Engine.isMuted(c.idx)
         1 -> InstState.instOn(c.idx)
-        else -> when (c.idx) { 0 -> Euclid.on; 1 -> Atmos.on; else -> Harmonizer.on }
+        else -> when (c.idx) { 0 -> Euclid.on; 1 -> Atmos.on; 2 -> Harmonizer.on; else -> Wolf.on }
     }
     private fun chSetOn(c: MixCh, v: Boolean) {
         when (c.kind) {
             0 -> if (Engine.isMuted(c.idx) == v) Engine.toggleMute(c.idx)
             1 -> { InstState.setInstOn(c.idx, v); if (v && !Engine.seqPlaying) Engine.transportPlay(false) }
-            else -> when (c.idx) { 0 -> Euclid.on = v; 1 -> Atmos.on = v; else -> Harmonizer.on = v }
+            else -> when (c.idx) { 0 -> Euclid.on = v; 1 -> Atmos.on = v; 2 -> Harmonizer.on = v; else -> Wolf.switch(v) }
         }
     }
     /** Lautstärke 0..1.5 (1 = Normal). */
     private fun chGain(c: MixCh): Float = when (c.kind) {
         0 -> Engine.padGain(c.idx)
         1 -> when (c.idx) { 0 -> InstState.acidVol / 0.75f; 1 -> InstState.drumVol / 0.8f; else -> InstState.synTracks[c.idx - 2].vol / 0.6f }
-        else -> when (c.idx) { 0 -> Euclid.level / 0.7f; 1 -> Atmos.level / 0.6f; else -> Harmonizer.level / 0.7f }
+        else -> when (c.idx) { 0 -> Euclid.level / 0.7f; 1 -> Atmos.level / 0.6f; 2 -> Harmonizer.level / 0.7f; else -> Wolf.level / 0.9f }
     }.coerceIn(0f, 1.5f)
     private fun chSetGain(c: MixCh, g0: Float) {
         val g = g0.coerceIn(0f, 1.5f)
         when (c.kind) {
             0 -> Engine.setPadGain(c.idx, g)
             1 -> when (c.idx) { 0 -> InstState.acidVol = (0.75f * g).coerceAtMost(1f); 1 -> InstState.drumVol = (0.8f * g).coerceAtMost(1f); else -> InstState.synTracks[c.idx - 2].vol = (0.6f * g).coerceAtMost(1f) }
-            else -> when (c.idx) { 0 -> Euclid.level = (0.7f * g).coerceAtMost(1f); 1 -> Atmos.level = (0.6f * g).coerceAtMost(1f); else -> Harmonizer.level = (0.7f * g).coerceAtMost(1f) }
+            else -> when (c.idx) { 0 -> Euclid.level = (0.7f * g).coerceAtMost(1f); 1 -> Atmos.level = (0.6f * g).coerceAtMost(1f); 2 -> Harmonizer.level = (0.7f * g).coerceAtMost(1f); else -> Wolf.level = (0.9f * g).coerceAtMost(1f) }
         }
     }
     /** Pegel 0..1 für die Anzeige. */
     private fun chLevel(c: MixCh): Float = when (c.kind) {
         0 -> if (chOn(c)) Engine.levels[c.idx] else 0f
         1 -> if (chOn(c) && Engine.seqPlaying) 0.35f + 0.25f * (0.5f + 0.5f * sin(time * 9f + c.idx)) else 0f
-        else -> when (c.idx) { 0 -> if (Euclid.on) Euclid.laneFlash.maxOrNull() ?: 0f else 0f; 1 -> Atmos.meter; else -> Harmonizer.meter }
+        else -> when (c.idx) { 0 -> if (Euclid.on) Euclid.laneFlash.maxOrNull() ?: 0f else 0f; 1 -> Atmos.meter; 2 -> Harmonizer.meter; else -> Wolf.meter }
     }
     private fun chColor(c: MixCh): Int = when (c.kind) {
         0 -> padAccent(c.idx)
@@ -4177,6 +4178,11 @@ class PadView(context: Context) : View(context) {
         }
         if (atmos.isOpen) {
             atmos.touch(e)
+            invalidate()
+            return true
+        }
+        if (wolf.isOpen) {
+            wolf.touch(e)
             invalidate()
             return true
         }
@@ -9224,6 +9230,8 @@ class PadView(context: Context) : View(context) {
     fun openGhost() { closeFocus(); ghost.open(); invalidate() }
     val atmos = AtmosPanel(this).also { it.onHint = { m -> hint(m) } }
     fun openAtmos() { closeFocus(); atmos.open(); invalidate() }
+    val wolf = WolfPanel(this).also { it.onHint = { m -> hint(m) } }
+    fun openWolf() { closeFocus(); wolf.open(); invalidate() }
     val harm = HarmonizerPanel(this).also { it.onHint = { m -> hint(m) } }
     fun openHarm() { closeFocus(); harm.open(); invalidate() }
     val euclid = EuclidPanel(this).also { it.onHint = { m -> hint(m) } }
@@ -9557,7 +9565,7 @@ class PadView(context: Context) : View(context) {
             textPaint.color = if (on) Color.WHITE else alpha(cols[1], 0.8f)
             val lb = fitLabel(textPaint, (if (k == 3) "＋ " else "🎹 ") + instSegNames[k], tmpRect.width() - dp(12f), dp(11f), dp(6.5f))
             canvas.drawText(lb, tmpRect.centerX() - dp(3f), tmpRect.centerY() + textPaint.textSize * 0.36f, textPaint)
-            if (if (k == 3) Atmos.on || Harmonizer.on || Euclid.on else instRunning(k + 1)) {
+            if (if (k == 3) Atmos.on || Harmonizer.on || Euclid.on || Wolf.on else instRunning(k + 1)) {
                 dotPaint.color = if (on) Color.WHITE else cols[2]
                 canvas.drawCircle(tmpRect.right - dp(8f), tmpRect.centerY(), dp(2.6f), dotPaint)
             }

@@ -267,7 +267,9 @@ object InstState {
     var synEnv: Float get() = syn.env; set(v) { syn.env = v }
     var synCutMod: Float get() = syn.cutMod; set(v) { syn.cutMod = v }
     val synWaveNames = arrayOf("SAW", "SQR", "SUPER", "PLUCK", "GLOCKE", "NES ▢", "NES △", "NOISE", "SID", "GB-WAVE", "FM-CHIP",
-        "PIANO", "E-PIANO", "ORGEL", "SYNC-LEAD", "REESE", "SUB-BASS", "FM-BASS", "WOBBLE", "SAITE")
+        "PIANO", "E-PIANO", "ORGEL", "SYNC-LEAD", "REESE", "SUB-BASS", "FM-BASS", "WOBBLE", "SAITE",
+        "WT ANALOG", "WT VOCAL", "WT GROWL", "WT DIGITAL", "WT SAMPLE")
+    fun synIsWt(w: Int) = w in 20..24
     /** Chiptune-Klänge (Klang-Nr. 5–10): Akkorde laufen als schnelles Chip-Arpeggio, Lautstärke in 16 Stufen. */
     fun synIsChip(w: Int) = w in 5..10
     /** Auswahl-Liste der Klänge (Gruppe, Klang-Nr., Beschreibung). */
@@ -286,6 +288,11 @@ object InstState {
         Triple("Bass", 15, "Reese-Bass (DnB) – VERST. = Schwebung"),
         Triple("Bass", 16, "Sub-Bass (Sinus, 808) – VERST. = Wärme/Drive"),
         Triple("Bass", 18, "Wobble (Dubstep) – VERST. = Tempo, FILTER-HÜLLK. = Tiefe"),
+        Triple("Wavetable", 20, "Analog: Säge → Rechteck → Puls · VERST. = Position, FILTER-HÜLLK. = Fahrt"),
+        Triple("Wavetable", 21, "Vocal: Vokale A-E-I-O-U · VERST. = Position"),
+        Triple("Wavetable", 22, "Growl: knurrender FM-Bass (EDM) · VERST. = Position"),
+        Triple("Wavetable", 23, "Digital: harte PPG-Wellen · VERST. = Position"),
+        Triple("Wavetable", 24, "Sample: Wellen aus deinem eigenen Sample (Presets → 📂)"),
         Triple("Chiptune", 5, "NES-Puls"), Triple("Chiptune", 6, "NES-Dreieck"), Triple("Chiptune", 7, "Noise"),
         Triple("Chiptune", 8, "SID (C64)"), Triple("Chiptune", 9, "Game-Boy-Wave"), Triple("Chiptune", 10, "FM-Chip")
     )
@@ -303,7 +310,9 @@ object InstState {
             17 -> { t.cut = 0.4f; t.res = 0.3f; t.env = 0.5f; t.atk = 0f; t.rel = 0.12f; t.detune = 0.2f }
             18 -> { t.cut = 0.25f; t.res = 0.55f; t.env = 0.7f; t.atk = 0f; t.rel = 0.15f; t.detune = 0.3f }
             19 -> { t.cut = 0.6f; t.res = 0f; t.env = 0f; t.atk = 0f; t.rel = 0.4f; t.detune = 0.6f }
+            in 20..24 -> { t.cut = 0.75f; t.res = 0.15f; t.env = 0.35f; t.atk = 0.01f; t.rel = 0.3f; t.detune = 0.2f }
         }
+        if (synIsWt(w)) Wavetables.ensure(w - 20)
     }
     val synChordNames = arrayOf("EINZELN", "DUR", "MOLL", "SUS4", "DUR7", "MOLL7", "OKTAVE", "VERM.")
     /** Kurzname hinter dem Grundton (C, Cm, C7 …). */
@@ -1719,6 +1728,7 @@ class PolySynth(private val sr: Int, private val t: InstState.SynTrack) {
         val ksT = 0.3 + spread * spread * 7.0
         val wobRate = bpmNow / 60.0 * WOB_MULT[(spread * 5.999f).toInt().coerceIn(0, 5)]
         val fmRatio = if (spread < 0.33f) 1.0 else if (spread < 0.66f) 2.0 else 3.0
+        val wt = if (InstState.synIsWt(wave)) Wavetables.ready(wave - 20) else null
         var ei = 0
         for (i in 0 until n) {
             while (ei < evs.size && (evs[ei].frame < 0 || evs[ei].frame <= w + i)) { apply(evs[ei]); ei++ }
@@ -1927,6 +1937,29 @@ class PolySynth(private val sr: Int, private val t: InstState.SynTrack) {
                             buf[v.kw] = nv
                             v.kw = (v.kw + 1) % sz
                             o = nv.toDouble()
+                        }
+                    }
+                    in 20..24 -> {
+                        // Wavetable: zwei leicht verstimmte Oszillatoren, Position aus VERSTIMMUNG + Filter-Hüllkurve
+                        if (wt == null) o = 0.0 else {
+                            val pos = (spread + st.env * v.fenv * (1f - spread)).coerceIn(0f, 1f) * (Wavetables.FRAMES - 1)
+                            val f0 = pos.toInt().coerceIn(0, Wavetables.FRAMES - 2)
+                            val fr = pos - f0
+                            val lvl = Wavetables.level(f * 1.003, sr)
+                            val ta = wt[f0][lvl]
+                            val tb = wt[f0 + 1][lvl]
+                            var sum = 0f
+                            for (u in 0 until 2) {
+                                v.ph[u] += f * (if (u == 0) 0.9975 else 1.0025) / sr
+                                if (v.ph[u] >= 1.0) v.ph[u] -= 1.0
+                                val x = v.ph[u] * Wavetables.N
+                                val ix = x.toInt().coerceIn(0, Wavetables.N - 1)
+                                val q = (x - ix).toFloat()
+                                val a0 = ta[ix] + (ta[ix + 1] - ta[ix]) * q
+                                val b0 = tb[ix] + (tb[ix + 1] - tb[ix]) * q
+                                sum += a0 + (b0 - a0) * fr
+                            }
+                            o = sum * 0.5
                         }
                     }
                     1 -> {

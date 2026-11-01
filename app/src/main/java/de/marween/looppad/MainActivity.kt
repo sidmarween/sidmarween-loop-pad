@@ -208,6 +208,19 @@ class MainActivity : Activity() {
         pads.onInstScale = { showScaleMenu() }
         pads.onInstChords = { showChordProgression() }
         pads.onInstWaves = { showSynthWaves() }
+        pads.wolf.onPickSource = {
+            val list = (0 until PadView.VISIBLE_PADS).filter { Engine.hasLoop(it) && !Engine.isOneShot(it) }
+            if (list.isEmpty()) toast("Kein Loop auf den Pads – erst einen aufnehmen oder einen Song aufs Pad laden")
+            else ui().setTitle("🐺 Welcher Loop?").setItems(list.map { "Pad ${it + 1} · " + (Engine.padName(it) ?: "Loop") + (if (it == Wolf.srcPad) "  ●" else "") }.toTypedArray()) { _, i ->
+                val was = Wolf.on
+                if (was) Wolf.switch(false)
+                Wolf.srcPad = list[i]
+                Wolf.replan()
+                if (was) Wolf.switch(true)
+                pads.invalidate()
+                hint("🐺 Quelle: Pad ${list[i] + 1}")
+            }.show()
+        }
         pads.onInstTrackPick = {
             val st = InstState
             val desc = arrayOf("Lead", "Fläche", "Bass", "Piano, E-Piano, Orgel, Leads", "zweiter Bass-Sequenzer (MONO/GLIDE)")
@@ -726,15 +739,15 @@ class MainActivity : Activity() {
 
     /** Reiter „Instrumente“: ACID 303, DRUM 909 und SYNTH einzeln oder zusammen als Eingang. */
     private fun showInstSourcePicker(p: Int) {
-        val names = arrayOf("🔊 ACID 303 (Bass)", "🥁 DRUM 909 (Drumcomputer)", "🎹 SYNTH (polyfon, Akkorde)", "⬡ EUKLID (Polyrhythmen)", "🌌 ATMOS (Klangteppich)", "🎤 HARMONIZER (Chor)")
+        val names = arrayOf("🔊 ACID 303 (Bass)", "🥁 DRUM 909 (Drumcomputer)", "🎹 SYNTH, KEYS, BASSLINE", "⬡ EUKLID (Polyrhythmen)", "🌌 ATMOS (Klangteppich)", "🎤 HARMONIZER (Chor)", "🐺 WOLF (Loop-Zerhacker)")
         val m0 = if (Engine.padSource[p] == 3) Engine.padInstMask[p] else 7
-        val checked = BooleanArray(6) { (m0 shr it) and 1 != 0 }
+        val checked = BooleanArray(names.size) { (m0 shr it) and 1 != 0 }
         ui()
             .setTitle("🎹 Instrumente → Pad ${p + 1}")
             .setMultiChoiceItems(names, checked) { _, i, on -> checked[i] = on }
             .setPositiveButton("Übernehmen") { _, _ ->
                 var m = 0
-                for (i in 0 until 6) if (checked[i]) m = m or (1 shl i)
+                for (i in names.indices) if (checked[i]) m = m or (1 shl i)
                 if (m == 0) {
                     toast("Kein Instrument gewählt – Eingang bleibt " + srcLabel(p))
                 } else {
@@ -1927,7 +1940,10 @@ class MainActivity : Activity() {
             "⬡ EUKLID · generative Polyrhythmen" + st(Euclid.on),
             "👾 CHIPTUNE · 8-Bit-Klänge im SYNTH (Presets)",
             "🎹 KEYS · Piano, E-Piano, Orgel & Leads",
-            "🎸 BASSLINE · zweiter Bass-Sequenzer (FM, Reese, Sub, Wobble)"
+            "🎸 BASSLINE · zweiter Bass-Sequenzer (FM, Reese, Sub, Wobble)",
+            "🐺 WOLF · Loop-Zerhacker (dreht Loops durch den Wolf)" + st(Wolf.on),
+            "🎲 GROOVE-GENERATOR · kompletter Beat auf Knopfdruck",
+            "🧪 WAVETABLE · Klangformen durchfahren (Growl, Vocal, Digital …)"
         )
         ui().setTitle("🎹 Weitere Instrumente")
             .setItems(items) { _, w ->
@@ -1941,6 +1957,17 @@ class MainActivity : Activity() {
                         InstState.synCur = if (w - 1 == 4) InstState.KEYS_TRACK else InstState.BASS_TRACK
                         pads.openSynthEditor()
                         showSynthPresets()
+                    }
+                    6 -> {
+                        if (djMode) switchMode(false)
+                        pads.openWolf()
+                        hint(if (Wolf.srcPad >= 0) "🐺 ▶ START – Pad ${Wolf.srcPad + 1} wird im Takt zerhackt · CHAOS / DICHTE / VARIATION" else "🐺 Erst einen Loop auf ein Pad legen, dann QUELLE wählen")
+                    }
+                    7 -> { if (djMode) switchMode(false); showGrooveGen() }
+                    8 -> {
+                        if (djMode) switchMode(false)
+                        pads.openSynthEditor()
+                        showWavetablePresets()
                     }
                     else -> {
                         if (djMode) switchMode(false)
@@ -1972,6 +1999,90 @@ class MainActivity : Activity() {
                 if (list[i].first == "Bass" && !st.syn.mono) { st.syn.mono = true; if (st.syn.glide < 0.01f) st.syn.glide = 0.15f }
                 pads.invalidate()
                 hint("🎛 ${st.synWaveNames[w]} – ${list[i].third}" + if (st.syn.mono) " · MONO (GLIDE-Regler)" else "")
+            }
+            .setNegativeButton("Abbrechen", null)
+            .show()
+    }
+
+    private var grooveParts = GrooveGen.P_DRUMS or GrooveGen.P_BASS or GrooveGen.P_CHORDS
+
+    /** 🎲 GROOVE-GENERATOR: Genre wählen, alles oder einzelne Teile neu würfeln – läuft sofort. */
+    private fun showGrooveGen() {
+        val d = resources.displayMetrics.density
+        val (box, scroll) = dialogBox()
+        val status = note(box, GrooveGen.describe(), Color.WHITE)
+        val bGenre = Button(this).apply { textSize = 14f }
+        fun genreLabel() { bGenre.text = "Genre: ${GrooveGen.GENRES[GrooveGen.genre].name}  ▾" }
+        genreLabel()
+        box.addView(bGenre)
+        fun run(parts: Int, keepKey: Boolean, what: String) {
+            Engine.pushPatternUndo("Groove")
+            val bpm = GrooveGen.generate(GrooveGen.genre, parts, keepKey)
+            val st = InstState
+            if (!keepKey) {
+                // alte Spuren, die nicht dazugehören, schweigen (Noten bleiben erhalten)
+                st.acidOn = false
+                for (i in 1..2) st.synTracks[i].on = false
+                if (parts and GrooveGen.P_MELODY == 0) st.synTracks[0].on = false
+            }
+            if (parts and GrooveGen.P_MELODY != 0) st.synTracks[0].on = true
+            val hasLoops = (0 until Engine.PADS).any { Engine.hasLoop(it) }
+            if (!hasLoops) Engine.setBpm(bpm.toFloat())
+            if (!Engine.seqPlaying) Engine.transportPlay(false)
+            status.text = GrooveGen.describe() + if (hasLoops) "\nTempo bleibt (Loops auf den Pads)" else " · $bpm BPM"
+            pads.invalidate()
+            hint("🎲 $what")
+        }
+        bGenre.setOnClickListener {
+            ui().setTitle("Genre").setItems(GrooveGen.GENRES.map { "${it.name} · ${it.bpm.first}–${it.bpm.last} BPM" }.toTypedArray()) { _, i ->
+                GrooveGen.genre = i
+                genreLabel()
+                run(grooveParts or GrooveGen.P_CHORDS, false, "${GrooveGen.GENRES[i].name}-Groove")
+            }.show()
+        }
+        note(box, "Beim Würfeln neu erzeugen:")
+        check(box, "🥁 Drums (909)", grooveParts and GrooveGen.P_DRUMS != 0) { grooveParts = if (it) grooveParts or GrooveGen.P_DRUMS else grooveParts and GrooveGen.P_DRUMS.inv() }
+        check(box, "🎸 Bass (BASSLINE)", grooveParts and GrooveGen.P_BASS != 0) { grooveParts = if (it) grooveParts or GrooveGen.P_BASS else grooveParts and GrooveGen.P_BASS.inv() }
+        check(box, "🎹 Akkorde (KEYS) – neue Tonart & Folge", grooveParts and GrooveGen.P_CHORDS != 0) { grooveParts = if (it) grooveParts or GrooveGen.P_CHORDS else grooveParts and GrooveGen.P_CHORDS.inv() }
+        check(box, "🎵 Melodie (SYNTH 1)", grooveParts and GrooveGen.P_MELODY != 0) { grooveParts = if (it) grooveParts or GrooveGen.P_MELODY else grooveParts and GrooveGen.P_MELODY.inv() }
+        val bAll = Button(this).apply { text = "🎲 GROOVE WÜRFELN"; textSize = 16f }
+        bAll.setOnClickListener { run(grooveParts, grooveParts and GrooveGen.P_CHORDS == 0, "Neuer Groove") }
+        box.addView(bAll)
+        val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        fun small(t: String, f: () -> Unit) { row.addView(Button(this).apply { text = t; textSize = 11f; setOnClickListener { f() } }, LinearLayout.LayoutParams(0, -2, 1f)) }
+        small("🥁 neu") { run(GrooveGen.P_DRUMS, true, "Neue Drums") }
+        small("🎸 neu") { run(GrooveGen.P_BASS, true, "Neue Bassline – passt zu den Akkorden") }
+        small("🎵 neu") { run(GrooveGen.P_MELODY, true, "Neue Melodie in der Tonart") }
+        box.addView(row)
+        note(box, "Alles landet in 909, BASSLINE, KEYS und SYNTH 1 – dort weiter bearbeiten, mit ⏺ auf Pads aufnehmen oder im Song-Baukasten verwenden. ↶ UNDO macht den letzten Wurf rückgängig.")
+        scroll.setPadding(0, (4 * d).toInt(), 0, 0)
+        ui().setTitle("🎲 Groove-Generator")
+            .setView(scroll)
+            .setPositiveButton("Fertig", null)
+            .setNeutralButton("■ Stopp") { _, _ -> if (Engine.seqPlaying) Engine.transportStop() }
+            .show()
+        if (!GrooveGen.made) run(grooveParts or GrooveGen.P_CHORDS, false, "${GrooveGen.GENRES[GrooveGen.genre].name}-Groove – Genre oben wechseln")
+    }
+
+    /** 🧪 Wavetable: Vorlagen + eigenes Sample als Wellen-Quelle (für WT SAMPLE). */
+    private fun showWavetablePresets() {
+        val list = InstPresets.SYNTHS.filter { it.genre == "Wavetable" }
+        val smp = UserSamples.name("wt:0")
+        val items = list.map { "${it.name} · ${it.bpm} BPM" } + listOf("📂 Eigenes Sample für WT SAMPLE" + (smp?.let { " (jetzt: $it)" } ?: " …"), "🎛 Nur den Klang wählen (Töne bleiben) …")
+        ui().setTitle("🧪 Wavetable · ${InstState.synName(InstState.synCur)}")
+            .setItems(items.toTypedArray()) { _, i ->
+                when {
+                    i < list.size -> {
+                        val p = list[i]
+                        Engine.pushPatternUndo("SYNTH Preset")
+                        InstPresets.applySynth(p)
+                        presetTempo(p.bpm)
+                        pads.invalidate()
+                        hint("🧪 ${p.name} – VERSTIMMUNG fährt durch die Wellen, FILTER-HÜLLKURVE bewegt sie pro Note" + if (p.wave == 24 && smp == null) " · ohne eigenes Sample klingt WT SAMPLE wie WT ANALOG" else "")
+                    }
+                    i == list.size -> voiceSampleMenu("wt:0", "Wavetable-Sample", false)
+                    else -> showSynthWaves()
+                }
             }
             .setNegativeButton("Abbrechen", null)
             .show()
@@ -2083,6 +2194,11 @@ class MainActivity : Activity() {
             .setNegativeButton("Fertig", null).show()
     }
 
+    /** Nach dem Setzen eines Samples: zurück in die passende Liste (Wavetable / EUKLID / 909). */
+    private fun voiceDone(key: String, euk: Boolean) {
+        if (key.startsWith("wt:")) { Wavetables.sampleChanged(); showWavetablePresets() } else showVoiceSamples(euk)
+    }
+
     private fun voiceSampleMenu(key: String, name: String, euk: Boolean) {
         val pads = (0 until PadView.VISIBLE_PADS).filter { Engine.hasLoop(it) }
         val items = ArrayList<String>()
@@ -2107,11 +2223,11 @@ class MainActivity : Activity() {
                         val d = Engine.loopData(p) ?: return@setItems
                         UserSamples.set(this, key, d, Engine.sampleRate, Engine.padName(p) ?: "Pad ${p + 1}")
                         hint("$name spielt jetzt das Sample von Pad ${p + 1}")
-                        showVoiceSamples(euk)
+                        voiceDone(key, euk)
                     }
-                    else -> { UserSamples.remove(this, key); hint("$name: wieder der eingebaute Klang"); showVoiceSamples(euk) }
+                    else -> { UserSamples.remove(this, key); hint("$name: wieder der eingebaute Klang"); voiceDone(key, euk) }
                 }
-            }.setNegativeButton("Zurück") { _, _ -> showVoiceSamples(euk) }.show()
+            }.setNegativeButton("Zurück") { _, _ -> voiceDone(key, euk) }.show()
     }
 
     /** Kurzes Probehören nach dem Zuweisen (909-Stimme bzw. Euklid-Spur). */
@@ -2136,7 +2252,7 @@ class MainActivity : Activity() {
                         runOnUiThread { voicePreview(key); hint("$name: ${it.label.substringAfterLast(" · ")}"); voiceFromLibrary(key, name, euk) }
                     } catch (e: Throwable) { runOnUiThread { toast("Laden fehlgeschlagen: ${e.message ?: e}") } }
                 }.start()
-            }.setNegativeButton("Fertig") { _, _ -> showVoiceSamples(euk) }.show()
+            }.setNegativeButton("Fertig") { _, _ -> voiceDone(key, euk) }.show()
     }
 
     /** Einzelne Schläge aus einem Song der Sammlung: die deutlichsten Anschläge der ersten Minute zur Auswahl. */
@@ -2208,7 +2324,7 @@ class MainActivity : Activity() {
                 voicePreview(key)
                 hint("$name: Schlag aus „$title“ – nochmal wählen zum Vergleichen")
                 pickHit(key, name, euk, title, x, sr, hits)
-            }.setNegativeButton("Fertig") { _, _ -> showVoiceSamples(euk) }.show()
+            }.setNegativeButton("Fertig") { _, _ -> voiceDone(key, euk) }.show()
     }
 
     private fun showSoundKits() {
@@ -6774,7 +6890,7 @@ class MainActivity : Activity() {
                 try {
                     val x = AudioFiles.decode(this, u, Engine.sampleRate, 8)
                     UserSamples.set(this, key, x, Engine.sampleRate, name)
-                    runOnUiThread { hint("📂 $name geladen"); showVoiceSamples(key.startsWith("euk")) }
+                    runOnUiThread { hint("📂 $name geladen"); voiceDone(key, key.startsWith("euk")) }
                 } catch (e: Throwable) {
                     runOnUiThread { toast("Sample konnte nicht geladen werden: ${e.message ?: e}") }
                 }

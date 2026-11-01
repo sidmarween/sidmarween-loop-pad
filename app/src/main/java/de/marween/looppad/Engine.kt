@@ -2703,7 +2703,7 @@ object Engine {
                 }
                 if (sb >= 0) {
                     if (padSource[sb] == 2) cm = padSrcMask[sb] and (1 shl sb).inv()
-                    if (padSource[sb] == 3) cim = padInstMask[sb] and 63
+                    if (padSource[sb] == 3) cim = padInstMask[sb] and 127
                 }
             }
             captureMask = cm
@@ -3014,6 +3014,13 @@ object Engine {
                 Harmonizer.render(xL, xR, block, sampleRate, mic, 1f)
                 mixX(5)
             }
+            // WOLF: Loop-Zerhacker (Quelle: Loop eines Pads, läuft in dessen Raster)
+            if (Wolf.active()) {
+                java.util.Arrays.fill(xL, 0, block, 0f); java.util.Arrays.fill(xR, 0, block, 0f)
+                val wp = Wolf.srcPad
+                Wolf.render(xL, xR, block, w, if (wp in 0 until PADS) loops.get(wp) else null, masterLen, transport)
+                mixX(6)
+            }
             MasterBus.process(mL, mR, block, sampleRate)
             // Schutz-Limiter: Spitzen (z. B. zwei Decks gleichzeitig) sanft absenken statt hart zu clippen
             safety.process(mL, mR, block)
@@ -3292,7 +3299,7 @@ object Engine {
     @Volatile private var captureInst = 0
     /** Bei Eingang 3: welche Instrumente (Bit 0 ACID 303, Bit 1 DRUM 909, Bit 2 SYNTH, 3 EUKLID, 4 ATMOS, 5 HARMONIZER). */
     val padInstMask = IntArray(PADS) { 7 }
-    val INST_NAMES = arrayOf("ACID 303", "DRUM 909", "SYNTH", "EUKLID", "ATMOS", "HARMONIZER")
+    val INST_NAMES = arrayOf("ACID 303", "DRUM 909", "SYNTH", "EUKLID", "ATMOS", "HARMONIZER", "WOLF")
     private var padRing = FloatArray(0)
 
     fun maskPads(m: Int): List<Int> = (0 until PADS).filter { (m shr it) and 1 != 0 }
@@ -3386,7 +3393,7 @@ object Engine {
             t.mask = padSrcMask[p] and (1 shl p).inv()
             if (t.mask == 0) t.src = 1
         } else if (t.src == 3) {
-            t.mask = padInstMask[p] and 63
+            t.mask = padInstMask[p] and 127
             if (t.mask == 0) t.src = 1
         }
         t.live = liveBars != 0
@@ -3547,13 +3554,14 @@ object Engine {
             // Instrument-Eingang: aufgenommene Instrumente ausschalten (sonst doppelt)
             if (bounce && (take.src == 3 || take.src == 1) && !take.oneShot) {
                 val off = ArrayList<String>()
-                val im = if (take.src == 1) 63 else take.mask
+                val im = if (take.src == 1) 127 else take.mask
                 if ((im and 1) != 0 && InstState.acidOn) { InstState.acidOn = false; off.add("303") }
                 if ((im and 2) != 0 && InstState.drumOn) { InstState.drumOn = false; off.add("909") }
                 if ((im and 4) != 0 && InstState.synOn) { InstState.synOn = false; off.add("SYNTH") }
                 if ((im and 8) != 0 && Euclid.on) { Euclid.on = false; off.add("EUKLID") }
                 if ((im and 16) != 0 && Atmos.on) { Atmos.on = false; off.add("ATMOS") }
                 if ((im and 32) != 0 && Harmonizer.on) { Harmonizer.on = false; off.add("HARMONIZER") }
+                if ((im and 64) != 0 && Wolf.on) { Wolf.on = false; off.add("WOLF") }
                 if (off.isNotEmpty()) onBouncedInst?.invoke(p, off.joinToString(", "))
             }
             onRecorded?.invoke(p, data.copyOf(), sampleRate)
@@ -3603,7 +3611,7 @@ object Engine {
 
     fun instCodeOn(code: Int): Boolean = when (code) {
         in 0 until InstState.INSTS -> InstState.instOn(code)
-        10 -> Euclid.on; 11 -> Atmos.on; 12 -> Harmonizer.on
+        10 -> Euclid.on; 11 -> Atmos.on; 12 -> Harmonizer.on; 13 -> Wolf.on
         else -> false
     }
 
@@ -3611,6 +3619,7 @@ object Engine {
         when (code) {
             in 0 until InstState.INSTS -> { InstState.setInstOn(code, v); if (v && !seqPlaying) transportPlay(false) }
             10 -> Euclid.on = v; 11 -> Atmos.on = v; 12 -> Harmonizer.on = v
+            13 -> { Wolf.switch(v); if (v && !seqPlaying) transportPlay(false) }
         }
     }
 
@@ -3624,6 +3633,7 @@ object Engine {
         if (Euclid.on) used.add(10)
         if (Atmos.on) used.add(11)
         if (Harmonizer.on) used.add(12)
+        if (Wolf.on) used.add(13)
         for (code in used) {
             if (padInst.contains(code)) continue
             val p = (0 until min(12, PADS)).firstOrNull { loops.get(it) == null && takes.get(it) == null && padInst[it] < 0 } ?: return
@@ -4829,17 +4839,17 @@ object Engine {
         private set
     @Volatile private var recLastBar = -1
     /** Zusatz-Spuren im Song: ATMOS, EUKLID, HARMONIZER (an/aus je Takt). */
-    const val ARR_X = 3
+    const val ARR_X = 4
     val arrX = Array(ARR_X) { BooleanArray(ARR_MAX) }
-    val ARR_X_NAMES = arrayOf("ATMOS", "EUKLID", "HARMONIZER")
+    val ARR_X_NAMES = arrayOf("ATMOS", "EUKLID", "HARMONIZER", "WOLF")
     /** Block-Grenzen im Song-Editor: hier beginnt ein neuer Block (auch wenn davor dasselbe liegt). Spuren 0 … TRK_AUTO−1. */
     val arrBreak = Array(ARR_ROWS + ARR_X) { BooleanArray(ARR_MAX) }
     /** Abschnitte: ab diesem Takt beginnt Abschnitt k ([SECTION_NAMES]), -1 = keiner. */
     val arrSection = IntArray(ARR_MAX) { -1 }
     val SECTION_NAMES = arrayOf("INTRO", "HAUPTTEIL", "AUFBAU", "DROP", "BREAK", "BRIDGE", "ENDING")
 
-    private fun xOn(k: Int): Boolean = when (k) { 0 -> Atmos.on; 1 -> Euclid.on; else -> Harmonizer.on }
-    private fun setXOn(k: Int, v: Boolean) { when (k) { 0 -> Atmos.on = v; 1 -> Euclid.on = v; else -> Harmonizer.on = v } }
+    private fun xOn(k: Int): Boolean = when (k) { 0 -> Atmos.on; 1 -> Euclid.on; 2 -> Harmonizer.on; else -> Wolf.on }
+    private fun setXOn(k: Int, v: Boolean) { when (k) { 0 -> Atmos.on = v; 1 -> Euclid.on = v; 2 -> Harmonizer.on = v; else -> Wolf.switch(v) } }
 
     /**
      * Song abspielen (aus Baukasten/Editor): Song-Modus nur für diese Wiedergabe – nach ■ sind Pads und Instrumente

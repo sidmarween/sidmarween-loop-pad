@@ -408,6 +408,17 @@ object InstPresets {
         Synth("Leads", "Square-Lead mit Glide", 120, 1, 0, 0, 0.55f, 0.3f, 0.35f, 0f, 0.2f, 0.2f, 2,
             n(0, 7, 3, 3, 10, 3, 6, 12, 2, 8, 15, 4, 12, 14, 2, 14, 12, 2, 16, 10, 3, 19, 12, 3, 22, 7, 2, 24, 5, 4, 28, 3, 4),
             mono = true, glide = 0.3f),
+        // ---- Wavetable (Klänge 20–24)
+        Synth("Wavetable", "Growl-Bass (Dubstep)", 140, 22, 0, -2, 0.55f, 0.35f, 0.7f, 0f, 0.15f, 0.3f, 2,
+            n(0, 0, 3, 3, 0, 1, 6, 0, 2, 8, 3, 4, 12, 0, 2, 14, -2, 2, 16, 0, 6, 22, 5, 2, 24, 3, 4, 28, 0, 4), mono = true, glide = 0.15f),
+        Synth("Wavetable", "Vocal-Fläche (Am · F · C · G)", 100, 21, 0, 0, 0.7f, 0.1f, 0.45f, 0.5f, 0.7f, 0.25f, 4,
+            cr(intArrayOf(0, 16), -3, 2, -7, 1, 0, 1, -5, 1)),
+        Synth("Wavetable", "Analog-Sweep-Lead", 126, 20, 0, 0, 0.7f, 0.25f, 0.6f, 0.01f, 0.2f, 0.1f, 2,
+            n(0, 12, 3, 3, 15, 3, 6, 19, 2, 8, 17, 4, 12, 15, 4, 16, 12, 3, 19, 10, 3, 22, 12, 2, 24, 7, 8), mono = true, glide = 0.12f),
+        Synth("Wavetable", "Digital-Glocken (PPG)", 110, 23, 0, 1, 0.85f, 0.1f, 0.3f, 0f, 0.45f, 0.5f, 2,
+            n(0, 0, 1, 2, 7, 1, 4, 12, 1, 6, 16, 1, 8, 19, 1, 10, 16, 1, 12, 12, 1, 14, 7, 1, 16, -3, 1, 18, 4, 1, 20, 9, 1, 22, 12, 1, 24, 16, 1, 26, 12, 1, 28, 9, 1, 30, 4, 1)),
+        Synth("Wavetable", "Eigenes Sample als Fläche", 100, 24, 0, 0, 0.7f, 0.1f, 0.4f, 0.3f, 0.6f, 0.3f, 4,
+            cr(intArrayOf(0, 16), 0, 2, -4, 1, -7, 1, -5, 1)),
         // ---- Bassline (zweiter Bass-Sequenzer: MONO mit GLIDE)
         Synth("Bassline", "FM-Bass (Funk)", 110, 17, 0, -1, 0.4f, 0.3f, 0.55f, 0f, 0.1f, 0.2f, 1,
             n(0, 0, 2, 3, 0, 1, 4, 12, 1, 6, 10, 1, 7, 12, 1, 8, 0, 2, 11, 3, 1, 12, 5, 2, 14, 7, 1, 15, 10, 1), mono = true, glide = 0.15f),
@@ -497,6 +508,7 @@ object InstPresets {
         st.synLen = (p.bars * 16).coerceIn(16, InstState.MAX)
         st.synOn = true
         st.syn.mono = p.mono; st.syn.glide = p.glide
+        if (InstState.synIsWt(p.wave)) Wavetables.ensure(p.wave - 20)
         for (nt in p.notes) for (j in 0 until nt.len) {
             val k = nt.step + j
             if (k !in 0 until st.synLen) break

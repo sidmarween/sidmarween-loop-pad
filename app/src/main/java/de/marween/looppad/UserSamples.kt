@@ -15,6 +15,7 @@ object UserSamples {
 
     fun drum(v: Int): FloatArray? = data["drum:$v"]
     fun euk(l: Int): FloatArray? = data["euk:$l"]
+    fun get(key: String): FloatArray? = data[key]
     fun name(key: String): String? = names[key]
     fun has(key: String) = data.containsKey(key)
 
