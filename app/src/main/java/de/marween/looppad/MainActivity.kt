@@ -98,6 +98,7 @@ class MainActivity : Activity() {
         }
         pads.onTempo = { showTempo() }
         pads.onInstMore = { showMoreInstruments() }
+        pads.onToCollection = { exportAllToCollection() }
         UserSamples.load(this)
         pads.euclid.onSamples = { showVoiceSamples(true) }
         pads.songBuilder.onPickSection = { bar -> pads.songEd.onPickSection?.invoke(bar) }
@@ -2696,6 +2697,7 @@ class MainActivity : Activity() {
                 }
                 add("✂ Slicer: Song-Abschnitt auf 16 Pads zerlegen") { if (djMode) switchMode(false); if (Slicer.data == null) pickSlicerSource() else pads.openSlicer() }
                 add("👻 Ghost-Producer: Genre-Patterns als Live-Remix") { openGhost() }
+                add("💿 Alles in die Sammlung (Pads, Instrumente, Loops – ein Klick)") { exportAllToCollection() }
                 add("🎼 SONG: Teile bauen (Intro, Hauptteil, Ending), aufnehmen, Spuren-Ansicht") { if (djMode) switchMode(false); pads.openSongBuilder() }
                 add("🌌 ATMOS: Klangteppich & Drones (Übergänge, Intros)") { openAtmos() }
                 add("⬡ EUKLID: generative Polyrhythmen (Perc, Hats, Rim, Pluck)") { if (djMode) dj.openEuclid() else pads.openEuclid(); hint("▶ START – läuft im Takt des Decks · drei Regler: Schläge, Taktlänge, Morphing") }
@@ -3814,12 +3816,31 @@ class MainActivity : Activity() {
     }
 
     /** Song einmal in Echtzeit abspielen und dabei Master (und Stems) aufnehmen, danach in den Ordner kopieren. */
-    private fun startBounce(tree: Uri?, stems: Boolean, share: Boolean = false) {
+    /** 💿 Ein Klick: alles, was im Pad-Modus da ist, einmal durchspielen und als Stück in die Sammlung legen. */
+    private fun exportAllToCollection() {
+        val any = (0 until PadView.VISIBLE_PADS).any { Engine.hasLoop(it) } || (0 until InstState.INSTS).any { InstState.instHasNotes(it) } || Euclid.on || Atmos.on
+        if (!any) { toast("Noch nichts aufgenommen – erst Pads oder Instrumente füllen"); return }
+        // Länge: Song (falls angelegt), sonst der längste Loop – mindestens 8 Takte
+        var bars = 8
+        if (!hasArrangement()) {
+            for (p in 0 until PadView.VISIBLE_PADS) if (Engine.hasLoop(p) && !Engine.isOneShot(p)) bars = maxOf(bars, kotlin.math.ceil(Engine.padBarsLen(p).toDouble()).toInt())
+            for (i in 0 until InstState.INSTS) if (InstState.instHasNotes(i)) bars = maxOf(bars, (InstState.instLen(i) + 15) / 16)
+            bars = ((bars + 3) / 4 * 4).coerceAtMost(64)
+        }
+        // alle Pads mit Inhalt und benutzten Instrumente einschalten, damit wirklich alles drin ist
+        if (!hasArrangement()) {
+            for (p in 0 until PadView.VISIBLE_PADS) if (Engine.hasLoop(p) && !Engine.isOneShot(p) && Engine.isMuted(p)) Engine.toggleMute(p)
+            for (i in 0 until InstState.INSTS) if (InstState.instHasNotes(i)) InstState.setInstOn(i, true)
+        }
+        startBounce(null, false, toCollection = true, barsOverride = bars)
+    }
+
+    private fun startBounce(tree: Uri?, stems: Boolean, share: Boolean = false, toCollection: Boolean = false, barsOverride: Int = 0) {
         if (SetRecorder.recording) { toast("Es läuft schon eine Aufnahme"); return }
         val rate = Engine.sampleRate
         val bpm = Engine.currentBpm().let { if (it > 0f) it else 120f }
         val song = hasArrangement()
-        val bars = exportBars()
+        val bars = if (barsOverride > 0 && !song) barsOverride else exportBars()
         val playSec = bars * 240.0 / bpm
         val totalSec = playSec + 2.5
         Engine.seqStop()
@@ -3835,7 +3856,7 @@ class MainActivity : Activity() {
         val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; addView(tv); addView(pb, LinearLayout.LayoutParams(-1, -2).apply { leftMargin = (20 * d).toInt(); rightMargin = (20 * d).toInt() }) }
         var cancelled = false
         var finished = false
-        val dlg = ui().setTitle(if (stems) "📤 Song + Stems werden aufgenommen" else "📤 Song wird aufgenommen")
+        val dlg = ui().setTitle(if (toCollection) "💿 Wird für die Sammlung aufgenommen" else if (stems) "📤 Song + Stems werden aufgenommen" else "📤 Song wird aufgenommen")
             .setView(box)
             .setNegativeButton("Abbrechen") { _, _ -> cancelled = true }
             .setCancelable(false)
@@ -3851,6 +3872,11 @@ class MainActivity : Activity() {
             val stemFiles = if (stems) StemRecorder.stop() else emptyList()
             try { dlg.dismiss() } catch (ignored: Exception) {}
             if (cancelled) { master?.delete(); tmp.deleteRecursively(); toast("Export abgebrochen"); return }
+            if (toCollection) {
+                tmp.deleteRecursively()
+                if (master != null) masterToCollection(master, "Marv PAD " + stamp(), bpm)
+                return
+            }
             if (share || tree == null) {
                 tmp.deleteRecursively()
                 if (master != null) shareWav(master, "MarvPAD_Song_" + stamp(), true)
@@ -6598,6 +6624,36 @@ class MainActivity : Activity() {
      * Eigenes Audio als Track in die DJ-Sammlung: als WAV im App-Speicher, mit Tempo und Raster aus der App
      * (beginnt auf der Eins) – Tonart, Lautheit und Energie werden gleich analysiert und gespeichert.
      */
+    /** Aufgenommene Stereo-WAV in die Sammlung (Crate „Eigene Aufnahmen“), Tempo = Master-Tempo, Rest wird analysiert. */
+    private fun masterToCollection(src: java.io.File, title: String, bpm: Float) {
+        hint("💿 Lege „$title“ in die Sammlung …")
+        Thread {
+            try {
+                val dir = java.io.File(filesDir, "eigene").apply { mkdirs() }
+                val safe = title.replace(Regex("[^A-Za-z0-9äöüÄÖÜß ._-]+"), "_").trim()
+                val f = java.io.File(dir, "$safe.wav")
+                src.copyTo(f, overwrite = true)
+                src.delete()
+                val rate = Engine.sampleRate
+                val mono = AudioFiles.decodeFile(f, rate, 600)
+                TrackDb.load(this)
+                val (t, _) = TrackDb.add(Uri.fromFile(f), title)
+                t.bpm = bpm; t.grid = 0.0; t.cue = 0.0; t.barOffset = 0; t.phraseOff = 0
+                t.seconds = mono.size.toDouble() / rate
+                val crate = "Eigene Aufnahmen"
+                TrackDb.addCrate(crate)
+                t.crates.add(crate)
+                val sh = ShortArray(mono.size) { (mono[it].coerceIn(-1f, 1f) * 32767f).toInt().toShort() }
+                TrackDb.analyzeData(this, t, sh, 1, sh.size, rate, true)
+                TrackDb.save(this)
+                colRefresh?.invoke()
+                runOnUiThread { hint(String.format(Locale.GERMANY, "💿 „%s“ ist in der Sammlung (Crate „%s“) · %.1f BPM · %s · %s", title, crate, t.bpm, if (t.key >= 0) Keys.camelot(t.key) else "Tonart ?", Dj.fmt(t.seconds))) }
+            } catch (e: Throwable) {
+                runOnUiThread { toast("In die Sammlung ging nicht: ${e.message ?: e}") }
+            }
+        }.start()
+    }
+
     private fun addAudioToCollection(title: String, data: FloatArray) {
         val rate = Engine.sampleRate
         val bpm = Engine.currentBpm()

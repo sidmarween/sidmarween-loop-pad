@@ -776,9 +776,12 @@ class PadView(context: Context) : View(context) {
         if (zoomEnabled) zoomPads.set(seqRect.right - sp - dp(30f), bTop, seqRect.right - sp, bTop + bH) else zoomPads.setEmpty()
         val fr = if (zoomPads.isEmpty) seqRect.right - sp else zoomPads.left - dp(6f)
         seqFoldBtn.set(fr - dp(30f), bTop, fr, bTop + bH)
+        // 💿 Alles in die Sammlung – nur wenn genug Platz ist
+        val cw = uW * 1.1f
+        if (seqFoldBtn.left - dp(8f) - cw > mixBtn.right + dp(40f)) colBtn.set(seqFoldBtn.left - dp(8f) - cw, bTop, seqFoldBtn.left - dp(8f), bTop + bH) else colBtn.setEmpty()
         if (SEC_SEQ in secHidden) {
             off(seqRect); for (r in stepRects) off(r)
-            for (r in arrayOf(recBtn, playBtn, stopBtn, undoBtn, redoBtn, mixBtn, seqFoldBtn)) off(r)
+            for (r in arrayOf(recBtn, playBtn, stopBtn, undoBtn, redoBtn, mixBtn, seqFoldBtn, colBtn)) off(r)
             zoomPads.setEmpty()
         }
         // Mischpult nutzt auch den Platz der Auswahl-Leiste (die im MIX ausgeblendet ist), wenn sie direkt darüber liegt
@@ -2656,6 +2659,28 @@ class PadView(context: Context) : View(context) {
         return if (abs(db) < 0.05f) "0.0" else String.format(Locale.GERMANY, "%+.1f", db)
     }
 
+    private val colBtn = RectF()
+    /** 💿 Alles (Pads, Instrumente, Loops) als ein Stück in die Sammlung (MainActivity). */
+    var onToCollection: (() -> Unit)? = null
+
+    private fun drawColButton(canvas: Canvas, cols: IntArray) {
+        val r = colBtn
+        if (r.width() <= 0f) return
+        fillPaint.shader = null
+        fillPaint.color = blend(cols[0], cols[1], 0.08f)
+        canvas.drawRoundRect(r, dp(7f), dp(7f), fillPaint)
+        strokePaint.strokeWidth = dp(1.3f)
+        strokePaint.color = alpha(cols[2], 0.8f)
+        canvas.drawRoundRect(r, dp(7f), dp(7f), strokePaint)
+        textPaint.textAlign = Paint.Align.CENTER
+        textPaint.textSize = min(dp(16f), r.height() * 0.4f)
+        textPaint.color = cols[1]
+        canvas.drawText("💿", r.centerX(), r.centerY() + dp(2f), textPaint)
+        textPaint.textSize = dp(7.5f)
+        textPaint.color = alpha(cols[1], 0.85f)
+        canvas.drawText("SAMMLUNG", r.centerX(), r.bottom - dp(4f), textPaint)
+    }
+
     private fun drawMixButton(canvas: Canvas, cols: IntArray) {
         val r = mixBtn
         if (r.width() <= 0f) return
@@ -2878,9 +2903,10 @@ class PadView(context: Context) : View(context) {
             canvas.drawText(if (r === undoBtn) "UNDO" else "REDO", r.centerX(), r.bottom - dp(4f), textPaint)
         }
         drawMixButton(canvas, cols)
+        drawColButton(canvas, cols)
         if (!zoomPads.isEmpty) zoomBtn(canvas, zoomPads, cols)
         val ix = mixBtn.right + dp(8f)
-        val avail = seqFoldBtn.left - dp(4f) - ix
+        val avail = (if (colBtn.isEmpty) seqFoldBtn.left else colBtn.left) - dp(4f) - ix
         if (avail < dp(28f)) return
         val cin = Engine.countInBeat()
         val red = Color.rgb(255, 60, 80)
@@ -4296,6 +4322,7 @@ class PadView(context: Context) : View(context) {
                         undoBtn.contains(x, y) -> doUndo(false)
                         redoBtn.contains(x, y) -> doUndo(true)
                         mixBtn.contains(x, y) -> toggleMixView()
+                        colBtn.contains(x, y) -> { performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY); onToCollection?.invoke() }
                         seqFoldBtn.contains(x, y) -> {
                             seqFold = !seqFold
                             onLayoutPrefs?.invoke()
