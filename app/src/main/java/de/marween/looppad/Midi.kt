@@ -152,8 +152,8 @@ object Midi {
             o.optJSONArray("cc")?.let { a -> for (i in 0 until min(ccMap.size, a.length())) ccMap[i] = a.optInt(i, -1) }
             o.optJSONArray("djBtn")?.let { a -> for (i in 0 until min(djBtn.size, a.length())) djBtn[i] = a.optInt(i, -1) }
             jogMode = o.optInt("jog", 0)
-            o.optJSONArray("outMode")?.let { a -> for (i in 0 until min(5, a.length())) outMode[i] = a.optInt(i, 0) }
-            o.optJSONArray("outCh")?.let { a -> for (i in 0 until min(5, a.length())) outCh[i] = a.optInt(i, outCh[i]).coerceIn(1, 16) }
+            o.optJSONArray("outMode")?.let { a -> for (i in 0 until min(outMode.size, a.length())) outMode[i] = a.optInt(i, 0) }
+            o.optJSONArray("outCh")?.let { a -> for (i in 0 until min(outCh.size, a.length())) outCh[i] = a.optInt(i, outCh[i]).coerceIn(1, 16) }
             outEarlyMs = o.optDouble("outEarly", 0.0).toFloat()
             disabled.clear()
             o.optJSONArray("off")?.let { a -> for (i in 0 until a.length()) disabled.add(a.optString(i)) }
@@ -610,11 +610,11 @@ object Midi {
     // ---------------------------------------------------------------- MIDI-Ausgang der Instrumente
 
     /** Instrumente, die Noten nach außen senden können. */
-    val OUT_NAMES = arrayOf("303 (Acid-Bass)", "909 (Drums)", "Synth 1", "Synth 2", "Synth 3")
+    val OUT_NAMES = arrayOf("303 (Acid-Bass)", "909 (Drums)", "Synth 1", "Synth 2", "Synth 3", "Keys", "Bassline")
     /** Je Instrument: 0 = nur intern, 1 = nur extern (internes stumm), 2 = beides. */
-    val outMode = IntArray(5)
+    val outMode = IntArray(OUT_NAMES.size)
     /** MIDI-Kanal 1..16 je Instrument. */
-    val outCh = intArrayOf(1, 10, 2, 3, 4)
+    val outCh = intArrayOf(1, 10, 2, 3, 4, 5, 6)
     /** Feinabgleich (ms): positiv = Noten früher senden (gleicht die Verzögerung des externen Geräts aus). */
     @Volatile var outEarlyMs = 0f
     /** Drum-Noten (General MIDI) je Drum-Stimme BD SD LT MT HT RS CP CH OH CR RD. */
