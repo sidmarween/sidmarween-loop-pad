@@ -1955,6 +1955,7 @@ class MainActivity : Activity() {
             "🎹 TASTEN & SYNTHS" to listOf(
                 Item("🎹 SYNTH 1–3 · Lead, Fläche, Bass (polyfon, Akkorde, Arpeggiator)") { synthTrack(0, false) },
                 Item("🎹 KEYS · Piano, E-Piano, Orgel & Leads") { synthTrack(InstState.KEYS_TRACK, true) },
+                Item("🏠 VIBE-SYNTH · House-Stabs, M1-Akkorde, Pump, Acid-Modus") { pad(); pads.openVibe(); hint("🏠 Eine Taste = ein Club-Akkord · PUMP drückt im Takt · STAB ↔ ACID schaltet auf 303-Hybrid") },
                 Item("🧪 WAVETABLE · Klangformen durchfahren (Growl, Vocal, Digital …)") { pad(); pads.openSynthEditor(); showWavetablePresets() },
                 Item("👾 CHIPTUNE · 8-Bit-Klänge (Presets)") {
                     pad(); pads.openSynthEditor()
@@ -3053,9 +3054,10 @@ class MainActivity : Activity() {
                 items.add(Triple("💾 Projekt speichern", { askProjectName(null, 0) }, false))
                 items.add(Triple("📂 Projekt laden", { showProjects() }, false))
                 items.add(Triple("✨ Neues Projekt", {
-                    confirm("Neues Projekt?", "Alle Pads, das Pattern und das Tempo werden geleert. Nicht gespeicherte Änderungen gehen verloren.") {
+                    confirm("Neues Projekt?", "Alles auf Anfang: alle Pads und Loops, alle Patterns (A–D) von 303, 909, SYNTH, KEYS und BASSLINE, alle Klänge und Regler, Song, Effekte und die Zusatz-Instrumente (EUKLID, ATMOS, WOLF, ARCHITECT, ORBITS …). Nicht gespeicherte Änderungen gehen verloren.") {
                         Engine.newProject()
-                        toast("Neues Projekt")
+                        pads.invalidate()
+                        toast("✨ Neues Projekt – alles auf Anfang")
                     }
                 }, false))
                 items.add(Triple("🎙 Meine Aufnahmen", { showRecordings() }, false))

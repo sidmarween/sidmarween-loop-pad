@@ -268,7 +268,7 @@ object InstState {
     var synCutMod: Float get() = syn.cutMod; set(v) { syn.cutMod = v }
     val synWaveNames = arrayOf("SAW", "SQR", "SUPER", "PLUCK", "GLOCKE", "NES ▢", "NES △", "NOISE", "SID", "GB-WAVE", "FM-CHIP",
         "PIANO", "E-PIANO", "ORGEL", "SYNC-LEAD", "REESE", "SUB-BASS", "FM-BASS", "WOBBLE", "SAITE",
-        "WT ANALOG", "WT VOCAL", "WT GROWL", "WT DIGITAL", "WT SAMPLE", "MAGMA", "FUNK-SLAP")
+        "WT ANALOG", "WT VOCAL", "WT GROWL", "WT DIGITAL", "WT SAMPLE", "MAGMA", "FUNK-SLAP", "VIBE")
     fun synIsWt(w: Int) = w in 20..24
     /** Chiptune-Klänge (Klang-Nr. 5–10): Akkorde laufen als schnelles Chip-Arpeggio, Lautstärke in 16 Stufen. */
     fun synIsChip(w: Int) = w in 5..10
@@ -278,6 +278,7 @@ object InstState {
         Triple("Tasten", 12, "E-Piano (Rhodes-Art, FM) – VERSTIMMUNG = Tremolo"),
         Triple("Tasten", 13, "Orgel (Zugriegel) – CUTOFF = Register, VERST. = Leslie"),
         Triple("Tasten", 4, "FM-Glocke"),
+        Triple("Tasten", 27, "🏠 VIBE – House-Stabs, Drift, Pump, Acid-Modus (Vibe-Synth-Feld)"),
         Triple("Lead", 14, "Sync-Lead – schneidend, FILTER-HÜLLK. = Sync-Fahrt"),
         Triple("Lead", 2, "Supersaw (Trance)"),
         Triple("Lead", 0, "Saw (analog)"),
@@ -1639,13 +1640,14 @@ class PolySynth(private val sr: Int, private val t: InstState.SynTrack) {
     }
 
     private fun apply(e: Ev) {
-        val iv = e.iv ?: InstState.synChordIv[t.chord.coerceIn(0, InstState.synChordIv.size - 1)]
+        var iv = e.iv ?: InstState.synChordIv[t.chord.coerceIn(0, InstState.synChordIv.size - 1)]
+        if (t.wave == Vibe.WAVE && Vibe.chord > 0 && !Vibe.acid()) iv = vibeChord(iv)
         if (!e.on) {
             for (v in voices) if (v.active && v.tag == e.tag && v.gate) { v.gate = false; v.stage = 2 }
             return
         }
         val chip = InstState.synIsChip(t.wave)
-        if (t.mono && !chip) {
+        if ((t.mono || (t.wave == Vibe.WAVE && Vibe.acid())) && !chip) {
             // MONO: eine Stimme, neue Note gleitet vom alten Ton (GLIDE), Hüllkurve setzt ohne Knacken neu an
             val v = voices[0]
             for (k in 1 until voices.size) if (voices[k].active) { voices[k].gate = false; voices[k].stage = 2 }
@@ -1852,6 +1854,55 @@ class PolySynth(private val sr: Int, private val t: InstState.SynTrack) {
         return y.toDouble()
     }
 
+    private var tapeLp = 0f
+
+    /** One-Finger-Akkord des Vibe-Synths: Einzelnote → gewählter Club-Akkord; Akkord der Folge → mit passender Erweiterung. */
+    private fun vibeChord(iv: IntArray): IntArray {
+        if (iv.size <= 1) return Vibe.CHORDS[Vibe.chord.coerceIn(0, Vibe.CHORDS.size - 1)]
+        val minor = iv.contains(3)
+        val sev = if (minor) 10 else 11
+        return when (Vibe.chord) {
+            1, 4 -> intArrayOf(0, if (minor) 3 else 4, 7, sev)
+            2, 5 -> intArrayOf(0, if (minor) 3 else 4, 7, sev, 14)
+            3 -> intArrayOf(0, 5, 7, 12)
+            6 -> intArrayOf(0, if (minor) 3 else 4, sev, 14, 17)
+            else -> iv
+        }
+    }
+
+    /** 🏠 VIBE: zwei Drift-Sägen → Diode-Ladder (Squelch im Acid-Modus), Sub unberührt dazu. */
+    private fun vibe(v: Voice, f: Double, acid: Float): Double {
+        val m = v.m
+        val dr = Vibe.drift
+        for (k in 0 until 2) {
+            if (m[2 + k] <= 0f) { m[4 + k] = rnd(v); m[2 + k] = (sr * (0.2 + 0.6 * Math.random())).toFloat() }
+            m[2 + k]--
+            m[k] += (m[4 + k] - m[k]) * 0.00008f
+        }
+        val d1 = 1.0 + dr * 0.009 * m[0]
+        val d2 = (1.0 + 0.0025 + dr * 0.004) * (1.0 + dr * 0.009 * m[1])
+        val s1 = saw(v, 0, f * d1)
+        val s2 = saw(v, 1, f * d2)
+        val osc = ((s1 + s2 * (1f - acid * 0.8f)) * 0.55).toFloat()
+        val st = t
+        val oct = st.cutNow() * 7.2f + st.env * (4f + acid * 3.5f) * v.fenv * (0.6f + 0.4f * v.vel) + st.cutMod * 2.5f
+        val fc = min(0.45 * sr, 40.0 * 2.0.pow(oct.toDouble()))
+        val g = (1 - exp(-2 * PI * fc / sr)).toFloat()
+        val k = st.res * (3.4f + acid * 0.9f)
+        // Diode-Ladder: leicht asymmetrische Stufen, Rückkopplung vom Ausgang
+        val u = tanh(osc * 1.4f - k * m[9])
+        m[6] += g * (tanh(u + 0.08f * u * u) - tanh(m[6]))
+        m[7] += g * (tanh(m[6]) - tanh(m[7]))
+        m[8] += g * (tanh(m[7]) - tanh(m[8]))
+        m[9] += g * (tanh(m[8]) - tanh(m[9]))
+        var y = m[9] * (1f + k * 0.28f)
+        if (Vibe.sub > 0.01f) {
+            v.ph[2] += f / sr; if (v.ph[2] >= 1.0) v.ph[2] -= 1.0
+            y += sinT(v.ph[2]) * Vibe.sub * 0.6f
+        }
+        return y.toDouble()
+    }
+
     private fun saw(v: Voice, k: Int, f: Double): Double {
         val dt = f / sr
         v.ph[k] += dt; if (v.ph[k] >= 1.0) v.ph[k] -= 1.0
@@ -1877,7 +1928,7 @@ class PolySynth(private val sr: Int, private val t: InstState.SynTrack) {
         val vol = st.volNow() * 0.32f
         val spread = st.detune
         val chip = InstState.synIsChip(wave)
-        val noFilter = wave == 4 || wave == 10 || wave in 11..13 || wave == 16 || wave == 17 || wave == 19 || wave == 25 || wave == 26
+        val noFilter = wave == 4 || wave == 10 || wave in 11..13 || wave == 16 || wave == 17 || wave == 19 || wave == 25 || wave == 26 || wave == 27
         // Bass-Labor
         val bl = BassLab
         val kick0 = if (wave == 25) bl.kick else 0f
@@ -1888,6 +1939,16 @@ class PolySynth(private val sr: Int, private val t: InstState.SynTrack) {
         val ladK = bl.craterRes * 4.3f
         val juice = bl.juice
         val ksTight = 0.1 + bl.tight * bl.tight * 1.6
+        // Vibe: Pump im Schlag-Raster, Modus
+        val vAcid = Vibe.mode
+        val pumpOn = wave == Vibe.WAVE && Vibe.pumpRate > 0 && Vibe.pump > 0.01f
+        var pPh = 0.0; var pInc = 0.0
+        if (pumpOn) {
+            val div = if (Vibe.pumpRate == 2) 2.0 else 1.0
+            pPh = Engine.beatPos(w) * div
+            pInc = div / Engine.seqBeatLen().coerceAtLeast(1.0)
+        }
+        val vDrive = Vibe.drive
         // Chip-Arpeggio: 1/32 im Master-Tempo (ohne Tempo: 120 BPM)
         val bpmNow = Engine.currentBpm().let { if (it in 40f..300f) it else 120f }
         val arpTick = max(1L, (sr * 60.0 / bpmNow / 8.0).toLong())
@@ -2149,6 +2210,7 @@ class PolySynth(private val sr: Int, private val t: InstState.SynTrack) {
                     }
                     25 -> o = magma(v, f, kick0 * exp(-i / (0.25 * sr)).toFloat(), amtMid, amtHigh, ladK)
                     26 -> o = funk(v, f, juice, ksTight)
+                    27 -> o = vibe(v, f, vAcid)
                     1 -> {
                         val dt = f / sr
                         v.ph[0] += dt; if (v.ph[0] >= 1.0) v.ph[0] -= 1.0
@@ -2189,7 +2251,18 @@ class PolySynth(private val sr: Int, private val t: InstState.SynTrack) {
                 val e = if (chip) kotlin.math.ceil(v.env * 15f) / 15f else v.env
                 mix += s * e * v.vel
             }
-            out[i] += tanh(mix * vol * 1.2f)
+            if (wave == Vibe.WAVE) {
+                if (pumpOn) {
+                    val ph = (pPh + pInc * i).let { it - kotlin.math.floor(it) }.toFloat()
+                    val rec = (ph / 0.55f).coerceIn(0f, 1f)
+                    mix *= 1f - Vibe.pump * 0.9f * (1f - rec) * (1f - rec)
+                }
+                // Class-A-Konsole + Band: dichte Mitten, seidige Höhen
+                val x = mix * vol * (1.2f + vDrive * 3f)
+                val y = tanh(x + 0.12f * vDrive * x * x)
+                tapeLp += (0.55f - 0.35f * vDrive) * (y - tapeLp)
+                out[i] += tapeLp
+            } else out[i] += tanh(mix * vol * 1.2f)
         }
         if (ei < evs.size) synchronized(lock) { queue.addAll(evs.subList(ei, evs.size)) }
     }

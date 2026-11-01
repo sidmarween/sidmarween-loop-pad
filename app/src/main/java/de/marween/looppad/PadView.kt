@@ -955,6 +955,7 @@ class PadView(context: Context) : View(context) {
         if (architect.isOpen) architect.draw(canvas, RectF(dp(6f), insetTop + dp(6f), width - dp(6f), height - insetBottom - dp(6f)), overlayColors()[2])
         if (orbits.isOpen) orbits.draw(canvas, RectF(dp(6f), insetTop + dp(6f), width - dp(6f), height - insetBottom - dp(6f)), overlayColors()[2])
         if (bassLab.isOpen) bassLab.draw(canvas, RectF(dp(6f), insetTop + dp(6f), width - dp(6f), height - insetBottom - dp(6f)), overlayColors()[2])
+        if (vibe.isOpen) vibe.draw(canvas, RectF(dp(6f), insetTop + dp(6f), width - dp(6f), height - insetBottom - dp(6f)), overlayColors()[2])
         if (!masterPanel.isOpen) drawMasterButton(canvas)
         if (masterPanel.isOpen) masterPanel.draw(canvas, RectF(dp(6f), insetTop + dp(6f), width - dp(6f), height - insetBottom - dp(6f)), overlayColors()[2])
         drawInfo(canvas)
@@ -1153,7 +1154,7 @@ class PadView(context: Context) : View(context) {
     /** MASTER-Knopf oben: leuchtet, wenn die Kette aktiv ist; Balken zeigt die Limiter-Reduktion. */
     private fun drawMasterButton(canvas: Canvas) {
         val r = masterBtn
-        if (r.width() <= 0f || kbPad >= 0 || edPad >= 0 || instEd.isOpen || slicer.isOpen || station.isOpen || launcher.isOpen || ghost.isOpen || atmos.isOpen || wolf.isOpen || architect.isOpen || orbits.isOpen || bassLab.isOpen || harm.isOpen || euclid.isOpen || songEd.isOpen || songBuilder.isOpen) return
+        if (r.width() <= 0f || kbPad >= 0 || edPad >= 0 || instEd.isOpen || slicer.isOpen || station.isOpen || launcher.isOpen || ghost.isOpen || atmos.isOpen || wolf.isOpen || architect.isOpen || orbits.isOpen || bassLab.isOpen || vibe.isOpen || harm.isOpen || euclid.isOpen || songEd.isOpen || songBuilder.isOpen) return
         val cols = overlayColors()
         val active = MasterBus.anyOn()
         val rr = dp(8f)
@@ -1517,7 +1518,7 @@ class PadView(context: Context) : View(context) {
         strokePaint.strokeCap = Paint.Cap.BUTT
     }
 
-    private fun focusBlocked(): Boolean = kbPad >= 0 || edPad >= 0 || instEd.isOpen || masterPanel.isOpen || slicer.isOpen || station.isOpen || launcher.isOpen || ghost.isOpen || atmos.isOpen || wolf.isOpen || architect.isOpen || orbits.isOpen || bassLab.isOpen || harm.isOpen || euclid.isOpen || songEd.isOpen || songBuilder.isOpen
+    private fun focusBlocked(): Boolean = kbPad >= 0 || edPad >= 0 || instEd.isOpen || masterPanel.isOpen || slicer.isOpen || station.isOpen || launcher.isOpen || ghost.isOpen || atmos.isOpen || wolf.isOpen || architect.isOpen || orbits.isOpen || bassLab.isOpen || vibe.isOpen || harm.isOpen || euclid.isOpen || songEd.isOpen || songBuilder.isOpen
 
     private fun sectionRect(sec: Int, out: RectF) {
         when (sec) {
@@ -4228,6 +4229,11 @@ class PadView(context: Context) : View(context) {
         }
         if (bassLab.isOpen) {
             bassLab.touch(e)
+            invalidate()
+            return true
+        }
+        if (vibe.isOpen) {
+            vibe.touch(e)
             invalidate()
             return true
         }
@@ -9286,6 +9292,11 @@ class PadView(context: Context) : View(context) {
         bl.onEditNotes = { InstState.synCur = InstState.BASS_TRACK; openSynthEditor() }
     }
     fun openBassLab(tab: Int) { closeFocus(); bassLab.open(tab); invalidate() }
+    val vibe = VibePanel(this).also { vp ->
+        vp.onHint = { m -> hint(m) }
+        vp.onEditNotes = { InstState.synCur = Vibe.track; openSynthEditor() }
+    }
+    fun openVibe() { closeFocus(); vibe.open(); invalidate() }
     val harm = HarmonizerPanel(this).also { it.onHint = { m -> hint(m) } }
     fun openHarm() { closeFocus(); harm.open(); invalidate() }
     val euclid = EuclidPanel(this).also { it.onHint = { m -> hint(m) } }

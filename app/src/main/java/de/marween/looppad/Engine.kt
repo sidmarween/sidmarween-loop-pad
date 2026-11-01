@@ -790,13 +790,46 @@ object Engine {
     }
 
     fun newProject() {
+        if (seqPlaying) transportStop()
         restore(Array(PADS) { PadSave(null, false, false) }, 0L, 0f, null)
-        InstState.acidClear()
-        InstState.drumClear()
-        InstState.synClear()
-        InstState.resetBanks()
+        resetInstruments()
         arrClear()
+        songMode = false
         padFxFromJson(null)
+        java.util.Arrays.fill(padInst, -1)
+        java.util.Arrays.fill(padInstMask, 7)
+        swing = 0f
+    }
+
+    /** Alle Instrumente auf Anfang: Noten, Patterns A–D, Klänge, Spuren, Zusatz-Instrumente. */
+    fun resetInstruments() {
+        val st = InstState
+        st.fromJson(null)                       // Noten, Patterns, Spuren leer
+        st.fromJson(org.json.JSONObject())      // alle Regler auf Grundeinstellung
+        for (v in 0 until InstState.DV) {
+            st.drumTune[v] = 0.5f; st.drumDecay[v] = 0.5f; st.drumLevel[v] = 0.8f; st.drumModel[v] = 0; st.drumMute[v] = false
+            java.util.Arrays.fill(st.drumVel[v], 1f)
+        }
+        java.util.Arrays.fill(st.acidVel, 1f)
+        st.drumOn = true; st.drumFx = false; st.drumDrive = 0.15f; st.drumVol = 0.8f; st.drumPreset = -1
+        st.acidOn = true; st.acidLen = 16; st.drumLen = 16
+        st.scaleType = 0; st.scaleRoot = 0; st.scaleSnap = false
+        for ((k, t) in st.synTracks.withIndex()) { t.clear(); t.len = 16; t.on = true; t.fx = true; t.arp = 0; t.transpose = 0; t.soundDefaults(k) }
+        st.synCur = 0
+        java.util.Arrays.fill(st.curPat, 0)
+        // Zusatz-Instrumente aus und zurückgesetzt
+        Euclid.on = false; Euclid.presetIdx = -1; Euclid.density = 0.45f; Euclid.complexity = 0.5f; Euclid.morph = 0.4f; Euclid.level = 0.7f
+        Euclid.poly = false; Euclid.kit = 0; java.util.Arrays.fill(Euclid.laneOn, true)
+        Atmos.on = false; Atmos.presetIdx = -1
+        Harmonizer.on = false; Harmonizer.presetIdx = -1
+        Wolf.on = false; Wolf.srcPad = -1; Wolf.presetIdx = -1; Wolf.hold = false
+        Architect.on = false; Architect.presetIdx = -1
+        for (t in 0 until Architect.T) { java.util.Arrays.fill(Architect.steps[t], 0); java.util.Arrays.fill(Architect.acc[t], false) }
+        Orbits.on = false; Orbits.presetIdx = -1
+        for (s in Orbits.sats) s.active = false
+        for (w in Orbits.wells) w.active = false
+        BassLab.mPreset = -1; BassLab.fPreset = -1
+        GrooveGen.made = false
     }
 
     /** Rendert das Sequenzer-Pattern als nahtlosen Ein-Takt-Loop. */
@@ -1833,6 +1866,10 @@ object Engine {
     @Volatile private var masterLen = 0L
     /** Länge eines Schlags in Frames (0 = kein Tempo). */
     fun beatLen(): Double = if (masterLen > 0L) masterLen / 4.0 else 0.0
+    /** Schlaglänge im Instrumenten-Raster (auch ohne Master-Loop). */
+    fun seqBeatLen(): Double = seqBar() / 4.0
+    /** Position im Schlag-Raster an Frame [w] (ganze Zahl = auf dem Schlag). */
+    fun beatPos(w: Long): Double = (w - seqStart()).toDouble() / max(1.0, seqBeatLen())
 
     // ---------------------------------------------------------------- Master-Tempo
     /** Fest eingestelltes Tempo in BPM (4/4, ein Takt = Raster), 0 = automatisch durch den ersten Loop. */
