@@ -131,6 +131,8 @@ class InstEditor(private val host: View) {
     private var dClip: List<DClip> = emptyList()
     private var clipSpan = 0
 
+    fun soundOpen(v: Boolean) { sound = v }
+
     fun open(k: Int) {
         kind = k
         sel.clear()

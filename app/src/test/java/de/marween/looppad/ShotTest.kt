@@ -92,6 +92,18 @@ class ShotTest {
         pv.setMixView(false)
         shot(pv, w, h, "instpads_${tag}")
         Euclid.on = false
+        // KEYS und BASSLINE im SYNTH-Editor
+        InstState.synCur = InstState.KEYS_TRACK
+        InstPresets.applySynth(InstPresets.SYNTHS.first { it.genre == "E-Piano" })
+        pv.openSynthEditor()
+        shot(pv, w, h, "keys_${tag}")
+        pv.instSoundOpen(true)
+        shot(pv, w, h, "keys_${tag}_sound")
+        pv.instSoundOpen(false)
+        InstState.synCur = InstState.BASS_TRACK
+        InstPresets.applySynth(InstPresets.SYNTHS.first { it.genre == "Bassline" })
+        pv.openSynthEditor()
+        shot(pv, w, h, "bass_${tag}")
     }
 
     @Test @Config(qualifiers = "w360dp-h800dp-xxhdpi") fun normal() { pads("n"); dj("n"); song("n") }

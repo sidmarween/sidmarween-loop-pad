@@ -9483,6 +9483,8 @@ class PadView(context: Context) : View(context) {
     /** „🎹 MEHR“: ATMOS, Harmonizer, Euklid, Chiptune (MainActivity zeigt die Auswahl). */
     var onInstMore: (() -> Unit)? = null
     fun openSynthEditor() { closeFocus(); instSel = 3; instEd.open(3); invalidate() }
+    /** Für Bildschirmfotos: Klang-Bereich des Editors auf/zu. */
+    fun instSoundOpen(v: Boolean) { instEd.soundOpen(v); invalidate() }
 
     private fun instSegAt(x: Float): Int {
         val r = modeRects[1]
