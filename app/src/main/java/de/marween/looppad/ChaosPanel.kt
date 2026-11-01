@@ -31,7 +31,7 @@ class ChaosPanel(private val host: View) {
     private val pads = Array(16) { RectF() }
     private val res = Array(8) { RectF() }
     private val sliders = Array(4) { RectF() }
-    private val SL = arrayOf("AUDIO-MARROW", "TON ↔ HOLZ ↔ METALL", "SCRATCH-INTENSITY", "STUTTER-MIX")
+    private val SL = arrayOf("AUDIO-MARROW", "MATERIAL", "SCRATCH-INTENSITY", "STUTTER-MIX")
     private val portal = RectF()
     private var drag = -1
     private var lastX = 0f

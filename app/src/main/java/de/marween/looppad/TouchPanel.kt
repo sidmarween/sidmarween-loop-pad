@@ -116,7 +116,7 @@ class TouchPanel(private val host: View) {
         // Optionen je Modus
         val ol = Array(5) { "" }
         when (mode) {
-            TouchLab.MORPH -> { ol[0] = "Ecken antippen = Klang"; }
+            TouchLab.MORPH -> {}
             TouchLab.TERRAIN -> { ol[0] = TouchLab.TERRAINS[TouchLab.terrain]; ol[1] = "ORBIT ${(TouchLab.orbit * 100).toInt()}" }
             TouchLab.SPECTRAL -> { ol[0] = if (TouchLab.specPlay) "■ STOP" else "▶ PLAY"; ol[1] = "${TouchLab.specBars} TAKT" + if (TouchLab.specBars > 1) "E" else ""; ol[2] = if (TouchLab.specScale) "TONLEITER" else "FREI"; ol[3] = if (erase) "⌫ RADIER" else "✏ MALEN"; ol[4] = "🎲 / LEER" }
             TouchLab.GESTURE -> { ol[0] = "KLANG: " + TouchLab.G_SOUNDS[TouchLab.gSound] }
@@ -225,7 +225,7 @@ class TouchPanel(private val host: View) {
         fill.color = Color.WHITE
         c.drawCircle(px, py, dp(6f), fill)
         text.color = Color.WHITE; text.textSize = dp(10f)
-        c.drawText("← → Klangfarbe · ↑ ↓ Tonhöhe · Farbe = Höhe (Intensität)", surf.centerX(), surf.bottom - dp(8f), text)
+        c.drawText(fitLabel(text, "← → Klangfarbe · ↑ ↓ Tonhöhe · Farbe = Höhe (Intensität)", surf.width() - dp(10f), dp(10f), dp(6.5f)), surf.centerX(), surf.bottom - dp(8f), text)
     }
 
     // ---------------------------------------------------------------- SPECTRAL
@@ -290,7 +290,7 @@ class TouchPanel(private val host: View) {
             fill.color = Color.WHITE; c.drawCircle(f.x, f.y, dp(6f), fill)
         }
         text.color = Color.argb(170, 255, 255, 255); text.textSize = dp(10f)
-        c.drawText("← → Ton · ↑ hell · kreisen = Vibrato · schnell hoch/runter = Bend · 2–4 Finger = Akkord", surf.centerX(), surf.bottom - dp(8f), text)
+        c.drawText(fitLabel(text, "← → Ton · ↑ hell · kreisen = Vibrato · schnell hoch/runter = Bend · 2–4 Finger = Akkord", surf.width() - dp(10f), dp(10f), dp(6.5f)), surf.centerX(), surf.bottom - dp(8f), text)
         text.textSize = dp(13f)
         if (TouchLab.gMod > 0.05f) c.drawText("〰 Modulation ${(TouchLab.gMod * 100).toInt()} %", surf.centerX(), surf.top + dp(20f), text)
     }
@@ -355,12 +355,12 @@ class TouchPanel(private val host: View) {
             val (ix, iy) = inPort(i)
             fill.color = if (Modular.cables.any { it[1] == i }) Color.rgb(255, 210, 90) else Color.rgb(90, 90, 110)
             c.drawCircle(ix, iy, dp(5.5f), fill)
-            text.color = Color.argb(200, 255, 255, 255); text.textSize = dp(7f); text.textAlign = Paint.Align.RIGHT
-            c.drawText(Modular.INPUTS[i].name, ix - dp(7f), iy + dp(2.5f), text)
+            text.color = Color.argb(200, 255, 255, 255); text.textSize = dp(7f); text.textAlign = Paint.Align.LEFT
+            c.drawText(Modular.INPUTS[i].name, ix + dp(7f), iy + dp(2.5f), text)
             text.textAlign = Paint.Align.CENTER
         }
         text.color = Color.argb(150, 255, 255, 255); text.textSize = dp(9.5f)
-        c.drawText("● Ausgang zu ● Eingang ziehen = Kabel · Eingang antippen = abziehen · Modulname ziehen = verschieben", surf.centerX(), surf.bottom - dp(6f), text)
+        c.drawText(fitLabel(text, "● Ausgang → ● Eingang ziehen = Kabel · Eingang antippen = abziehen · Modulname ziehen = verschieben", surf.width() - dp(10f), dp(9.5f), dp(6f)), surf.centerX(), surf.bottom - dp(6f), text)
     }
 
     // ---------------------------------------------------------------- Touch
