@@ -1956,7 +1956,8 @@ class MainActivity : Activity() {
                 Item("🎸 BASSLINE · zweiter Bass-Sequenzer (FM, Reese, Sub, Wobble)") { synthTrack(InstState.BASS_TRACK, true) },
                 Item("🌋 MAGMA · flüssiger Monster-Bass (Viskosität, Krater, Spucke)") { pad(); pads.openBassLab(0) },
                 Item("🎸 FUNK-SLAP · Slap & Pop, Auto-Wah, sprechender Bass") { pad(); pads.openBassLab(1) },
-                Item("🎹 ORGAN-BASS · Garage/Deep-House-Orgelbass (Show-Me-Love-Stil)") { pad(); pads.openBassLab(2) }
+                Item("🎹 ORGAN-BASS · Garage/Deep-House-Orgelbass (Show-Me-Love-Stil)") { pad(); pads.openBassLab(2) },
+                Item("🎛 LADDER · Moog-artiger Analog-Bass & -Lead (3 Oszillatoren, 24-dB-Filter)") { pad(); pads.openPerf(5); hint("🎛 Vorlage wählen, Tasten spielen · Wellenform/Fußlage antippen, Regler ziehen · ♪ LINIE schreibt eine Bassline") }
             ),
             "🎹 TASTEN & SYNTHS" to listOf(
                 Item("🎼 CHORD-PAD · Akkorde der Tonart antippen, Bass läuft mit") { pad(); pads.openPerf(1); hint("🎼 Akkord-Tasten antippen · ○ FOLGE AUFNEHMEN → 📝 IN SPUREN schreibt sie in KEYS und BASSLINE") },

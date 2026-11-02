@@ -32,6 +32,8 @@ object ExtrasStore {
         Harmonizer to arrayOf("source", "x", "y", "level", "space", "width", "octave", "leadTune", "muteOrig", "autoMode", "presetIdx", "midiIn"),
         VocalChop to arrayOf("vol", "gate", "reverse", "stutter", "pitch", "release", "tone", "chopMode", "patIdx"),
         MixMorph to arrayOf("autoBars", "presetIdx"),
+        Ladder to arrayOf("oscWave", "oscRange", "oscLevel", "detune2", "detune3", "noise", "drive", "cutoff", "emphasis", "contour",
+            "fAtk", "fDec", "fSus", "aAtk", "aDec", "aSus", "release", "glide", "keyTrack", "track", "presetIdx"),
     )
 
     private fun key(o: Any) = o.javaClass.simpleName

@@ -277,7 +277,7 @@ object InstState {
     var synCutMod: Float get() = syn.cutMod; set(v) { syn.cutMod = v }
     val synWaveNames = arrayOf("SAW", "SQR", "SUPER", "PLUCK", "GLOCKE", "NES ▢", "NES △", "NOISE", "SID", "GB-WAVE", "FM-CHIP",
         "PIANO", "E-PIANO", "ORGEL", "SYNC-LEAD", "REESE", "SUB-BASS", "FM-BASS", "WOBBLE", "SAITE",
-        "WT ANALOG", "WT VOCAL", "WT GROWL", "WT DIGITAL", "WT SAMPLE", "MAGMA", "FUNK-SLAP", "VIBE", "ORGAN-BASS", "ORCH-HIT", "BRASS", "STRINGS", "HOUSE-PIANO", "LORE-PAD", "CHOIR", "M1-BELL")
+        "WT ANALOG", "WT VOCAL", "WT GROWL", "WT DIGITAL", "WT SAMPLE", "MAGMA", "FUNK-SLAP", "VIBE", "ORGAN-BASS", "ORCH-HIT", "BRASS", "STRINGS", "HOUSE-PIANO", "LORE-PAD", "CHOIR", "M1-BELL", "LADDER (Moog-Art)")
     fun synIsWt(w: Int) = w in 20..24
     /** Chiptune-Klänge (Klang-Nr. 5–10): Akkorde laufen als schnelles Chip-Arpeggio, Lautstärke in 16 Stufen. */
     fun synIsChip(w: Int) = w in 5..10
@@ -288,6 +288,7 @@ object InstState {
         Triple("Tasten", 13, "Orgel (Zugriegel) – CUTOFF = Register, VERST. = Leslie"),
         Triple("Tasten", 4, "FM-Glocke"),
         Triple("Tasten", 27, "🏠 VIBE – House-Stabs, Drift, Pump, Acid-Modus (Vibe-Synth-Feld)"),
+        Triple("Bass", 36, "🎛 LADDER – Moog-artiger Analog-Synth: 3 Oszillatoren, 24-dB-Filter, eigenes Bedienfeld (Menü › Instrumente)"),
         Triple("M1 (90er)", 32, "🎹 HOUSE-PIANO – das helle 90er-House-Klavier: harter Anschlag, kurzer Ton, leichter Chorus"),
         Triple("M1 (90er)", 33, "🌌 LORE-PAD – schwebende Fläche mit Glocken-Anschlag · ATTACK = Einblenden"),
         Triple("M1 (90er)", 34, "🎤 CHOIR – „Aah“-Chor mit Chorus · VERST. = Breite, CUTOFF = Vokal (Uuh … Aah)"),
@@ -331,6 +332,7 @@ object InstState {
             18 -> { t.cut = 0.25f; t.res = 0.55f; t.env = 0.7f; t.atk = 0f; t.rel = 0.15f; t.detune = 0.3f }
             19 -> { t.cut = 0.6f; t.res = 0f; t.env = 0f; t.atk = 0f; t.rel = 0.4f; t.detune = 0.6f }
             in 20..24 -> { t.cut = 0.75f; t.res = 0.15f; t.env = 0.35f; t.atk = 0.01f; t.rel = 0.3f; t.detune = 0.2f }
+            36 -> { t.mono = true; t.glide = Ladder.glide; t.atk = 0f }
             32 -> { t.cut = 0.8f; t.res = 0f; t.env = 0f; t.atk = 0f; t.rel = 0.2f; t.detune = 0.35f }
             33 -> { t.cut = 0.55f; t.res = 0.1f; t.env = 0.2f; t.atk = 0.35f; t.rel = 0.6f; t.detune = 0.4f }
             34 -> { t.cut = 0.6f; t.res = 0f; t.env = 0f; t.atk = 0.3f; t.rel = 0.5f; t.detune = 0.45f }
@@ -1735,7 +1737,8 @@ class PolySynth(private val sr: Int, private val t: InstState.SynTrack) {
                 for (k in 0 until n) { val wk = 2 * PI * v.inc[k]; v.rk[k] = 2 * kotlin.math.cos(wk); v.rs1[k] = 0.0; v.rs2[k] = -kotlin.math.sin(wk) }
                 v.hn = 0.35f * vel * (0.4f + bright)
             }
-            33 -> { v.m[0] = 1f; for (k in 0 until 4) v.ph[k] = Math.random() }   // LORE: Glocken-Anschlag, freie Phasen
+            33 -> { v.m[0] = 1f; for (k in 0 until 4) v.ph[k] = Math.random() }
+            36 -> { v.m[0] = 0f; v.m[1] = 0f; v.m[2] = 0f; v.m[3] = 0f; v.c[0] = 0f }   // LADDER: Hüllkurven neu (Filter-Zustand bleibt – klingt wie das Original)   // LORE: Glocken-Anschlag, freie Phasen
             34 -> { java.util.Arrays.fill(v.m, 0f); for (k in 0 until 3) v.ph[k] = Math.random() }
             35 -> { v.m[0] = 1f; v.m[1] = 1f; v.ph[0] = 0.0; v.ph[1] = 0.0; v.ph[2] = 0.0 }
             28 -> {
@@ -2098,6 +2101,70 @@ class PolySynth(private val sr: Int, private val t: InstState.SynTrack) {
         return fastTanh((y * (0.8 + 1.6 * v.vel * v.fenv)).toFloat()) * 0.55
     }
 
+    // LADDER: Hüllkurven-Koeffizienten je Block
+    private var ladFa = 0.01f; private var ladFd = 0.999f; private var ladFs = 0.3f
+    private var ladAa = 0.01f; private var ladAd = 0.999f; private var ladAs = 0.8f; private var ladRel = 0.999f
+
+    private fun pulse(v: Voice, k: Int, f: Double, pw: Double): Double {
+        val dt = f / sr
+        v.ph[k] += dt; if (v.ph[k] >= 1.0) v.ph[k] -= 1.0
+        val p = v.ph[k]
+        var y = if (p < pw) 1.0 else -1.0
+        y += blep(p, dt); y -= blep((p - pw + 1.0) % 1.0, dt)
+        return y - (2 * pw - 1)
+    }
+
+    /** 🎛 LADDER (Moog-Art): 3 Oszillatoren → Mixer mit Übersteuerung → 24-dB-Ladder (sättigende Stufen) → VCA. */
+    private fun ladder(v: Voice, f: Double): Double {
+        val lp = Ladder
+        val m = v.m
+        // Hüllkurven (Filter m0/m1, Lautstärke m2/m3); Release für beide
+        if (v.stage == 2) {
+            m[0] *= ladRel; m[2] *= ladRel
+            if (m[2] < 1e-4f) { v.env = 0f; return 0.0 }
+        } else {
+            if (m[1] == 0f) { m[0] += ladFa; if (m[0] >= 1f) { m[0] = 1f; m[1] = 1f } } else m[0] = ladFs + (m[0] - ladFs) * ladFd
+            if (m[3] == 0f) { m[2] += ladAa; if (m[2] >= 1f) { m[2] = 1f; m[3] = 1f } } else m[2] = ladAs + (m[2] - ladAs) * ladAd
+        }
+        // Oszillatoren
+        var mix = 0.0
+        for (k in 0 until 3) {
+            val lv = lp.oscLevel[k]
+            if (lv < 0.01f) { continue }
+            var fk = f * (1 shl lp.oscRange[k].coerceIn(0, 3)) * 0.5
+            if (k == 1) fk *= 1.0 + lp.detune2 * 0.0293
+            if (k == 2) fk *= 1.0 - lp.detune3 * 0.0293
+            val o = when (lp.oscWave[k]) {
+                0 -> { val dt = fk / sr; v.ph[k] += dt; if (v.ph[k] >= 1.0) v.ph[k] -= 1.0; val p = v.ph[k]; if (p < 0.5) 4 * p - 1 else 3 - 4 * p }
+                1 -> saw(v, k, fk)
+                2 -> pulse(v, k, fk, 0.5)
+                3 -> pulse(v, k, fk, 0.28)
+                else -> pulse(v, k, fk, 0.1)
+            }
+            mix += o * lv
+        }
+        if (lp.noise > 0.01f) mix += rnd(v) * lp.noise
+        // Mixer-Übersteuerung (der „fette“ Trick)
+        val x = fastTanh((mix * (0.35 + lp.drive * 1.6)).toFloat())
+        // Cutoff in Steuer-Rate: 20 Hz … 20 kHz, Kontur bis +5 Oktaven, Tastatur-Verfolgung
+        if ((v.n and 7L) == 1L || v.c[0] == 0f) {
+            val oct = lp.cutoff * 9.5 + lp.contour * 5.0 * m[0]
+            val kt = Math.pow(f / 261.6, lp.keyTrack.toDouble())
+            val fc = (30.0 * Math.pow(2.0, oct) * kt).coerceIn(20.0, sr * 0.45)
+            v.c[0] = (1 - kotlin.math.exp(-2 * PI * fc / sr)).toFloat()
+        }
+        val g = v.c[0]
+        val k = lp.emphasis * 4.15f
+        val u = fastTanh(x - k * m[7])
+        val t4 = fastTanh(m[4]); val t5 = fastTanh(m[5]); val t6 = fastTanh(m[6])
+        m[4] += g * (u - t4)
+        m[5] += g * (t4 - t5)
+        m[6] += g * (t5 - t6)
+        m[7] += g * (t6 - fastTanh(m[7]))
+        val y = m[7] * (1f + lp.emphasis * 0.7f)
+        return (y * m[2] * 4.2f).toDouble()
+    }
+
     private val kLoreBell = exp(-1.0 / (0.6 * sr)).toFloat()
     private val kBellIdx = exp(-1.0 / (0.25 * sr)).toFloat()
     private val kBellHi = exp(-1.0 / (0.08 * sr)).toFloat()
@@ -2269,15 +2336,21 @@ class PolySynth(private val sr: Int, private val t: InstState.SynTrack) {
         // Regler einmal je Block lesen (statt je Probe und Stimme)
         val cutN = st.cutNow(); val envA = st.env; val cutM = st.cutMod; val resA = st.res
         val atk = (1.0 / ((0.002 + st.atk * st.atk * 2.5) * sr)).toFloat()
-        val relC = exp(-1.0 / ((0.02 + st.rel * st.rel * 3.0) * sr)).toFloat()
+        val relC = if (wave == Ladder.WAVE) 1f else exp(-1.0 / ((0.02 + st.rel * st.rel * 3.0) * sr)).toFloat()
+        if (wave == Ladder.WAVE) {
+            val lp = Ladder
+            ladFa = (1.0 / (lp.secs(lp.fAtk) * sr)).toFloat(); ladFd = exp(-1.0 / (lp.secs(lp.fDec) * sr)).toFloat(); ladFs = lp.fSus
+            ladAa = (1.0 / (lp.secs(lp.aAtk) * sr)).toFloat(); ladAd = exp(-1.0 / (lp.secs(lp.aDec) * sr)).toFloat(); ladAs = lp.aSus
+            ladRel = exp(-1.0 / (lp.secs(lp.release) * sr)).toFloat()
+        }
         val decC = exp(-1.0 / ((if (wave == 3) 0.25 else if (wave == 29) 0.3 else if (wave == 35) 0.9 else if (wave == OrganBass.WAVE) 0.03 + OrganBass.decay * OrganBass.decay * 0.9 else 0.6) * sr)).toFloat()
-        val sus = when (wave) { 3, 4, 29, 35 -> 0f; 32 -> 1f; 33, 34 -> 0.95f; 30 -> 0.85f; 31 -> 0.9f; 11, 12, 13, 16, 19, 26 -> 1f; 17 -> 0.75f; 25 -> 0.92f; 28 -> if (OrganBass.legato) 0.45f else 0f; else -> 0.8f }
+        val sus = when (wave) { 3, 4, 29, 35 -> 0f; 32, 36 -> 1f; 33, 34 -> 0.95f; 30 -> 0.85f; 31 -> 0.9f; 11, 12, 13, 16, 19, 26 -> 1f; 17 -> 0.75f; 25 -> 0.92f; 28 -> if (OrganBass.legato) 0.45f else 0f; else -> 0.8f }
         val fDec = exp(-1.0 / ((if (wave == 3) 0.12 else 0.35) * sr)).toFloat()
         val q = 1f - resA * 0.92f
         val vol = st.volNow() * 0.32f
         val spread = st.detune
         val chip = InstState.synIsChip(wave)
-        val noFilter = wave == 4 || wave == 10 || wave in 11..13 || wave == 16 || wave == 17 || wave == 19 || wave == 25 || wave == 26 || wave == 27 || wave == 28 || wave == 32 || wave == 34 || wave == 35
+        val noFilter = wave == 4 || wave == 10 || wave in 11..13 || wave == 16 || wave == 17 || wave == 19 || wave == 25 || wave == 26 || wave == 27 || wave == 28 || wave == 32 || wave == 34 || wave == 35 || wave == 36
         // Bass-Labor
         val bl = BassLab
         val kick0 = if (wave == 25) bl.kick else 0f
@@ -2427,6 +2500,7 @@ class PolySynth(private val sr: Int, private val t: InstState.SynTrack) {
                     33 -> o = lore(v, f, spread)
                     34 -> o = choir(v, f, spread, cutN)
                     35 -> o = m1Bell(v, f)
+                    36 -> o = ladder(v, f)
                     12 -> o = ePiano(v, f, cutN, spread)
                     13 -> o = organ(v, f, spread, lesV, lesA, orgNorm, envA, clickHd)
                     14 -> {

@@ -43,6 +43,9 @@ Fünf Touch-Instrumente:
 • SPECTRAL PAINTER – Klang ins Spektrum malen, läuft im Takt.
 • GESTEN – Kreisen = Modulation, Wischen = Helligkeit, mehrere Finger = Akkord.
 • TOUCH MODULAR – Module mit Kabeln verbinden (Vorlagen-Patches).""",
+        "🎛 LADDER (Moog-Art)" to """
+Monofoner Analog-Synth im Stil der großen 70er-Klassiker: drei Oszillatoren (Wellenform und Fußlage antippen, Pegel und Verstimmung ziehen), Rauschen, DRIVE übersteuert den Mixer (macht fett), 24-dB-Ladder-Filter – EMPHASIS bis zum Pfeifen (Selbstoszillation), KONTUR = wie weit die Filter-Hüllkurve öffnet.
+Zwei Hüllkurven (Filter F-…, Lautstärke A-…) mit gemeinsamem RELEASE, GLIDE wie am Original. Spielt auf BASSLINE (umschaltbar). 8 Vorlagen von Klassik-Bass bis Prog-Lead, ♪ LINIE schreibt eine Bassline.""",
         "🔊 BASS-LABOR: MAGMA, FUNK, ORGAN-BASS" to """
 MAGMA: zäher, glühender Bass – Viskosität, Krater-Filter, Spucke (Glitches).
 FUNK-SLAP: Slap (Daumen), Pop (Finger), Ghost-Notes; Auto-Wah und sprechender Formant.

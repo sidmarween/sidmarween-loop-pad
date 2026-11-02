@@ -760,3 +760,174 @@ class MixMorphPanel(host: View) : PerfPanel(host) {
         }
     }
 }
+
+// ================================================================ 🎛 LADDER-SYNTH (Moog-Art)
+class LadderPanel(host: View) : PerfPanel(host) {
+    private val bPre = RectF(); private val bTrack = RectF(); private val bLine = RectF(); private val bPlay = RectF()
+    private val oscW = Array(3) { RectF() }; private val oscR = Array(3) { RectF() }; private val oscL = Array(3) { RectF() }; private val oscD = Array(3) { RectF() }
+    private val sl = Array(12) { RectF() }
+    private val SL = arrayOf("CUTOFF", "EMPHASIS", "KONTUR", "DRIVE", "F-ATTACK", "F-DECAY", "F-SUSTAIN", "GLIDE", "A-ATTACK", "A-DECAY", "A-SUSTAIN", "RELEASE")
+    private val keys = Array(13) { RectF() }
+    private val bOctDn = RectF(); private val bOctUp = RectF()
+    private var kOct = 0
+    private val held = HashMap<Int, Int>()
+    private var dragSl = -1   // 0..11 Regler, 20+k Pegel OSC k, 30+k Verstimmung/Rauschen
+    private var dragX = 0f
+    private val NOTE = arrayOf("C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "H", "C'")
+
+    override fun open() { super.open(); Ladder.attach(); if (Ladder.presetIdx < 0 && !trk().hasNotes()) { Ladder.applyPreset(0) } }
+    override fun close() { super.close(); for ((id, _) in held) Engine.synTrackLive(Ladder.track, false, 0, 0f, 8800 + id); held.clear() }
+    private fun trk() = InstState.synTracks[Ladder.track.coerceIn(0, InstState.SYN_TRACKS - 1)]
+
+    private fun get(i: Int): Float = with(Ladder) { when (i) { 0 -> cutoff; 1 -> emphasis; 2 -> contour; 3 -> drive; 4 -> fAtk; 5 -> fDec; 6 -> fSus; 7 -> glide; 8 -> aAtk; 9 -> aDec; 10 -> aSus; else -> release } }
+    private fun set(i: Int, v0: Float) {
+        val v = v0.coerceIn(0f, 1f)
+        with(Ladder) { when (i) { 0 -> cutoff = v; 1 -> emphasis = v; 2 -> contour = v; 3 -> drive = v; 4 -> fAtk = v; 5 -> fDec = v; 6 -> fSus = v; 7 -> { glide = v; trk().glide = v }; 8 -> aAtk = v; 9 -> aDec = v; 10 -> aSus = v; else -> release = v } }
+        Ladder.presetIdx = -1
+    }
+    private fun value(i: Int): String {
+        val v = get(i)
+        return when (i) {
+            0 -> { val hz = 30.0 * Math.pow(2.0, v * 9.5); if (hz >= 1000) String.format(java.util.Locale.GERMANY, "%.1f kHz", hz / 1000) else "${hz.toInt()} Hz" }
+            4, 5, 8, 9, 11 -> { val s = Ladder.secs(v); if (s >= 1) String.format(java.util.Locale.GERMANY, "%.1f s", s) else "${(s * 1000).toInt()} ms" }
+            7 -> if (v < 0.01f) "aus" else "${((0.004 + v * v * 0.4) * 1000).toInt()} ms"
+            else -> "${(v * 100).toInt()}"
+        }
+    }
+
+    fun draw(c: Canvas, area: RectF, acc: Int) {
+        val col = Color.rgb(255, 170, 80)
+        val L = Ladder
+        frame(c, area, "🎛 LADDER (Moog-Art)", col, Color.rgb(22, 16, 10), acc,
+            "spielt auf ${InstState.synName(L.track)} · MONO + GLIDE · " + (if (L.presetIdx >= 0) L.PRESETS[L.presetIdx].name else "eigener Klang"))
+        val pad = dp(10f); val g = dp(5f)
+        val l = box.left + pad; val r = box.right - pad
+        var y = bClose.bottom + dp(20f)
+        bPre.set(l, y, l + (r - l) * 0.5f - g / 2, y + dp(36f))
+        row(arrayOf(bTrack, bLine, bPlay), l + (r - l) * 0.5f + g / 2, r, y, dp(36f), g)
+        btn(c, bPre, "◀ " + (if (L.presetIdx >= 0) L.PRESETS[L.presetIdx].name else "VORLAGE") + " ▶", L.presetIdx >= 0, col)
+        btn(c, bTrack, InstState.synName(L.track), false, col)
+        btn(c, bLine, "♪ LINIE", false, col)
+        val run = trk().on && Engine.seqPlaying
+        btn(c, bPlay, if (run) "■" else "▶", run, Color.rgb(140, 230, 170))
+        y += dp(36f) + dp(8f)
+        // Oszillatoren: Wellenform · Fußlage · Pegel · Verstimmung (OSC 1: Rauschen)
+        val oh = dp(32f)
+        for (k in 0 until 3) {
+            val yy = y + k * (oh + g)
+            val w1 = dp(58f); val w2 = dp(42f)
+            oscW[k].set(l, yy, l + w1, yy + oh); oscR[k].set(oscW[k].right + g, yy, oscW[k].right + g + w2, yy + oh)
+            val rest = r - oscR[k].right - g
+            oscL[k].set(oscR[k].right + g, yy, oscR[k].right + g + (rest - g) / 2, yy + oh)
+            oscD[k].set(oscL[k].right + g, yy, r, yy + oh)
+            btn(c, oscW[k], "${k + 1}·" + L.WAVE_NAMES[L.oscWave[k]], true, col, 11f)
+            btn(c, oscR[k], L.RANGE_NAMES[L.oscRange[k]], false, col, 11f)
+            slider(c, oscL[k], "PEGEL", L.oscLevel[k], "${(L.oscLevel[k] * 100).toInt()}", col)
+            when (k) {
+                0 -> slider(c, oscD[k], "RAUSCHEN", L.noise, "${(L.noise * 100).toInt()}", col)
+                1 -> slider(c, oscD[k], "VERST. ↑", L.detune2, "+${(L.detune2 * 50).toInt()} ct", col)
+                else -> slider(c, oscD[k], "VERST. ↓", L.detune3, "−${(L.detune3 * 50).toInt()} ct", col)
+            }
+        }
+        y += 3 * (oh + g) + dp(6f)
+        val sh = dp(31f)
+        val sw = (r - l - g) / 2
+        for (i in 0 until 12) {
+            val rr = i / 2; val cc = i % 2
+            sl[i].set(l + cc * (sw + g), y + rr * (sh + g), l + cc * (sw + g) + sw, y + rr * (sh + g) + sh)
+            slider(c, sl[i], SL[i], get(i), value(i), if (i < 4) col else if (i < 8) Color.rgb(255, 210, 120) else Color.rgb(200, 220, 255))
+        }
+        y = sl[11].bottom + dp(8f)
+        // Tastatur
+        val kh = box.bottom - pad - y
+        val ob = dp(34f)
+        bOctDn.set(l, y, l + ob, y + kh); bOctUp.set(r - ob, y, r, y + kh)
+        btn(c, bOctDn, "−", false, col, 14f); btn(c, bOctUp, "+", false, col, 14f)
+        val kl = bOctDn.right + g; val kr = bOctUp.left - g
+        val kw = (kr - kl - 12 * dp(2f)) / 13
+        for (k in 0 until 13) {
+            keys[k].set(kl + k * (kw + dp(2f)), y, kl + k * (kw + dp(2f)) + kw, y + kh)
+            val black = k % 12 in intArrayOf(1, 3, 6, 8, 10)
+            val on = held.values.contains(k)
+            fill.color = if (on) col else if (black) Color.rgb(40, 32, 26) else Color.rgb(230, 222, 210)
+            c.drawRoundRect(keys[k], dp(5f), dp(5f), fill)
+            text.color = if (on || !black) Color.BLACK else Color.WHITE
+            text.textSize = min(dp(9.5f), kw * 0.42f)
+            c.drawText(NOTE[k], keys[k].centerX(), keys[k].bottom - dp(6f), text)
+        }
+        text.textSize = dp(8.5f); text.color = Color.argb(150, 255, 255, 255)
+        c.drawText("Oktave " + (if (kOct > 0) "+" else "") + kOct, (l + r) / 2, y - dp(1.5f), text)
+        host.postInvalidateOnAnimation()
+    }
+
+    fun touch(e: MotionEvent) {
+        val i = e.actionIndex
+        val id = e.getPointerId(i)
+        val x = e.getX(i); val y = e.getY(i)
+        val L = Ladder
+        when (e.actionMasked) {
+            MotionEvent.ACTION_DOWN, MotionEvent.ACTION_POINTER_DOWN -> {
+                val k = keys.indexOfFirst { it.contains(x, y) }
+                if (k >= 0) {
+                    L.attach()
+                    held[id] = k
+                    Engine.synTrackLive(L.track, true, kOct * 12 + k, 0.9f, 8800 + id)
+                    return
+                }
+                if (e.actionMasked != MotionEvent.ACTION_DOWN) return
+                for (s in 0 until 12) if (sl[s].contains(x, y)) { dragSl = s; dragX = x; return }
+                for (q in 0 until 3) {
+                    if (oscL[q].contains(x, y)) { dragSl = 20 + q; dragX = x; return }
+                    if (oscD[q].contains(x, y)) { dragSl = 30 + q; dragX = x; return }
+                }
+                haptic()
+                val wq = oscW.indexOfFirst { it.contains(x, y) }
+                if (wq >= 0) { L.oscWave[wq] = (L.oscWave[wq] + 1) % L.WAVE_NAMES.size; L.presetIdx = -1; return }
+                val rq = oscR.indexOfFirst { it.contains(x, y) }
+                if (rq >= 0) { L.oscRange[rq] = (L.oscRange[rq] + 1) % L.RANGE_NAMES.size; L.presetIdx = -1; return }
+                when {
+                    bClose.contains(x, y) -> close()
+                    bPre.contains(x, y) -> {
+                        L.applyPreset(if (L.presetIdx < 0) 0 else if (x < bPre.centerX()) L.presetIdx - 1 else L.presetIdx + 1)
+                        onHint?.invoke("🎛 ${L.PRESETS[L.presetIdx].name} – Tasten unten spielen, ♪ LINIE schreibt eine Linie, ▶ startet")
+                    }
+                    bTrack.contains(x, y) -> {
+                        L.track = when (L.track) { InstState.BASS_TRACK -> InstState.KEYS_TRACK; InstState.KEYS_TRACK -> 0; 0 -> 1; 1 -> 2; else -> InstState.BASS_TRACK }
+                        L.attach()
+                        onHint?.invoke("Ladder spielt jetzt auf ${InstState.synName(L.track)}")
+                    }
+                    bLine.contains(x, y) -> {
+                        Engine.pushPatternUndo("Ladder-Linie")
+                        val old = InstState.synCur
+                        InstState.synCur = L.track
+                        if (L.track == InstState.BASS_TRACK || (L.presetIdx >= 0 && L.PRESETS[L.presetIdx].bass)) InstState.bassRandom() else InstState.synRandom()
+                        InstState.synCur = old
+                        L.attach()
+                        if (!Engine.seqPlaying) Engine.transportPlay(false)
+                        onHint?.invoke("♪ Neue Linie auf ${InstState.synName(L.track)} – nochmal tippen für eine andere")
+                    }
+                    bPlay.contains(x, y) -> {
+                        val t = trk()
+                        if (t.on && Engine.seqPlaying) Engine.transportStop() else { L.attach(); if (!t.hasNotes()) { val old = InstState.synCur; InstState.synCur = L.track; InstState.bassRandom(); InstState.synCur = old }; if (!Engine.seqPlaying) Engine.transportPlay(false) }
+                    }
+                    bOctDn.contains(x, y) -> kOct = (kOct - 1).coerceAtLeast(-2)
+                    bOctUp.contains(x, y) -> kOct = (kOct + 1).coerceAtMost(2)
+                }
+            }
+            MotionEvent.ACTION_MOVE -> if (dragSl >= 0) {
+                val px = e.getX(0)
+                val ds = dragSl
+                when {
+                    ds < 12 -> set(ds, get(ds) + (px - dragX) / sl[ds].width())
+                    ds < 30 -> { val q = ds - 20; L.oscLevel[q] = (L.oscLevel[q] + (px - dragX) / oscL[q].width()).coerceIn(0f, 1f); L.presetIdx = -1 }
+                    else -> { val q = ds - 30; val dv = (px - dragX) / oscD[q].width(); when (q) { 0 -> L.noise = (L.noise + dv).coerceIn(0f, 1f); 1 -> L.detune2 = (L.detune2 + dv).coerceIn(0f, 1f); else -> L.detune3 = (L.detune3 + dv).coerceIn(0f, 1f) }; L.presetIdx = -1 }
+                }
+                dragX = px
+            }
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_POINTER_UP, MotionEvent.ACTION_CANCEL -> {
+                if (held.remove(id) != null) Engine.synTrackLive(L.track, false, 0, 0f, 8800 + id)
+                if (e.actionMasked != MotionEvent.ACTION_POINTER_UP) dragSl = -1
+            }
+        }
+    }
+}

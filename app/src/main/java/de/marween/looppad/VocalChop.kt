@@ -273,7 +273,6 @@ object VocalChop {
         val relC = exp(-1.0 / ((0.01 + release * 0.45) * sr)).toFloat()
         val stLen = if (stutter > 0) max(64.0, (if (beatLen > 1) beatLen else sr / 2.0) / (1 shl stutter)).toLong() else 0L
         val g = (2 * sin(PI * min(sr / 2.3, 600.0 * 2.0.pow(tone * 5.0)) / sr)).toFloat().coerceAtMost(0.99f)
-        val d = s.data
         var pk = 0f
         val it = voices.iterator()
         while (it.hasNext()) {
@@ -288,6 +287,9 @@ object VocalChop {
                 val ip = v.pos.toInt()
                 if (ip < v.a || ip >= v.b - 1 || (v.rel && v.env < 1e-4f)) { dead = true; break }
                 val fr = (v.pos - ip).toFloat()
+                // Daten der Quelle, aus der die Stimme gestartet wurde (Quellenwechsel während ein Chop klingt → sonst Absturz)
+                val d = v.s.data
+                if (ip + 1 >= d.size) { dead = true; break }
                 var x = d[ip] + (d[ip + 1] - d[ip]) * fr
                 // Rand-Blende gegen Knackser am Chop-Ende
                 val toEnd = (if (v.rev) v.pos - v.a else v.b - 1 - v.pos) / v.inc
