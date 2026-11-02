@@ -242,7 +242,7 @@ object Architect {
     private val lastStep = LongArray(T) { Long.MIN_VALUE }
     private var lastG = Long.MIN_VALUE
 
-    fun active(): Boolean = on || voices.any { it.active }
+    fun active(): Boolean = on || previewQ.isNotEmpty() || voices.any { it.active }
 
     /** [ms]/[ml] = Raster-Start und Taktlänge (Ausgabe-Proben), [w] = Ausgabe-Frame des Blocks. */
     fun render(oL: FloatArray, oR: FloatArray, n: Int, sr: Int, w: Long, ms: Long, ml: Long) {

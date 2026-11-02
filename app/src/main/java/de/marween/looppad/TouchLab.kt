@@ -197,7 +197,8 @@ object TouchLab {
     // ---------------------------------------------------------------- Delay (SPACE)
     private var dl = FloatArray(0); private var dr = FloatArray(0); private var dw = 0
 
-    fun active(): Boolean = voices.any { it.active } || (mode == SPECTRAL && specPlay) || (mode == MODULAR && Modular.running()) || space > 0.01f && dl.isNotEmpty() && delayTail > 0
+    // auch wenn nur Noten warten: sie werden erst im Mischer-Thread eingeschaltet (sonst blieb Touch-Lab stumm)
+    fun active(): Boolean = q.isNotEmpty() || voices.any { it.active } || (mode == SPECTRAL && specPlay) || (mode == MODULAR && Modular.running()) || space > 0.01f && dl.isNotEmpty() && delayTail > 0
 
     private var delayTail = 0
     private val twBuf = FloatArray(4)
