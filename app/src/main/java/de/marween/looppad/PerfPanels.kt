@@ -456,7 +456,7 @@ class VocalChopPanel(host: View) : PerfPanel(host) {
         y = wave.bottom + g
         // 4×4 Chop-Pads und Tasten-Leiste
         val kh = dp(54f)
-        val gridH = box.bottom - pad - kh - g - y
+        val gridH = box.bottom - pad - kh - g - dp(12f) - y   // Platz für den Hinweis über den Tasten
         val cw = (r - l - 3 * g) / 4; val ch = (gridH - 3 * g) / 4
         val n = s?.count ?: 0
         for (k in 0 until VocalChop.N) {
