@@ -290,7 +290,9 @@ object Euclid {
             // Schritte
             if (on) for (l in 0..3) {
                 val nn = laneN[l]
-                val stepLen = if (poly && l >= 2) bar / nn else bar / 16.0
+                // POLY: ohne 🎯 RASTER teilen die Spuren 3/4 den Takt in n gleiche Teile (5 gegen 4 …, liegt neben dem 16tel-Raster);
+                // mit RASTER laufen sie im 16tel-Raster, aber mit eigener Länge (Polymeter: Muster verschiebt sich gegen den Takt)
+                val stepLen = if (poly && l >= 2 && !Engine.tightGrid) bar / nn else bar / 16.0
                 val rel = (f - start).toDouble()
                 val si = floor(rel / stepLen).toLong()
                 if (si != lastStep[l]) {
@@ -307,7 +309,7 @@ object Euclid {
                         val a = acc[l][st] * laneVol[l]
                         val alt = st == Math.floorMod(laneRot[l], nn) || acc[l][st] > 0.92f
                         // Swing wie beim Sequenzer: ungerade 1/16 (im Takt-Raster) später
-                        val swingIt = swingFrames > 0 && !(poly && l >= 2) && Math.floorMod(si, 2L) == 1L
+                        val swingIt = swingFrames > 0 && !(poly && l >= 2 && !Engine.tightGrid) && Math.floorMod(si, 2L) == 1L
                         if (swingIt) { pendT[l] = swingFrames; pendA[l] = a; pendAlt[l] = alt } else trigger(l, a, alt)
                     }
                 }

@@ -139,6 +139,7 @@ class MainActivity : Activity() {
             if (i < Engine.PADS) Engine.padInstMask[i] = v.toIntOrNull() ?: 7
         }
         Engine.liveBars = prefs.getInt("liveBars", 0)
+        Engine.tightGrid = prefs.getBoolean("tightGrid", true)
         Engine.bounce = prefs.getBoolean("bounce", true)
         Engine.onBouncedInst = { pad, names ->
             runOnUiThread { toast("Bounce → Pad ${pad + 1} · ausgeschaltet: $names (im Reiter Instrumente wieder AN)") }
@@ -2005,6 +2006,11 @@ class MainActivity : Activity() {
             ),
             "🛠 WERKZEUGE" to listOf(
                 Item("📘 HANDBUCH · alle Instrumente kurz erklärt") { showInstHelp() },
+                Item("🎯 RASTER · Generatoren exakt im Takt: " + (if (Engine.tightGrid) "AN" else "AUS (frei, verschleppt)")) {
+                    Engine.tightGrid = !Engine.tightGrid
+                    prefs.edit().putBoolean("tightGrid", Engine.tightGrid).apply()
+                    hint(if (Engine.tightGrid) "🎯 RASTER an: Orbits, Architect und Euklid-POLY spielen exakt im 16tel-Raster (mit dem Sequenzer-Swing)" else "RASTER aus: Orbits frei, Architect mit eigenem Chaos-Swing, Euklid-POLY teilt den Takt in n gleiche Teile")
+                },
                 Item("🔁 LIVE-LOOPER · 4 Spuren wie RC-505 (Länge, Overdub, FX)") { pad(); pads.openStation(); hint("Großen Knopf tippen: Aufnahme · nochmal: Loop läuft · nochmal: Overdub · LÄNGE = frei oder feste Takte") },
                 Item("🎛 PERFORMANCE-SZENEN · Mix A ↔ B morphen, Auto-Morph im Takt") { pad(); pads.openPerf(4); hint("🎛 📸 A speichern, Mix ändern, 📸 B speichern – dann Regler ziehen oder ZU B ⏩ (oder Vorlage wählen)") },
                 Item("🚀 FX-GENERATOR · Riser, Impacts, Drops im Takt") { pad(); pads.openPerf(0); hint("🚀 Länge wählen, Effekt antippen – er startet auf der nächsten Eins und endet nach N Takten genau auf der Eins") },

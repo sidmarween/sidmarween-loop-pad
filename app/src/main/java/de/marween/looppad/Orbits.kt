@@ -246,7 +246,7 @@ object Orbits {
     private fun trigCrash(kind: Int, x: Float, sr: Int) {
         if (kind != 0) return
         val v = voice()
-        v.crash = true; v.delay = 0; v.vel = 0.6f + collision * 0.5f
+        v.crash = true; v.delay = qDelay(0); v.vel = 0.6f + collision * 0.5f
         v.f = 900.0; v.env = 1f; v.dec = exp(-1.0 / (0.35 * sr)).toFloat()
         v.iEnv = 1f; v.iDec = exp(-1.0 / (0.09 * sr)).toFloat()
         v.noise = 0.6f; v.fq = (2 * sin(PI * 2500.0 / sr)).toFloat(); v.qq = 0.4f
@@ -293,7 +293,7 @@ object Orbits {
                     if (resetReq || first) { for (s in sats) { s.m = 0.0; s.prevPhi = -1.0 }; resetReq = false }
                     if (!first) trigCore(0, sr)
                 }
-                if (upd <= 0) { upd = UPD; orbitStep(beat, sr, root) }
+                if (upd <= 0) { upd = UPD; qNow = f; qMs = ms; qStep = beat / 4.0; orbitStep(beat, sr, root) }
                 upd--
             }
             var l = 0f; var r = 0f
@@ -337,6 +337,17 @@ object Orbits {
         if (!on) lastBeat = Long.MIN_VALUE
     }
 
+    // 🎯 RASTER: Umläufe und Zusammenstöße erklingen auf dem nächsten 16tel (mit Sequenzer-Swing) statt frei
+    private var qNow = 0L; private var qMs = 0L; private var qStep = 6000.0
+    private fun qDelay(off: Int): Int {
+        if (!Engine.tightGrid || qStep < 1.0) return off
+        val t = qNow + off
+        val k = kotlin.math.ceil((t - qMs) / qStep - 1e-9).toLong()
+        var at = qMs + Math.round(k * qStep)
+        if (Math.floorMod(k, 2L) == 1L) at += Engine.swingFrames()
+        return (at - qNow).toInt().coerceAtLeast(0)
+    }
+
     private fun orbitStep(beat: Double, sr: Int, root: Int) {
         val g = gravity
         for ((idx, s) in sats.withIndex()) {
@@ -371,7 +382,7 @@ object Orbits {
                 val off = (frac.coerceIn(0.0, 1.0) * UPD).toInt()
                 val bright = ((s.speed - 0.6f) / 2.4f).coerceIn(0f, 1f)
                 val vel = if (s.accent) 1f else 0.75f
-                trigSat(s, off, vel, if (s.accent) 1f else bright, sr, root)
+                trigSat(s, qDelay(off), vel, if (s.accent) 1f else bright, sr, root)
                 s.accent = false
             }
         }

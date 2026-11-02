@@ -9,6 +9,10 @@ Alle Instrumente werden mit dem Projekt gespeichert – Regler, Vorlagen, Muster
 ↶ RÜCKGÄNGIG / ↷ WIEDERHOLEN: In jedem Instrument-Feld steht unten eine Leiste. Jede Änderung (Regler, Vorlage, Schalter) lässt sich zurücknehmen – auch nach dem Schließen über das normale ↶.
 
 MIDI: Menü › 🎹 MIDI › Tastatur-Kanal → „Was spielt die Tastatur?“ – ein Pad, Vocal-Chop, Chord-Pad oder FX-Generator. Unter „🎛 Regler & Fader zuordnen“ gibt es Ziele für den Morph-Regler der Performance-Szenen, die Vocal-Chop-Tonhöhe und die FX-Intensität.""",
+        "🎯 Takt & RASTER" to """
+Alle Instrumente laufen am selben Takt-Raster wie der Sequenzer (inkl. Swing).
+🎯 RASTER (Instrumente › Werkzeuge, Standard AN): Orbits, Rhythm Architect und Euklid-POLY spielen exakt auf 16teln. AUS = gewollt frei: Orbits nach Umlaufbahn, Architect mit eigenem Chaos-Swing und Human-Jitter, Euklid-POLY teilt den Takt in n gleiche Teile (5 gegen 4).
+Stolpert trotzdem alles hörbar, kommt das Handy nicht hinterher – dann erscheint ein Hinweis mit der Rechenlast. Instrumente ausschalten, die gerade nicht klingen, oder bei Latenz einen größeren Puffer wählen.""",
         "🥁 DRUM 909 & ACID 303" to """
 DRUM 909: Drumcomputer mit 11 Stimmen und 7 Klang-Modellen je Stimme (909, 808, Techno …). ▦ PRESETS hat Beats vieler Genres.
 ACID 303: Acid-Bass mit Slide und Akzent – Cutoff, Resonanz, Hüllkurve wie am Original. Vorlagen und der Zufalls-Generator stehen unter PRESETS.""",

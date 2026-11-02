@@ -302,14 +302,16 @@ object Architect {
             vel *= level[t]
             // Swing (ungerade 16tel später, bis „Afro-Cuban“), Human-Jitter, bei hoher Dichte 1/32-Versatz
             var d = 0.0
-            if (g % 2L != 0L) d += stepLen * 0.42 * ch + swingNow   // eigener Chaos-Swing + Sequenzer-Swing (groovt mit der 909)
-            d += (rnd.nextGaussian() * 0.006 * ch * sr).coerceIn(-0.4 * stepLen, 0.4 * stepLen)
+            // 🎯 RASTER (Standard): nur der Sequenzer-Swing – exakt mit 909 & Co.; sonst eigener Chaos-Swing + Human-Jitter
+            val tight = Engine.tightGrid
+            if (g % 2L != 0L) d += (if (tight) 0.0 else stepLen * 0.42 * ch) + swingNow
+            if (!tight) d += (rnd.nextGaussian() * 0.006 * ch * sr).coerceIn(-0.4 * stepLen, 0.4 * stepLen)
             if (dens > 0.6f && rnd.nextFloat() < (dens - 0.6f) * 0.8f) d += stepLen * 0.5
             val di = max(0, d.toInt())
             trigger(t, vel, di, sr, root)
             // Ratschen (Wirbel) mit hoher Dichte
             if (rnd.nextFloat() < dens * 0.22f) {
-                val parts = if (dens > 0.7f && rnd.nextBoolean()) 3 else 2
+                val parts = if (dens > 0.7f && rnd.nextBoolean() && !Engine.tightGrid) 3 else 2
                 for (q in 1 until parts) trigger(t, vel * (0.75f - 0.1f * q), di + (stepLen * q / parts).toInt(), sr, root)
             }
         }

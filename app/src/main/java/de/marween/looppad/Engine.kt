@@ -2098,6 +2098,12 @@ object Engine {
     @Volatile var outBufferFrames = 0
         private set
     @Volatile var underruns = 0
+    /** Rechenlast des Mischers (0..1+, Anteil der Blockdauer). */
+    @Volatile var dspLoad = 0f
+    /** Zeitpunkt (ms) der letzten Überlast. */
+    @Volatile var overloadAt = 0L
+    /** 🎯 RASTER: Generatoren (Orbits, Architect) spielen exakt im 16tel-Raster statt frei/verschleppt. */
+    @Volatile var tightGrid = true
         private set
     @Volatile var fastPath = false
         private set
@@ -3221,7 +3227,12 @@ object Engine {
                     }
                 }
             }
-            reportHint(hint, System.nanoTime() - workStart)
+            val workNs = System.nanoTime() - workStart
+            reportHint(hint, workNs)
+            // Rechenlast: Anteil der Blockdauer, den das Mischen braucht (geglättet) – über ~85 % drohen Aussetzer
+            val blockNs = block * 1_000_000_000.0 / sampleRate
+            dspLoad += ((workNs / blockNs).toFloat() - dspLoad) * 0.05f
+            if (dspLoad > 0.85f) overloadAt = System.currentTimeMillis()
             var off = 0
             val outBuf = if (quadOn) quad else stereo
             val total = block * (if (quadOn) 4 else 2)

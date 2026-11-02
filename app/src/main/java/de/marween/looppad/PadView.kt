@@ -972,6 +972,7 @@ class PadView(context: Context) : View(context) {
         if (tourStep >= 0) drawTour(canvas)
         if (layoutEdit) drawLayoutEdit(canvas)
         if (lesson != null) drawLesson(canvas, dt)
+        checkOverload()
 
         postInvalidateOnAnimation()
     }
@@ -9361,6 +9362,16 @@ class PadView(context: Context) : View(context) {
 
     // ---------------------------------------------------------------- ↶ in den Instrument-Feldern
     /** Ein Feld der Zusatz-Instrumente ist offen (dann gibt es unten die ↶/↷-Leiste). */
+    private var overloadHintAt = 0L
+    /** Kommt der Mischer nicht hinterher, stolpert alles hörbar aus dem Takt – dann einmal deutlich Bescheid geben. */
+    private fun checkOverload() {
+        val now = System.currentTimeMillis()
+        if (now - Engine.overloadAt < 1500 && now - overloadHintAt > 20_000) {
+            overloadHintAt = now
+            hint("⚠ Das Handy kommt nicht hinterher (Rechenlast ${(Engine.dspLoad * 100).toInt()} %) – dann stolpert der Takt. Instrumente ausschalten, die gerade nicht klingen, oder Menü › Latenz: größerer Puffer")
+        }
+    }
+
     private fun xPanelOpen(): Boolean = euclid.isOpen || harm.isOpen || atmos.isOpen || wolf.isOpen || architect.isOpen || orbits.isOpen ||
         bassLab.isOpen || vibe.isOpen || chaos.isOpen || touchLab.isOpen || organism.isOpen || fxGen.isOpen || chordPad.isOpen ||
         vocoder.isOpen || vocalChop.isOpen || mixMorph.isOpen
