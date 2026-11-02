@@ -277,7 +277,7 @@ object InstState {
     var synCutMod: Float get() = syn.cutMod; set(v) { syn.cutMod = v }
     val synWaveNames = arrayOf("SAW", "SQR", "SUPER", "PLUCK", "GLOCKE", "NES ▢", "NES △", "NOISE", "SID", "GB-WAVE", "FM-CHIP",
         "PIANO", "E-PIANO", "ORGEL", "SYNC-LEAD", "REESE", "SUB-BASS", "FM-BASS", "WOBBLE", "SAITE",
-        "WT ANALOG", "WT VOCAL", "WT GROWL", "WT DIGITAL", "WT SAMPLE", "MAGMA", "FUNK-SLAP", "VIBE", "ORGAN-BASS", "ORCH-HIT", "BRASS", "STRINGS")
+        "WT ANALOG", "WT VOCAL", "WT GROWL", "WT DIGITAL", "WT SAMPLE", "MAGMA", "FUNK-SLAP", "VIBE", "ORGAN-BASS", "ORCH-HIT", "BRASS", "STRINGS", "HOUSE-PIANO", "LORE-PAD", "CHOIR", "M1-BELL")
     fun synIsWt(w: Int) = w in 20..24
     /** Chiptune-Klänge (Klang-Nr. 5–10): Akkorde laufen als schnelles Chip-Arpeggio, Lautstärke in 16 Stufen. */
     fun synIsChip(w: Int) = w in 5..10
@@ -288,6 +288,10 @@ object InstState {
         Triple("Tasten", 13, "Orgel (Zugriegel) – CUTOFF = Register, VERST. = Leslie"),
         Triple("Tasten", 4, "FM-Glocke"),
         Triple("Tasten", 27, "🏠 VIBE – House-Stabs, Drift, Pump, Acid-Modus (Vibe-Synth-Feld)"),
+        Triple("M1 (90er)", 32, "🎹 HOUSE-PIANO – das helle 90er-House-Klavier: harter Anschlag, kurzer Ton, leichter Chorus"),
+        Triple("M1 (90er)", 33, "🌌 LORE-PAD – schwebende Fläche mit Glocken-Anschlag · ATTACK = Einblenden"),
+        Triple("M1 (90er)", 34, "🎤 CHOIR – „Aah“-Chor mit Chorus · VERST. = Breite, CUTOFF = Vokal (Uuh … Aah)"),
+        Triple("M1 (90er)", 35, "🔔 M1-BELL – FM-Glocke/Kalimba, kurz und gläsern"),
         Triple("Orchester", 29, "🎻 ORCH-HIT – 90er-Orchester-Schlag: Streicher + Blech + Pauke · VERST. = Breite"),
         Triple("Orchester", 30, "🎺 BRASS – Bläsersatz mit Anblas-Schmettern · FILTER-HÜLLK. = Stab, ATTACK = Swell"),
         Triple("Orchester", 31, "🎻 STRINGS – Streicher-Ensemble · ATTACK 0 = Stab/Pizz, hoch = Fläche"),
@@ -327,6 +331,10 @@ object InstState {
             18 -> { t.cut = 0.25f; t.res = 0.55f; t.env = 0.7f; t.atk = 0f; t.rel = 0.15f; t.detune = 0.3f }
             19 -> { t.cut = 0.6f; t.res = 0f; t.env = 0f; t.atk = 0f; t.rel = 0.4f; t.detune = 0.6f }
             in 20..24 -> { t.cut = 0.75f; t.res = 0.15f; t.env = 0.35f; t.atk = 0.01f; t.rel = 0.3f; t.detune = 0.2f }
+            32 -> { t.cut = 0.8f; t.res = 0f; t.env = 0f; t.atk = 0f; t.rel = 0.2f; t.detune = 0.35f }
+            33 -> { t.cut = 0.55f; t.res = 0.1f; t.env = 0.2f; t.atk = 0.35f; t.rel = 0.6f; t.detune = 0.4f }
+            34 -> { t.cut = 0.6f; t.res = 0f; t.env = 0f; t.atk = 0.3f; t.rel = 0.5f; t.detune = 0.45f }
+            35 -> { t.cut = 0.7f; t.res = 0f; t.env = 0f; t.atk = 0f; t.rel = 0.4f; t.detune = 0.3f }
             29 -> { t.cut = 0.75f; t.res = 0.1f; t.env = 0.4f; t.atk = 0f; t.rel = 0.25f; t.detune = 0.35f }
             30 -> { t.cut = 0.32f; t.res = 0.15f; t.env = 0.65f; t.atk = 0.01f; t.rel = 0.12f; t.detune = 0.35f }
             31 -> { t.cut = 0.55f; t.res = 0.05f; t.env = 0.15f; t.atk = 0f; t.rel = 0.3f; t.detune = 0.45f }
@@ -1706,6 +1714,30 @@ class PolySynth(private val sr: Int, private val t: InstState.SynTrack) {
                 for (k in 0 until 6) v.ph[k] = 0.0
             }
             30 -> v.m[0] = 1f   // BRASS: Anblas-Tonhöhe
+            32 -> {
+                // HOUSE-PIANO (M1-Art): helle, kurz klingende Teiltöne – starke 2.–6. Harmonische, oben schnell weg, Chorus-Paar
+                val bright = (t.cutNow() * (0.5f + 0.5f * vel)).coerceIn(0f, 1f)
+                val t0 = (1.4 * (261.6 / f).pow(0.45)).coerceIn(0.35, 4.0)
+                val amps = doubleArrayOf(1.0, 0.95, 0.7, 0.55, 0.45, 0.32, 0.22, 0.15, 0.1, 0.07)
+                var n = 0
+                for (k in 1..10) {
+                    val fk = f * k * (1.0 + 0.0002 * k * k)
+                    if (fk > sr * 0.45) break
+                    v.inc[n] = fk / sr
+                    v.pa[n] = (amps[k - 1] * (0.35 + 0.65 * bright).pow(if (k > 3) 1.0 else 0.0) * 0.55).toFloat()
+                    v.pd[n] = exp(-1.0 / (t0 / (1.0 + 0.8 * (k - 1)) * sr)).toFloat()
+                    n++
+                }
+                val base = n
+                val dt = 1.0 + 0.0015 + t.detune * 0.004
+                for (k in 0 until min(4, base)) { v.inc[n] = v.inc[k] * dt; v.pa[n] = v.pa[k] * 0.6f; v.pd[n] = v.pd[k]; n++ }
+                v.np = n
+                for (k in 0 until n) { val wk = 2 * PI * v.inc[k]; v.rk[k] = 2 * kotlin.math.cos(wk); v.rs1[k] = 0.0; v.rs2[k] = -kotlin.math.sin(wk) }
+                v.hn = 0.35f * vel * (0.4f + bright)
+            }
+            33 -> { v.m[0] = 1f; for (k in 0 until 4) v.ph[k] = Math.random() }   // LORE: Glocken-Anschlag, freie Phasen
+            34 -> { java.util.Arrays.fill(v.m, 0f); for (k in 0 until 3) v.ph[k] = Math.random() }
+            35 -> { v.m[0] = 1f; v.m[1] = 1f; v.ph[0] = 0.0; v.ph[1] = 0.0; v.ph[2] = 0.0 }
             28 -> {
                 // ORGAN-BASS: Holz-FM und Klick neu anschlagen
                 v.m[0] = 1f; v.m[1] = 1f
@@ -2066,6 +2098,64 @@ class PolySynth(private val sr: Int, private val t: InstState.SynTrack) {
         return fastTanh((y * (0.8 + 1.6 * v.vel * v.fenv)).toFloat()) * 0.55
     }
 
+    private val kLoreBell = exp(-1.0 / (0.6 * sr)).toFloat()
+    private val kBellIdx = exp(-1.0 / (0.25 * sr)).toFloat()
+    private val kBellHi = exp(-1.0 / (0.08 * sr)).toFloat()
+
+    /** 🌌 LORE-PAD: zwei schwebende Sägen + Oktav-Sinus, dazu ein gläserner FM-Anschlag, der langsam verklingt. */
+    private fun lore(v: Voice, f: Double, spread: Float): Double {
+        val m = v.m
+        val d = 0.003 + spread * 0.008
+        var y = 0.45 * (saw(v, 0, f * (1 - d)) + saw(v, 1, f * (1 + d)))
+        v.ph[2] += f * 2.0 / sr; if (v.ph[2] >= 1.0) v.ph[2] -= 1.0
+        y += 0.35 * sinT(v.ph[2])
+        if (m[0] > 1e-4f) {
+            v.ph[3] += f * 3.5 / sr; if (v.ph[3] >= 1.0) v.ph[3] -= 1.0
+            v.ph[4] += f * 2.0 / sr; if (v.ph[4] >= 1.0) v.ph[4] -= 1.0
+            y += 0.4 * m[0] * sinT(v.ph[4] + 0.25 * m[0] * sinT(v.ph[3]))
+            m[0] *= kLoreBell
+        }
+        return y * 0.75
+    }
+
+    /** 🎤 CHOIR: Säge-Stimmen (Chorus) durch drei Formanten; CUTOFF schiebt den Vokal von „Uuh“ nach „Aah“. */
+    private fun choir(v: Voice, f: Double, spread: Float, cut: Float): Double {
+        val m = v.m
+        val d = 0.004 + spread * 0.01
+        var src = 0.0
+        for (k in 0 until 3) src += saw(v, k, f * (1 + (k - 1) * d))
+        src /= 3.0
+        // Formant-Koeffizienten in Steuer-Rate (alle 16 Proben)
+        if ((v.n and 15L) == 1L || v.c[0] == 0f) {
+            val a = cut.coerceIn(0f, 1f)
+            val f1 = 320.0 + 420.0 * a; val f2 = 800.0 + 300.0 * a; val f3 = 2400.0 + 100.0 * a
+            v.c[0] = (2 * sin(PI * f1 / sr)).toFloat(); v.c[1] = (2 * sin(PI * f2 / sr)).toFloat(); v.c[2] = (2 * sin(PI * f3 / sr)).toFloat()
+        }
+        val x = src.toFloat()
+        var out = 0f
+        for (k in 0 until 3) {
+            val g = v.c[k]; val q = if (k == 0) 0.12f else 0.1f
+            m[2 * k] += g * m[2 * k + 1]
+            val hp = x - m[2 * k] - q * m[2 * k + 1]
+            m[2 * k + 1] += g * hp
+            out += m[2 * k + 1] * (if (k == 0) 1f else if (k == 1) 0.75f else 0.35f)
+        }
+        // Atem-Rauschen dazu
+        out += rnd(v) * 0.02f
+        return (out * 0.45f).toDouble()
+    }
+
+    /** 🔔 M1-BELL: FM 1 : 3,5 mit schnell fallendem Index + heller 2,76-Teilton beim Anschlag. */
+    private fun m1Bell(v: Voice, f: Double): Double {
+        val m = v.m
+        v.ph[0] += f / sr; if (v.ph[0] >= 1.0) v.ph[0] -= 1.0
+        v.ph[1] += f * 3.5 / sr; if (v.ph[1] >= 1.0) v.ph[1] -= 1.0
+        v.ph[2] += f * 2.76 / sr; if (v.ph[2] >= 1.0) v.ph[2] -= 1.0
+        val y = sinT(v.ph[0] + (0.15 + 0.9 * m[0]) * sinT(v.ph[1]) * TWO_PI_INV * 6) + 0.35f * m[1] * sinT(v.ph[2])
+        m[0] *= kBellIdx; m[1] *= kBellHi
+        return y * 0.85
+    }
+
     /** 🎻 STRINGS: Ensemble aus 5 verstimmten Sägen + Bass-Oktave, kurzes Bogen-Rauschen beim Anstrich. */
     private fun strings(v: Voice, f: Double, spread: Float): Double {
         val d = 0.003 + spread * 0.01
@@ -2180,14 +2270,14 @@ class PolySynth(private val sr: Int, private val t: InstState.SynTrack) {
         val cutN = st.cutNow(); val envA = st.env; val cutM = st.cutMod; val resA = st.res
         val atk = (1.0 / ((0.002 + st.atk * st.atk * 2.5) * sr)).toFloat()
         val relC = exp(-1.0 / ((0.02 + st.rel * st.rel * 3.0) * sr)).toFloat()
-        val decC = exp(-1.0 / ((if (wave == 3) 0.25 else if (wave == 29) 0.3 else if (wave == OrganBass.WAVE) 0.03 + OrganBass.decay * OrganBass.decay * 0.9 else 0.6) * sr)).toFloat()
-        val sus = when (wave) { 3, 4, 29 -> 0f; 30 -> 0.85f; 31 -> 0.9f; 11, 12, 13, 16, 19, 26 -> 1f; 17 -> 0.75f; 25 -> 0.92f; 28 -> if (OrganBass.legato) 0.45f else 0f; else -> 0.8f }
+        val decC = exp(-1.0 / ((if (wave == 3) 0.25 else if (wave == 29) 0.3 else if (wave == 35) 0.9 else if (wave == OrganBass.WAVE) 0.03 + OrganBass.decay * OrganBass.decay * 0.9 else 0.6) * sr)).toFloat()
+        val sus = when (wave) { 3, 4, 29, 35 -> 0f; 32 -> 1f; 33, 34 -> 0.95f; 30 -> 0.85f; 31 -> 0.9f; 11, 12, 13, 16, 19, 26 -> 1f; 17 -> 0.75f; 25 -> 0.92f; 28 -> if (OrganBass.legato) 0.45f else 0f; else -> 0.8f }
         val fDec = exp(-1.0 / ((if (wave == 3) 0.12 else 0.35) * sr)).toFloat()
         val q = 1f - resA * 0.92f
         val vol = st.volNow() * 0.32f
         val spread = st.detune
         val chip = InstState.synIsChip(wave)
-        val noFilter = wave == 4 || wave == 10 || wave in 11..13 || wave == 16 || wave == 17 || wave == 19 || wave == 25 || wave == 26 || wave == 27 || wave == 28
+        val noFilter = wave == 4 || wave == 10 || wave in 11..13 || wave == 16 || wave == 17 || wave == 19 || wave == 25 || wave == 26 || wave == 27 || wave == 28 || wave == 32 || wave == 34 || wave == 35
         // Bass-Labor
         val bl = BassLab
         val kick0 = if (wave == 25) bl.kick else 0f
@@ -2333,7 +2423,10 @@ class PolySynth(private val sr: Int, private val t: InstState.SynTrack) {
                         }
                         o = v.nz.toDouble()
                     }
-                    11 -> o = piano(v, pianoHd)
+                    11, 32 -> o = piano(v, pianoHd)
+                    33 -> o = lore(v, f, spread)
+                    34 -> o = choir(v, f, spread, cutN)
+                    35 -> o = m1Bell(v, f)
                     12 -> o = ePiano(v, f, cutN, spread)
                     13 -> o = organ(v, f, spread, lesV, lesA, orgNorm, envA, clickHd)
                     14 -> {

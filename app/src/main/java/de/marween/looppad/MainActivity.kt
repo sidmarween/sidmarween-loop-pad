@@ -1963,6 +1963,20 @@ class MainActivity : Activity() {
                 Item("🎹 SYNTH 1–3 · Lead, Fläche, Bass (polyfon, Akkorde, Arpeggiator)") { synthTrack(0, false) },
                 Item("🎹 KEYS · Piano, E-Piano, Orgel & Leads") { synthTrack(InstState.KEYS_TRACK, true) },
                 Item("🏠 VIBE-SYNTH · House-Stabs, M1-Akkorde, Pump, Acid-Modus") { pad(); pads.openVibe(); hint("🏠 Eine Taste = ein Club-Akkord · PUMP drückt im Takt · STAB ↔ ACID schaltet auf 303-Hybrid") },
+                Item("🎹 M1-KLÄNGE · House-Piano, Lore-Pad, Choir, Bell (90er)") {
+                    pad(); InstState.synCur = InstState.KEYS_TRACK; pads.openSynthEditor()
+                    val list = InstPresets.SYNTHS.filter { it.genre == "M1 (90er)" }
+                    ui().setTitle("🎹 M1-Klänge · auf KEYS")
+                        .setItems((list.map { "${it.name} · ${it.bpm} BPM" } + listOf("🎛 Nur den Klang wählen (HOUSE-PIANO / LORE-PAD / CHOIR / M1-BELL) …")).toTypedArray()) { _, i ->
+                            if (i >= list.size) { showSynthWaves(); return@setItems }
+                            val p = list[i]
+                            Engine.pushPatternUndo("SYNTH Preset")
+                            InstPresets.applySynth(p)
+                            presetTempo(p.bpm)
+                            pads.invalidate()
+                            hint("🎹 ${p.name} – Klang ${InstState.synWaveNames[p.wave]} · ▶ startet · 🏠 VIBE-SYNTH hat dazu die M1-Orgel-Akkorde, Bass-Labor › ORGAN-BASS den Orgel-Bass")
+                        }.setNegativeButton("Abbrechen", null).show()
+                },
                 Item("🎺 ORCHESTRA-HITS & BRASS-STABS · Orchester-Schlag, Bläser, Streicher") {
                     pad(); InstState.synCur = InstState.KEYS_TRACK; pads.openSynthEditor()
                     val list = InstPresets.SYNTHS.filter { it.genre == "Orchester" }

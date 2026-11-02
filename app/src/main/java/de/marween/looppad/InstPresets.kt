@@ -376,7 +376,7 @@ object InstPresets {
     )
 
     /** Gruppen, die bei KEYS bzw. BASSLINE oben stehen. */
-    val KEYS_GENRES = listOf("Piano", "E-Piano", "Orgel", "Orchester", "Leads")
+    val KEYS_GENRES = listOf("Piano", "M1 (90er)", "E-Piano", "Orgel", "Orchester", "Leads")
     val BASS_GENRES = listOf("Bassline")
 
     /** Gleicher Akkord-Rhythmus je Takt: [hits] = Paare (Schritt, Länge), [chords] = Paare (Ton, Akkord: 1 DUR, 2 MOLL, 4 DUR7, 5 MOLL7). */
@@ -415,6 +415,19 @@ object InstPresets {
             n(0, 0, 2, 3, 0, 1, 6, 12, 1, 8, 0, 2, 11, 10, 1, 12, 7, 2, 14, 3, 2)),
         Synth("Orgel", "Jazz-Orgel mit Leslie (Am7 · D7)", 110, 13, 0, 0, 0.2f, 0f, 0.5f, 0f, 0.12f, 0.85f, 2,
             cr(intArrayOf(0, 3, 6, 2, 10, 4), -3, 5, 2, 4)),
+        // ---- M1 (90er) – Klänge 32–35 im Stil des Korg M1 (eigene Synthese, keine Samples)
+        Synth("M1 (90er)", "House-Piano-Stabs (Am7 · D7)", 124, 32, 0, 0, 0.85f, 0f, 0f, 0f, 0.15f, 0.35f, 2,
+            cr(intArrayOf(0, 2, 3, 1, 6, 2, 10, 2, 12, 1, 14, 2), -3, 5, 2, 4)),
+        Synth("M1 (90er)", "Piano-Hymne (C · Am · F · G)", 122, 32, 0, 0, 0.75f, 0f, 0f, 0f, 0.25f, 0.35f, 4,
+            cr(intArrayOf(0, 3, 4, 2, 8, 3, 12, 2), 0, 1, -3, 2, -7, 1, -5, 1)),
+        Synth("M1 (90er)", "Garage-Piano (Dm7 · G7 · Cmaj)", 128, 32, 0, 0, 0.8f, 0f, 0f, 0f, 0.18f, 0.3f, 4,
+            cr(intArrayOf(2, 2, 6, 1, 9, 2, 14, 2), 2, 5, -5, 4, 0, 1, 0, 1)),
+        Synth("M1 (90er)", "Lore-Fläche (Am · F · G · Em)", 110, 33, 0, 0, 0.55f, 0.1f, 0.2f, 0.35f, 0.6f, 0.4f, 4,
+            cr(intArrayOf(0, 16), -3, 2, -7, 1, -5, 1, -8, 2)),
+        Synth("M1 (90er)", "Chor-Akkorde (Dm · B♭ · C · Am)", 100, 34, 0, 0, 0.65f, 0f, 0f, 0.3f, 0.5f, 0.45f, 4,
+            cr(intArrayOf(0, 16), 2, 2, -2, 1, 0, 1, -3, 2)),
+        Synth("M1 (90er)", "Bell-Melodie (Kalimba)", 120, 35, 0, 1, 0.7f, 0f, 0f, 0f, 0.4f, 0.3f, 2,
+            n(0, 0, 1, 2, 7, 1, 3, 12, 1, 6, 9, 1, 8, 7, 1, 10, 4, 1, 12, 7, 2, 16, -3, 1, 18, 4, 1, 19, 9, 1, 22, 12, 1, 24, 11, 1, 26, 7, 1, 28, 4, 2)),
         // ---- Orchester (Klänge 29–31)
         Synth("Orchester", "Orchestra-Hit Rave (Am · F · G · Am)", 130, 29, 0, 0, 0.75f, 0.1f, 0.4f, 0f, 0.25f, 0.35f, 4,
             cr(intArrayOf(0, 2, 3, 2, 6, 2, 10, 1, 12, 2), -3, 2, -7, 1, -5, 1, -3, 2)),
