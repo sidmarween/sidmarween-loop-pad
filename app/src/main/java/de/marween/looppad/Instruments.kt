@@ -40,6 +40,9 @@ object InstState {
     @Volatile var acidEcho = 0f
     /** Filter-Fahrt: Cutoff wandert langsam über 8 Takte auf und zu (wie von Hand gedreht): 0 = aus. */
     @Volatile var acidSweep = 0f
+    /** Art der Filter-Fahrt: 0 = Welle (8 Takte auf und zu), 1 = Aufbau über 16 Takte, 2 = Aufbau über 32 Takte
+     *  (Cutoff steigt immer weiter, Resonanz und Verzerrung wachsen mit bis zum Kreischen, dann fällt alles zurück). */
+    @Volatile var acidSweepMode = 0
     @Volatile var acidTune = 0
     @Volatile var acidOn = true
     @Volatile var acidFx = true
@@ -650,7 +653,7 @@ object InstState {
         j.put("drumOn", drumOn); j.put("drumFx", drumFx); j.put("drumDrive", drumDrive.toDouble()); j.put("drumVol", drumVol.toDouble())
         j.put("acidTie", ba(acidTie)); j.put("acidLen", acidLen); j.put("drumLen", drumLen)
         j.put("acidGlide", acidGlide.toDouble()); j.put("acidAccent", acidAccent.toDouble()); j.put("acidDrive", acidDrive.toDouble()); j.put("acidTune", acidTune)
-        j.put("acidDist", acidDist.toDouble()); j.put("acidEcho", acidEcho.toDouble()); j.put("acidSweep", acidSweep.toDouble())
+        j.put("acidDist", acidDist.toDouble()); j.put("acidEcho", acidEcho.toDouble()); j.put("acidSweep", acidSweep.toDouble()); j.put("acidSweepMode", acidSweepMode)
         j.put("drumMute", ba(drumMute))
         j.put("acidVel", fa(acidVel))
         j.put("drumVel", JSONArray().apply { for (v in 0 until DV) put(fa(drumVel[v])) })
@@ -695,7 +698,7 @@ object InstState {
         acidLen = j.optInt("acidLen", 16).coerceIn(16, MAX); drumLen = j.optInt("drumLen", 16).coerceIn(16, MAX)
         acidGlide = j.optDouble("acidGlide", 0.25).toFloat(); acidAccent = j.optDouble("acidAccent", 0.6).toFloat()
         acidDrive = j.optDouble("acidDrive", 0.2).toFloat(); acidTune = j.optInt("acidTune", 0)
-        acidDist = j.optDouble("acidDist", 0.0).toFloat(); acidEcho = j.optDouble("acidEcho", 0.0).toFloat(); acidSweep = j.optDouble("acidSweep", 0.0).toFloat()
+        acidDist = j.optDouble("acidDist", 0.0).toFloat(); acidEcho = j.optDouble("acidEcho", 0.0).toFloat(); acidSweep = j.optDouble("acidSweep", 0.0).toFloat(); acidSweepMode = j.optInt("acidSweepMode", 0).coerceIn(0, 2)
         // alte Projekte (16 Schritte): Rest leeren
         if (!j.has("acidLen")) for (k in STEPS until MAX) { acidGate[k] = false; acidTie[k] = false }
         if (!j.has("drumLen")) for (v in 0 until DV) for (k in STEPS until MAX) drumSteps[v][k] = 0
@@ -800,18 +803,25 @@ class AcidSynth(private val sr: Int) {
         val glide = 1.0 - exp(-1.0 / ((0.02 + st.acidGlide * 0.22) * sr))
         val accAmt = st.acidAccent
         val envMod = st.acidEnv
-        val r = st.acidRes.toDouble().coerceIn(0.0, 1.0)
-        val rs = (1.0 - exp(-3.0 * r)) / (1.0 - exp(-3.0))   // Resonanz wie beim Original „schief“
         val drv = 1f + st.acidDrive * 4f
         val vol = st.acidVolNow() * 1.1f
         val square = st.acidSquare
         // Grund-Cutoff 314 Hz … 2,4 kHz (Original-Bereich), Touchpad dazu
         // Filter-Fahrt: über 8 Takte auf und zu (im Takt-Raster), bis ±1,5 Oktaven
         val sweep = st.acidSweep
-        val sweepOct = if (sweep > 0.01f) kotlin.math.sin(2 * PI * Engine.beatPos(w) / 32.0) * sweep * 1.5 else 0.0
+        // Aufbau: Rampe von zu nach offen über 16/32 Takte (immer schneller steigend), Resonanz + Verzerrung wachsen mit
+        var build = 0.0
+        val sweepOct = if (sweep <= 0.01f) 0.0 else if (st.acidSweepMode == 0) kotlin.math.sin(2 * PI * Engine.beatPos(w) / 32.0) * sweep * 1.5 else {
+            val beats = if (st.acidSweepMode == 1) 64.0 else 128.0
+            val ph = Engine.beatPos(w) / beats
+            build = (ph - kotlin.math.floor(ph)).pow(1.6)
+            (build * 2.0 - 1.0) * sweep * 2.6
+        }
         val baseCut = 314.0 * (2394.0 / 314.0).pow(st.acidCutNow().toDouble().coerceIn(0.0, 1.0)) * 2.0.pow(st.acidCutMod * 2.0 + sweepOct)
+        val r = (st.acidRes + build * sweep * 0.12).coerceIn(0.0, 0.995)
+        val rs = (1.0 - exp(-3.0 * r)) / (1.0 - exp(-3.0))   // Resonanz wie beim Original „schief“
         // Pedal: Mitten-Anhebung vor dem Clipping, Tiefpass danach (gegen Kratzen), Ausgang angeglichen
-        val dist = st.acidDist
+        val dist = (st.acidDist + (build * sweep * 0.45).toFloat()).coerceAtMost(1f)
         val dGain = 1f + 55f * dist * dist
         val aTone = (1.0 - exp(-2 * PI * 420.0 / sr)).toFloat()
         val aDlp = (1.0 - exp(-2 * PI * (6500.0 - 2500.0 * dist) / sr)).toFloat()

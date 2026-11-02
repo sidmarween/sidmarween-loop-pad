@@ -82,9 +82,11 @@ object InstPresets {
 
     // ---------------------------------------------------------------- Klang-Presets (303) – Töne bleiben
     class AcidSound(val name: String, val cut: Float, val res: Float, val env: Float, val dec: Float, val acc: Float, val glide: Float, val drive: Float, val square: Boolean = false, val oct: Int = 0,
-                    val dist: Float = 0f, val echo: Float = 0f, val sweep: Float = 0f)
+                    val dist: Float = 0f, val echo: Float = 0f, val sweep: Float = 0f, val sweepMode: Int = 0)
 
     val ACID_SOUNDS = listOf(
+        AcidSound("95er Kreisch-Aufbau (32 Takte)", 0.12f, 0.9f, 0.55f, 0.3f, 0.8f, 0.18f, 0.35f, dist = 0.3f, echo = 0.2f, sweep = 0.9f, sweepMode = 2),
+        AcidSound("Aufbau kurz (16 Takte)", 0.15f, 0.88f, 0.6f, 0.28f, 0.75f, 0.18f, 0.3f, dist = 0.25f, echo = 0.15f, sweep = 0.8f, sweepMode = 1),
         AcidSound("88er Rave-Acid (verzerrt, Echo, Fahrt)", 0.3f, 0.93f, 0.75f, 0.35f, 0.85f, 0.2f, 0.5f, dist = 0.8f, echo = 0.35f, sweep = 0.55f),
         AcidSound("Acid-Fuzz (Pedal voll)", 0.32f, 0.88f, 0.65f, 0.3f, 0.75f, 0.2f, 0.35f, dist = 1f),
         AcidSound("Kreischende Resonanz + Echo", 0.4f, 0.97f, 0.85f, 0.25f, 0.9f, 0.15f, 0.4f, dist = 0.55f, echo = 0.5f),
@@ -115,13 +117,13 @@ object InstPresets {
         val st = InstState
         st.acidCut = a.cut; st.acidRes = a.res; st.acidEnv = a.env; st.acidDec = a.dec
         st.acidAccent = a.acc; st.acidGlide = a.glide; st.acidDrive = a.drive; st.acidSquare = a.square; st.acidOct = a.oct
-        st.acidDist = a.dist; st.acidEcho = a.echo; st.acidSweep = a.sweep
+        st.acidDist = a.dist; st.acidEcho = a.echo; st.acidSweep = a.sweep; st.acidSweepMode = a.sweepMode
     }
     class Acid(
         val genre: String, val name: String, val bpm: Int, val line: String,
         val cut: Float, val res: Float, val env: Float, val dec: Float, val acc: Float, val glide: Float, val square: Boolean = false,
         /** Verzerrer, Echo, Filter-Fahrt, Drive (−1 = Drive unverändert lassen) */
-        val dist: Float = 0f, val echo: Float = 0f, val sweep: Float = 0f, val drive: Float = -1f
+        val dist: Float = 0f, val echo: Float = 0f, val sweep: Float = 0f, val drive: Float = -1f, val sweepMode: Int = 0
     )
 
     // ---------------------------------------------------------------- Drum-Beats ('.' aus, x an, X Accent)
@@ -200,6 +202,10 @@ object InstPresets {
         Acid("Funky", "Bounce", 122, "C* - C C+ - C D#~ F - C* - C A#- - C+ -", 0.3f, 0.76f, 0.6f, 0.3f, 0.65f, 0.25f),
         Acid("Funky", "Syncopated", 124, "- C* - C - C+ - D# - C* - G- - A#- - C", 0.29f, 0.8f, 0.68f, 0.28f, 0.7f, 0.2f),
         // ---- 88er UK-Rave-Acid: verzerrte, kreischende 303 mit Echo und langsamer Filter-Fahrt (eigene Linien)
+        // ---- 95er Rave: rollende 16tel, ein Aufbau über 32 Takte bis zum Kreischen (eigene Linien)
+        Acid("95er Aufbau", "Bewusstseins-Aufbau (32 Takte)", 132, "C* C C C+ C C C~ C+ C* C C C C+ C C~ D#", 0.12f, 0.9f, 0.55f, 0.3f, 0.8f, 0.18f, dist = 0.3f, echo = 0.2f, sweep = 0.9f, drive = 0.35f, sweepMode = 2),
+        Acid("95er Aufbau", "Rollender Schreier (16 Takte)", 130, "C* C C+ C C C C+~ C C* C C+ C C G- C+~ C", 0.15f, 0.88f, 0.6f, 0.28f, 0.75f, 0.18f, dist = 0.25f, echo = 0.15f, sweep = 0.8f, drive = 0.3f, sweepMode = 1),
+        Acid("95er Aufbau", "Ein-Ton-Hypnose", 134, "C* C C C C C C+ C C* C C C C C C+~ C", 0.1f, 0.92f, 0.5f, 0.35f, 0.85f, 0.15f, dist = 0.35f, echo = 0.25f, sweep = 1f, drive = 0.4f, sweepMode = 2),
         Acid("88er Rave", "Warehouse 88 (verzerrt)", 124, "C* C C+ C~ D# C C+* - C C~ G- C C+* C A#- C", 0.3f, 0.93f, 0.75f, 0.35f, 0.85f, 0.2f, dist = 0.8f, echo = 0.35f, sweep = 0.55f, drive = 0.5f),
         Acid("88er Rave", "Kreischer (Resonanz-Fahrt)", 122, "C* _ C+~ C D#* - C C+ F~ D# C C* - G- C~ C+", 0.38f, 0.97f, 0.85f, 0.28f, 0.9f, 0.18f, dist = 0.6f, echo = 0.45f, sweep = 0.7f, drive = 0.4f),
         Acid("88er Rave", "Rave-Signal (Echo-Linie)", 126, "C* - C+ - C - D#+* - C - G - C+~ C* - A#", 0.28f, 0.9f, 0.7f, 0.4f, 0.8f, 0.22f, dist = 0.7f, echo = 0.6f, sweep = 0.4f, drive = 0.45f),
@@ -278,7 +284,7 @@ object InstPresets {
         st.acidLen = ((tokens.size + 15) / 16 * 16).coerceIn(16, InstState.MAX)
         st.acidCut = p.cut; st.acidRes = p.res; st.acidEnv = p.env; st.acidDec = p.dec
         st.acidAccent = p.acc; st.acidGlide = p.glide; st.acidSquare = p.square
-        st.acidDist = p.dist; st.acidEcho = p.echo; st.acidSweep = p.sweep
+        st.acidDist = p.dist; st.acidEcho = p.echo; st.acidSweep = p.sweep; st.acidSweepMode = p.sweepMode
         if (p.drive >= 0f) st.acidDrive = p.drive
         st.acidOn = true
     }
