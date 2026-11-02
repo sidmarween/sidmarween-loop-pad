@@ -47,6 +47,8 @@ object GrooveGen {
     /** Grundton je Takt (Halbtöne um C, −6..+5). */
     val barRoots = IntArray(4)
     @Volatile var made = false
+    /** Offene Hi-Hat in den erzeugten Beats (aus = nur geschlossene Hats). */
+    @Volatile var openHat = true
 
     private val MAJ = intArrayOf(0, 2, 4, 5, 7, 9, 11)
     private val MIN = intArrayOf(0, 2, 3, 5, 7, 8, 10)
@@ -118,7 +120,8 @@ object GrooveGen {
         }
         fun both(v: Int, vararg ks: Int, acc: Boolean = false, vel: Float = 1f) { for (k in ks) { hit(v, k, acc, vel); hit(v, k + 16, acc, vel) } }
         fun hats16(v: Int, dens: Float, accOff: Boolean) {
-            for (k in 0 until 32) if (k % 2 == 1 || r.nextFloat() < dens) hit(v, k, accOff && k % 4 == 2, if (k % 2 == 0) 0.75f else 0.6f + r.nextFloat() * 0.3f)
+            // Achtel-Offbeats immer, die übrigen 16tel nach Dichte – leiser, damit die Hats nicht alles zudecken
+            for (k in 0 until 32) if (k % 4 == 2 || r.nextFloat() < dens) hit(v, k, accOff && k % 4 == 2, if (k % 4 == 2) 0.6f else 0.35f + r.nextFloat() * 0.25f)
         }
         val BD = 0; val SD = 1; val LT = 2; val MT = 3; val HT = 4; val RS = 5; val CP = 6; val CH = 7; val OH = 8; val CR = 9; val RD = 10
         when (ge.drums) {
@@ -126,9 +129,9 @@ object GrooveGen {
                 if (ge.drums == "rock") { both(BD, 0, 8); if (r.nextBoolean()) both(BD, 10); both(SD, 4, 12, acc = true) }
                 else { both(BD, 0, 4, 8, 12); both(CP, 4, 12) }
                 when (ge.drums) {
-                    "four" -> { both(OH, 2, 6, 10, 14, vel = 0.7f); hats16(CH, 0.25f, false); if (r.nextBoolean()) both(SD, 4, 12, vel = 0.6f) }
+                    "four" -> { both(OH, 2, 6, 10, 14, vel = 0.5f); hats16(CH, 0.25f, false); if (r.nextBoolean()) both(SD, 4, 12, vel = 0.6f) }
                     "deep" -> { both(CH, 2, 6, 10, 14, vel = 0.7f); both(RS, 3, 11, vel = 0.6f); if (r.nextBoolean()) both(RS, 7, vel = 0.5f); hits(r, CH, 0.2f) }
-                    "trance" -> { both(OH, 2, 6, 10, 14, acc = true); hats16(CH, 0.6f, false); both(RD, 2, 6, 10, 14, vel = 0.5f) }
+                    "trance" -> { both(OH, 2, 6, 10, 14, vel = 0.6f); hats16(CH, 0.6f, false); both(RD, 2, 6, 10, 14, vel = 0.5f) }
                     "afro" -> {
                         for (k in intArrayOf(0, 3, 6, 10, 12)) both(RS, k, vel = 0.75f)
                         for (k in intArrayOf(2, 7, 11, 14)) both(LT, k, vel = 0.7f)
@@ -150,7 +153,7 @@ object GrooveGen {
                 if (r.nextBoolean()) both(BD, 14, vel = 0.55f)
                 both(CP, 4, 12, vel = 0.85f)
                 hats16(CH, 0.9f, true)
-                both(OH, 2, 6, 10, 14, vel = 0.6f)
+                both(OH, 2, 6, 10, 14, vel = 0.45f)
                 if (r.nextBoolean()) both(RD, 0, 2, 4, 6, 8, 10, 12, 14, vel = 0.45f)
                 if (r.nextBoolean()) both(RS, 3, 11, 15, vel = 0.6f)
             }
@@ -201,8 +204,9 @@ object GrooveGen {
         when (fill) {
             1 -> for (k in intArrayOf(28, 29, 30, 31)) hit(SD, k, vel = 0.5f + 0.12f * (k - 28))
             2 -> { hit(HT, 28, vel = 0.8f); hit(MT, 29, vel = 0.8f); hit(LT, 30, vel = 0.85f); hit(LT, 31, vel = 0.9f) }
-            3 -> { hit(OH, 30, true); hit(SD, 31, vel = 0.7f) }
+            3 -> { hit(OH, 30, vel = 0.7f); hit(SD, 31, vel = 0.7f) }
         }
+        if (!openHat) java.util.Arrays.fill(st.drumSteps[OH], 0)
         st.drumOn = true
     }
 

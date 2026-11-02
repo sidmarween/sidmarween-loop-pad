@@ -2133,6 +2133,12 @@ class MainActivity : Activity() {
         check(box, "🎸 Bass (BASSLINE)", grooveParts and GrooveGen.P_BASS != 0) { grooveParts = if (it) grooveParts or GrooveGen.P_BASS else grooveParts and GrooveGen.P_BASS.inv() }
         check(box, "🎹 Akkorde (KEYS) – neue Tonart & Folge", grooveParts and GrooveGen.P_CHORDS != 0) { grooveParts = if (it) grooveParts or GrooveGen.P_CHORDS else grooveParts and GrooveGen.P_CHORDS.inv() }
         check(box, "🎵 Melodie (SYNTH 1)", grooveParts and GrooveGen.P_MELODY != 0) { grooveParts = if (it) grooveParts or GrooveGen.P_MELODY else grooveParts and GrooveGen.P_MELODY.inv() }
+        check(box, "🔔 Offene Hi-Hat (Open-Hat) mitspielen", GrooveGen.openHat) {
+            GrooveGen.openHat = it
+            // sofort wirken: im laufenden Beat die Open-Hat stumm bzw. wieder an
+            InstState.drumMute[8] = !it
+            hint(if (it) "🔔 Open-Hat an" else "🔕 Open-Hat aus – nur geschlossene Hats")
+        }
         val bAll = Button(this).apply { text = "🎲 GROOVE WÜRFELN"; textSize = 16f }
         bAll.setOnClickListener { run(grooveParts, grooveParts and GrooveGen.P_CHORDS == 0, "Neuer Groove") }
         box.addView(bAll)
@@ -2142,7 +2148,7 @@ class MainActivity : Activity() {
         small("🎸 neu") { run(GrooveGen.P_BASS, true, "Neue Bassline – passt zu den Akkorden") }
         small("🎵 neu") { run(GrooveGen.P_MELODY, true, "Neue Melodie in der Tonart") }
         box.addView(row)
-        note(box, "Alles landet in 909, BASSLINE, KEYS und SYNTH 1 – dort weiter bearbeiten, mit ⏺ auf Pads aufnehmen oder im Song-Baukasten verwenden. ↶ UNDO macht den letzten Wurf rückgängig.")
+        note(box, "Alles landet in 909, BASSLINE, KEYS und SYNTH 1 – dort weiter bearbeiten, mit ⏺ auf Pads aufnehmen oder im Song-Baukasten verwenden. ↶ UNDO macht den letzten Wurf rückgängig.\nZurück hierher: im DRUM-909-Editor ▦ PRESETS → 🎲 GROOVE-GENERATOR (ganz oben).")
         scroll.setPadding(0, (4 * d).toInt(), 0, 0)
         ui().setTitle("🎲 Groove-Generator")
             .setView(scroll)
@@ -2215,7 +2221,9 @@ class MainActivity : Activity() {
         if (k == 3) { showSynthPresets(); return }
         val isAcid = k == 1
         val genres = if (isAcid) InstPresets.ACIDS.map { it.genre }.distinct() else InstPresets.DRUMS.map { it.genre }.distinct()
-        val items = listOf("🎲 Zufall (Acid-Banger-Generator)") + genres.map { g ->
+        // DRUM: der GROOVE-GENERATOR steht ganz oben – so kommt man aus dem 909-Editor jederzeit dorthin zurück
+        val gg = if (isAcid) 0 else 1
+        val items = (if (isAcid) emptyList() else listOf("🎲 GROOVE-GENERATOR · kompletter Beat nach Genre …")) + listOf(if (isAcid) "🎲 Zufall (Acid-Banger-Generator)" else "🎲 Zufalls-Beat (nur Drums)") + genres.map { g ->
             val n = if (isAcid) InstPresets.ACIDS.count { it.genre == g } else InstPresets.DRUMS.count { it.genre == g }
             "$g ($n)"
         } + listOf(if (isAcid) "🎛 Klang-Presets (${InstPresets.ACID_SOUNDS.size}) – Töne bleiben" else "🎛 Klang-Kits (${InstPresets.KITS.size}) – Kicks, Claps, Percussion", "📥 Eigene MIDI-Datei laden …")
@@ -2223,7 +2231,8 @@ class MainActivity : Activity() {
             .setTitle(if (isAcid) "ACID 303 · Presets" else "DRUM 909 · Beats")
             .setItems(items.toTypedArray()) { _, w ->
                 when {
-                    w == 0 -> {
+                    gg == 1 && w == 0 -> showGrooveGen()
+                    w == gg -> {
                         Engine.pushPatternUndo("Zufall")
                         if (isAcid) InstPresets.randomAcid() else InstPresets.randomDrums()
                         hint("🎲 Neues Zufalls-Pattern – nochmal für ein anderes")
@@ -2231,7 +2240,7 @@ class MainActivity : Activity() {
                     w == items.size - 1 -> showInstMidi(k)
                     w == items.size - 2 -> if (isAcid) showAcidSounds() else showSoundKits()
                     else -> {
-                        val g = genres[w - 1]
+                        val g = genres[w - 1 - gg]
                         if (isAcid) {
                             val list = InstPresets.ACIDS.filter { it.genre == g }
                             ui().setTitle(g)

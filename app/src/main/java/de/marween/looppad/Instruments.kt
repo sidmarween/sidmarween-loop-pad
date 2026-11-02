@@ -1325,7 +1325,7 @@ class DrumMachine(private val sr: Int) {
                         val mm = metallic(vc, 0.9 * 2.0.pow((tune - 0.5) * 0.8)) * 0.9 + noise() * 0.15
                         vc.f1.run(mm, gx(G8000), 1.0)
                         vc.f2.run(vc.f1.bp, gx(G6000), 1.0)
-                        env = if (!open) exp(-t / (0.03 + dec * 0.06)) else exp(-t / (0.25 + dec * 0.6))
+                        env = if (!open) exp(-t / (0.03 + dec * 0.06)) else exp(-t / (0.12 + dec * 0.4))
                         s = vc.f2.hp * 3.0
                     }
                     2 -> { // Shaker
@@ -1338,14 +1338,14 @@ class DrumMachine(private val sr: Int) {
                         val mm = metallic(vc, 2.3 * ft) * 0.6 + noise() * 0.5
                         vc.f1.run(mm, gx(G9000), 0.9)
                         val jingle = 0.6 + 0.4 * sin(2 * PI * 38.0 * t)
-                        env = if (!open) exp(-t / (0.08 + dec * 0.1)) else exp(-t / (0.3 + dec * 0.5))
+                        env = if (!open) exp(-t / (0.08 + dec * 0.1)) else exp(-t / (0.18 + dec * 0.35))
                         s = vc.f1.bp * 2.4 * jingle
                     }
                     4 -> { // Akustik-Becken: dunkler, mit „Tschick“-Anschlag
                         val mm = metallic(vc, 1.2 * ft) * 0.6 + noise() * 0.5
                         vc.f1.run(mm, gx(G9000), 0.7)
                         vc.f2.run(vc.f1.bp, gx(G5000), 1.0)
-                        env = if (!open) exp(-t / (0.04 + dec * 0.06)) else exp(-t / (0.4 + dec * 0.8))
+                        env = if (!open) exp(-t / (0.04 + dec * 0.06)) else exp(-t / (0.2 + dec * 0.5))
                         s = vc.f2.hp * (if (open) 1.8 else 2.4) + noise() * exp(-t / 0.001) * 0.3
                     }
                     else -> { // Cabasa: raues, hohes Rasseln
@@ -1522,8 +1522,9 @@ class DrumMachine(private val sr: Int) {
                                 val m = metallic(vc, 1.0 * 2.0.pow((tune - 0.5) * 0.8)) * 0.9 + noise() * 0.12
                                 vc.f1.run(m, g10k, 0.9)
                                 vc.f2.run(vc.f1.bp, g7000, 1.0)
-                                env = if (v == 7) exp(-t / (0.025 + dec * 0.07)) else exp(-t / (0.16 + dec * 0.6))
-                                s = vc.f2.hp * 3.4
+                                // Open-Hat: kürzer als früher (lief bei Offbeat-Mustern sonst durchgehend), beide Hats etwas leiser
+                                env = if (v == 7) exp(-t / (0.025 + dec * 0.07)) else exp(-t / (0.08 + dec * 0.36))
+                                s = vc.f2.hp * (if (v == 7) 2.7 else 2.3)
                             }
                             9 -> { // Crash: Metall + Rauschen, breiter Bandpass, lang
                                 val m = metallic(vc, 1.45 * 2.0.pow(tune - 0.5)) * 0.6 + noise() * 0.5
