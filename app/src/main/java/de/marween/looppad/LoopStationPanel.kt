@@ -27,6 +27,12 @@ class LoopStationPanel(private val host: View) {
     var onNeedMicCalib: (() -> Unit)? = null
     /** ⇪ EXPORT: WAV, Stems oder in die DJ-Sammlung. */
     var onExport: (() -> Unit)? = null
+    /** FX einer Spur (Pad-Index): Rückwärts, Oktave, Normalisieren, Pad-Effekte … (MainActivity). */
+    var onTrackFx: ((Int) -> Unit)? = null
+    /** Aufnahmelänge je Spur: FREI (Loop endet beim Tippen) oder feste Takte – startet und endet auf der Eins. */
+    private val lenSel = IntArray(TRACKS)
+    private val LENS = intArrayOf(-1, 1, 2, 4, 8)
+    private val LEN_NAMES = arrayOf("FREI", "1 TAKT", "2 TAKTE", "4 TAKTE", "8 TAKTE")
 
     private val d = host.resources.displayMetrics.density
     private fun dp(v: Float) = v * d
@@ -40,6 +46,8 @@ class LoopStationPanel(private val host: View) {
     private val play = Array(TRACKS) { RectF() }
     private val clr = Array(TRACKS) { RectF() }
     private val src = Array(TRACKS) { RectF() }
+    private val lenB = Array(TRACKS) { RectF() }
+    private val fxB = Array(TRACKS) { RectF() }
     private val fader = Array(TRACKS) { RectF() }
     private val COLS = intArrayOf(Color.rgb(255, 90, 90), Color.rgb(90, 200, 255), Color.rgb(120, 230, 120), Color.rgb(255, 200, 70))
     private var faderPtr = -1
@@ -69,7 +77,9 @@ class LoopStationPanel(private val host: View) {
             val x0 = box.left + m + t * (cw + g)
             val x1 = x0 + cw
             src[t].set(x0, top, x1, top + dp(30f))
-            val fTop = src[t].bottom + dp(8f)
+            lenB[t].set(x0, src[t].bottom + dp(5f), x1, src[t].bottom + dp(33f))
+            fxB[t].set(x0, lenB[t].bottom + dp(5f), x1, lenB[t].bottom + dp(33f))
+            val fTop = fxB[t].bottom + dp(8f)
             val bigSide = min(cw, (box.bottom - m - fTop) * 0.42f)
             val bottom = box.bottom - m
             clr[t].set(x0, bottom - dp(40f), x1, bottom)
@@ -101,7 +111,7 @@ class LoopStationPanel(private val host: View) {
         c.drawRoundRect(box, dp(14f), dp(14f), stroke)
         text.textAlign = Paint.Align.LEFT
         text.color = Color.WHITE
-        c.drawText(fitLabel(text, "🔁 LOOP STATION", bExp.left - box.left - dp(18f), dp(16f), dp(9f)), box.left + dp(12f), bClose.centerY() + dp(1f), text)
+        c.drawText(fitLabel(text, "🔁 LIVE-LOOPER", bExp.left - box.left - dp(18f), dp(16f), dp(9f)), box.left + dp(12f), bClose.centerY() + dp(1f), text)
         // Eingangspegel
         val lv = min(1f, Engine.inputLevel * 3f)
         val mr = RectF(box.left + dp(12f), bClose.bottom + dp(8f), box.right - dp(12f), bClose.bottom + dp(14f))
@@ -127,6 +137,8 @@ class LoopStationPanel(private val host: View) {
         val st = Engine.state(p)
         val armed = Engine.isArmed(p)
         btn(c, src[t], "${t + 1} · " + if (Engine.padSource[p] >= 1) "APP-KLANG" else "MIKRO", false, col)
+        btn(c, lenB[t], LEN_NAMES[lenSel[t]], lenSel[t] > 0, col)
+        btn(c, fxB[t], "FX · ⇄ · ±OKT", false, col)
         // Fader
         val f = fader[t]
         fill.color = Color.rgb(30, 32, 40)
@@ -190,7 +202,7 @@ class LoopStationPanel(private val host: View) {
         }
         val oldBars = Engine.liveBars
         val oldTap = Engine.tapOverdub
-        Engine.liveBars = -1
+        Engine.liveBars = LENS[lenSel[t]]
         Engine.tapOverdub = true
         try {
             Engine.padDown(p, 1f, 0L)
@@ -200,7 +212,7 @@ class LoopStationPanel(private val host: View) {
             Engine.tapOverdub = oldTap
         }
         when (st) {
-            Engine.PadState.EMPTY -> onHint?.invoke("Spur ${t + 1}: Aufnahme – nochmal tippen schließt den Loop")
+            Engine.PadState.EMPTY -> onHint?.invoke(if (lenSel[t] > 0) "Spur ${t + 1}: Aufnahme startet auf der Eins und endet nach ${LEN_NAMES[lenSel[t]]} von selbst" else "Spur ${t + 1}: Aufnahme – nochmal tippen schließt den Loop")
             Engine.PadState.PLAYING -> onHint?.invoke("Spur ${t + 1}: Overdub – nochmal tippen beendet ihn")
             else -> {}
         }
@@ -232,6 +244,16 @@ class LoopStationPanel(private val host: View) {
                                 onHint?.invoke("Spur ${t + 1} gelöscht (↶ UNDO holt sie zurück)")
                             }
                         }, 600L)
+                        return
+                    }
+                    if (lenB[t].contains(x, y)) {
+                        lenSel[t] = (lenSel[t] + 1) % LENS.size
+                        onHint?.invoke("Spur ${t + 1}: " + if (lenSel[t] == 0) "freie Länge – zweites Tippen schließt den Loop" else "${LEN_NAMES[lenSel[t]]} – Aufnahme beginnt auf der nächsten Eins und schließt sich selbst")
+                        haptic(); return
+                    }
+                    if (fxB[t].contains(x, y)) {
+                        haptic()
+                        if (Engine.hasLoop(FIRST + t)) onTrackFx?.invoke(FIRST + t) else onHint?.invoke("Spur ${t + 1} ist noch leer")
                         return
                     }
                     if (src[t].contains(x, y)) {

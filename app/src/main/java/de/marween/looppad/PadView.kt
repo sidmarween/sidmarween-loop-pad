@@ -963,6 +963,7 @@ class PadView(context: Context) : View(context) {
         if (chordPad.isOpen) chordPad.draw(canvas, RectF(dp(6f), insetTop + dp(6f), width - dp(6f), height - insetBottom - dp(6f)), overlayColors()[2])
         if (vocoder.isOpen) vocoder.draw(canvas, RectF(dp(6f), insetTop + dp(6f), width - dp(6f), height - insetBottom - dp(6f)), overlayColors()[2])
         if (vocalChop.isOpen) vocalChop.draw(canvas, RectF(dp(6f), insetTop + dp(6f), width - dp(6f), height - insetBottom - dp(6f)), overlayColors()[2])
+        if (mixMorph.isOpen) mixMorph.draw(canvas, RectF(dp(6f), insetTop + dp(6f), width - dp(6f), height - insetBottom - dp(6f)), overlayColors()[2])
         if (!masterPanel.isOpen) drawMasterButton(canvas)
         if (masterPanel.isOpen) masterPanel.draw(canvas, RectF(dp(6f), insetTop + dp(6f), width - dp(6f), height - insetBottom - dp(6f)), overlayColors()[2])
         drawInfo(canvas)
@@ -1161,7 +1162,7 @@ class PadView(context: Context) : View(context) {
     /** MASTER-Knopf oben: leuchtet, wenn die Kette aktiv ist; Balken zeigt die Limiter-Reduktion. */
     private fun drawMasterButton(canvas: Canvas) {
         val r = masterBtn
-        if (r.width() <= 0f || kbPad >= 0 || edPad >= 0 || instEd.isOpen || slicer.isOpen || station.isOpen || launcher.isOpen || ghost.isOpen || atmos.isOpen || wolf.isOpen || architect.isOpen || orbits.isOpen || bassLab.isOpen || vibe.isOpen || chaos.isOpen || touchLab.isOpen || organism.isOpen || fxGen.isOpen || chordPad.isOpen || vocoder.isOpen || vocalChop.isOpen || harm.isOpen || euclid.isOpen || songEd.isOpen || songBuilder.isOpen) return
+        if (r.width() <= 0f || kbPad >= 0 || edPad >= 0 || instEd.isOpen || slicer.isOpen || station.isOpen || launcher.isOpen || ghost.isOpen || atmos.isOpen || wolf.isOpen || architect.isOpen || orbits.isOpen || bassLab.isOpen || vibe.isOpen || chaos.isOpen || touchLab.isOpen || organism.isOpen || fxGen.isOpen || chordPad.isOpen || vocoder.isOpen || vocalChop.isOpen || mixMorph.isOpen || harm.isOpen || euclid.isOpen || songEd.isOpen || songBuilder.isOpen) return
         val cols = overlayColors()
         val active = MasterBus.anyOn()
         val rr = dp(8f)
@@ -1525,7 +1526,7 @@ class PadView(context: Context) : View(context) {
         strokePaint.strokeCap = Paint.Cap.BUTT
     }
 
-    private fun focusBlocked(): Boolean = kbPad >= 0 || edPad >= 0 || instEd.isOpen || masterPanel.isOpen || slicer.isOpen || station.isOpen || launcher.isOpen || ghost.isOpen || atmos.isOpen || wolf.isOpen || architect.isOpen || orbits.isOpen || bassLab.isOpen || vibe.isOpen || chaos.isOpen || touchLab.isOpen || organism.isOpen || fxGen.isOpen || chordPad.isOpen || vocoder.isOpen || vocalChop.isOpen || harm.isOpen || euclid.isOpen || songEd.isOpen || songBuilder.isOpen
+    private fun focusBlocked(): Boolean = kbPad >= 0 || edPad >= 0 || instEd.isOpen || masterPanel.isOpen || slicer.isOpen || station.isOpen || launcher.isOpen || ghost.isOpen || atmos.isOpen || wolf.isOpen || architect.isOpen || orbits.isOpen || bassLab.isOpen || vibe.isOpen || chaos.isOpen || touchLab.isOpen || organism.isOpen || fxGen.isOpen || chordPad.isOpen || vocoder.isOpen || vocalChop.isOpen || mixMorph.isOpen || harm.isOpen || euclid.isOpen || songEd.isOpen || songBuilder.isOpen
 
     private fun sectionRect(sec: Int, out: RectF) {
         when (sec) {
@@ -4277,6 +4278,7 @@ class PadView(context: Context) : View(context) {
         if (chordPad.isOpen) { chordPad.touch(e); invalidate(); return true }
         if (vocoder.isOpen) { vocoder.touch(e); invalidate(); return true }
         if (vocalChop.isOpen) { vocalChop.touch(e); invalidate(); return true }
+        if (mixMorph.isOpen) { mixMorph.touch(e); invalidate(); return true }
         if (launcher.isOpen) {
             launcher.touch(e)
             invalidate()
@@ -9311,7 +9313,9 @@ class PadView(context: Context) : View(context) {
     fun closeSlicer() { slicer.close(); invalidate() }
 
     /** Loop Station: 4 Spuren mit großem Rec/Dub-Knopf (Pads 13–16). */
-    private val station = LoopStationPanel(this).also { it.onHint = { m -> hint(m) }; it.onNeedMicCalib = { onLessonAction?.invoke("calibAsk") }; it.onExport = { onPanelExport?.invoke(0) } }
+    private val station = LoopStationPanel(this).also { it.onHint = { m -> hint(m) }; it.onNeedMicCalib = { onLessonAction?.invoke("calibAsk") }; it.onExport = { onPanelExport?.invoke(0) }; it.onTrackFx = { p -> onLooperFx?.invoke(p) } }
+    /** FX-Menü einer Live-Looper-Spur (MainActivity). */
+    var onLooperFx: ((Int) -> Unit)? = null
     fun openStation() { closeFocus(); station.open(); invalidate() }
     val stationOpen: Boolean get() = station.isOpen
     fun closeStation() { station.close(); invalidate() }
@@ -9352,7 +9356,8 @@ class PadView(context: Context) : View(context) {
     val chordPad = ChordPadPanel(this).also { it.onHint = { m -> hint(m) } }
     val vocoder = VocoderPanel(this).also { it.onHint = { m -> hint(m) } }
     val vocalChop = VocalChopPanel(this).also { it.onHint = { m -> hint(m) } }
-    fun openPerf(k: Int) { closeFocus(); when (k) { 0 -> fxGen.open(); 1 -> chordPad.open(); 2 -> vocoder.open(); else -> vocalChop.open() }; invalidate() }
+    val mixMorph = MixMorphPanel(this).also { it.onHint = { m -> hint(m) } }
+    fun openPerf(k: Int) { closeFocus(); when (k) { 0 -> fxGen.open(); 1 -> chordPad.open(); 2 -> vocoder.open(); 3 -> vocalChop.open(); else -> mixMorph.open() }; invalidate() }
     val harm = HarmonizerPanel(this).also { it.onHint = { m -> hint(m) } }
     fun openHarm() { closeFocus(); harm.open(); invalidate() }
     val euclid = EuclidPanel(this).also { it.onHint = { m -> hint(m) } }

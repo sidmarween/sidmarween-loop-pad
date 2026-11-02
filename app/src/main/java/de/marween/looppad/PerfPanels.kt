@@ -575,3 +575,142 @@ class VocalChopPanel(host: View) : PerfPanel(host) {
         }
     }
 }
+
+// ================================================================ 🎛 PERFORMANCE-SZENEN (A/B-Morph)
+class MixMorphPanel(host: View) : PerfPanel(host) {
+    private val bA = RectF(); private val bB = RectF(); private val bPre = RectF()
+    private val fader = RectF()
+    private val lens = Array(5) { RectF() }
+    private val LENS = intArrayOf(1, 2, 4, 8, 16)
+    private val bToB = RectF(); private val bToA = RectF(); private val bStop = RectF()
+    private val bJumpA = RectF(); private val bJumpB = RectF()
+    private var faderPtr = -1
+
+    fun draw(c: Canvas, area: RectF, acc: Int) {
+        val col = Color.rgb(255, 200, 90)
+        val m = MixMorph
+        val status = when {
+            m.a == null && m.b == null -> "Mix einstellen → 📸 A · anders einstellen → 📸 B · oder eine Vorlage wählen"
+            m.a == null -> "Noch A speichern"
+            m.b == null -> "Noch B speichern (Mix ändern, dann 📸 B)"
+            else -> "${m.diffCount()} Unterschiede zwischen A und B" + if (!m.autoTo.isNaN()) " · Auto-Morph läuft" else ""
+        }
+        frame(c, area, "🎛 PERFORMANCE-SZENEN", col, Color.rgb(20, 16, 8), acc, status)
+        val pad = dp(10f); val g = dp(6f)
+        val l = box.left + pad; val r = box.right - pad
+        var y = bClose.bottom + dp(22f)
+        row(arrayOf(bA, bB), l, r, y, dp(42f))
+        btn(c, bA, if (m.a != null) "📸 A neu speichern" else "📸 A SPEICHERN", m.a != null, Color.rgb(120, 200, 255))
+        btn(c, bB, if (m.b != null) "📸 B neu speichern" else "📸 B SPEICHERN", m.b != null, Color.rgb(255, 140, 120))
+        y += dp(42f) + g
+        bPre.set(l, y, r, y + dp(40f))
+        btn(c, bPre, "◀ VORLAGE: " + (if (m.presetIdx >= 0) m.PRESETS[m.presetIdx].name else "jetziger Mix = A, Vorlage = B") + " ▶", m.presetIdx >= 0, col)
+        y += dp(40f) + dp(4f)
+        if (m.presetIdx >= 0) {
+            text.textSize = dp(9.5f); text.color = Color.argb(170, 255, 255, 255)
+            c.drawText(fitLabel(text, m.PRESETS[m.presetIdx].desc, r - l, dp(9.5f), dp(7f)), (l + r) / 2, y + dp(9f), text)
+        }
+        y += dp(16f)
+        // großer Morph-Regler (Crossfader)
+        fader.set(l, y, r, y + dp(84f))
+        fill.color = Color.rgb(34, 28, 18); c.drawRoundRect(fader, dp(12f), dp(12f), fill)
+        val ready = m.ready()
+        val px = fader.left + dp(28f) + (fader.width() - dp(56f)) * m.pos
+        fill.shader = android.graphics.LinearGradient(fader.left, 0f, fader.right, 0f, Color.argb(120, 120, 200, 255), Color.argb(120, 255, 140, 120), android.graphics.Shader.TileMode.CLAMP)
+        c.drawRoundRect(RectF(fader.left + dp(4f), fader.centerY() - dp(4f), fader.right - dp(4f), fader.centerY() + dp(4f)), dp(4f), dp(4f), fill)
+        fill.shader = null
+        text.textSize = dp(22f); text.color = Color.rgb(120, 200, 255)
+        c.drawText("A", fader.left + dp(16f), fader.centerY() + dp(8f), text)
+        text.color = Color.rgb(255, 140, 120)
+        c.drawText("B", fader.right - dp(16f), fader.centerY() + dp(8f), text)
+        if (ready) {
+            glow.maskFilter = BlurMaskFilter(dp(10f), BlurMaskFilter.Blur.NORMAL); glow.color = col
+            c.drawRoundRect(RectF(px - dp(16f), fader.top + dp(8f), px + dp(16f), fader.bottom - dp(8f)), dp(6f), dp(6f), glow); glow.maskFilter = null
+            fill.color = Color.WHITE
+            c.drawRoundRect(RectF(px - dp(14f), fader.top + dp(10f), px + dp(14f), fader.bottom - dp(10f)), dp(6f), dp(6f), fill)
+            text.textSize = dp(10f); text.color = Color.BLACK
+            c.drawText("${(m.pos * 100).toInt()}", px, fader.centerY() + dp(4f), text)
+        } else {
+            text.textSize = dp(10f); text.color = Color.argb(150, 255, 255, 255)
+            c.drawText("erst A und B speichern", fader.centerX(), fader.bottom - dp(10f), text)
+        }
+        y = fader.bottom + dp(12f)
+        text.textAlign = Paint.Align.LEFT; text.textSize = dp(10f); text.color = Color.argb(200, 255, 255, 255)
+        c.drawText("AUTO-MORPH ÜBER", l, y + dp(6f), text); text.textAlign = Paint.Align.CENTER
+        y += dp(12f)
+        row(lens, l, r, y, dp(36f))
+        for (k in 0 until 5) btn(c, lens[k], "${LENS[k]} T", m.autoBars == LENS[k], col)
+        y += dp(36f) + g
+        row(arrayOf(bToA, bToB, bStop), l, r, y, dp(46f))
+        val ap = m.autoProgress()
+        btn(c, bToA, "⏪ ZU A", !m.autoTo.isNaN() && m.autoTo == 0f, Color.rgb(120, 200, 255), 13f)
+        btn(c, bToB, "ZU B ⏩", !m.autoTo.isNaN() && m.autoTo == 1f, Color.rgb(255, 140, 120), 13f)
+        btn(c, bStop, "■ HALT", false, col)
+        if (!m.autoTo.isNaN()) {
+            val br = if (m.autoTo == 1f) bToB else bToA
+            if (ap < 0f) { text.textSize = dp(9f); text.color = Color.BLACK; c.drawText("wartet auf die Eins", br.centerX(), br.bottom - dp(5f), text) }
+            else { fill.color = Color.argb(180, 0, 0, 0); c.drawRect(br.left + dp(6f), br.bottom - dp(6f), br.left + dp(6f) + (br.width() - dp(12f)) * ap, br.bottom - dp(3f), fill) }
+        }
+        y += dp(46f) + g
+        row(arrayOf(bJumpA, bJumpB), l, r, y, dp(40f))
+        btn(c, bJumpA, "SOFORT A", ready && m.pos == 0f, Color.rgb(120, 200, 255))
+        btn(c, bJumpB, "SOFORT B", ready && m.pos == 1f, Color.rgb(255, 140, 120))
+        y += dp(40f) + dp(14f)
+        // Unterschiede
+        val diffs = m.diffNames(14)
+        if (diffs.isNotEmpty()) {
+            text.textAlign = Paint.Align.LEFT; text.textSize = dp(10f); text.color = Color.argb(200, 255, 255, 255)
+            c.drawText("A → B ändert:", l, y, text)
+            y += dp(14f)
+            text.textSize = dp(10.5f); text.color = Color.WHITE
+            val colW = (r - l) / 2
+            for ((k, s) in diffs.withIndex()) {
+                val yy = y + (k / 2) * dp(15f)
+                if (yy > box.bottom - pad) break
+                c.drawText("• " + s, l + (k % 2) * colW, yy, text)
+            }
+            text.textAlign = Paint.Align.CENTER
+        }
+        host.postInvalidateOnAnimation()
+    }
+
+    private fun setFromX(x: Float) {
+        val v = ((x - fader.left - dp(28f)) / (fader.width() - dp(56f))).coerceIn(0f, 1f)
+        MixMorph.stopAuto()
+        MixMorph.setPos(v)
+    }
+
+    fun touch(e: MotionEvent) {
+        val i = e.actionIndex
+        val x = e.getX(i); val y = e.getY(i)
+        val m = MixMorph
+        when (e.actionMasked) {
+            MotionEvent.ACTION_DOWN, MotionEvent.ACTION_POINTER_DOWN -> {
+                if (fader.contains(x, y)) {
+                    if (!m.ready()) { onHint?.invoke("Erst 📸 A und 📸 B speichern – oder eine Vorlage wählen"); return }
+                    faderPtr = e.getPointerId(i); setFromX(x); return
+                }
+                if (e.actionMasked != MotionEvent.ACTION_DOWN) return
+                haptic()
+                when {
+                    bClose.contains(x, y) -> close()
+                    bA.contains(x, y) -> { m.storeA(); m.presetIdx = -1; onHint?.invoke("📸 A gespeichert – jetzt den Mix verändern (Lautstärken, Filter, Spuren an/aus) und 📸 B") }
+                    bB.contains(x, y) -> { m.storeB(); m.presetIdx = -1; onHint?.invoke(if (m.a != null) "📸 B gespeichert – Regler ziehen oder AUTO-MORPH" else "📸 B gespeichert – noch A speichern") }
+                    bPre.contains(x, y) -> {
+                        m.applyPreset(if (m.presetIdx < 0) 0 else if (x < bPre.centerX()) m.presetIdx - 1 else m.presetIdx + 1)
+                        onHint?.invoke("🎛 A = jetziger Mix, B = ${m.PRESETS[m.presetIdx].name} · Regler ziehen oder ZU B ⏩")
+                    }
+                    bToB.contains(x, y) -> if (m.ready()) { m.startAuto(1f); onHint?.invoke("⏩ Ab der nächsten Eins in ${m.autoBars} Takt" + (if (m.autoBars > 1) "en" else "") + " zu B") } else onHint?.invoke("Erst A und B speichern")
+                    bToA.contains(x, y) -> if (m.ready()) { m.startAuto(0f); onHint?.invoke("⏪ Ab der nächsten Eins in ${m.autoBars} Takt" + (if (m.autoBars > 1) "en" else "") + " zurück zu A") } else onHint?.invoke("Erst A und B speichern")
+                    bStop.contains(x, y) -> m.stopAuto()
+                    bJumpA.contains(x, y) -> if (m.ready()) { m.stopAuto(); m.setPos(0f) }
+                    bJumpB.contains(x, y) -> if (m.ready()) { m.stopAuto(); m.setPos(1f) }
+                    else -> { val k = lens.indexOfFirst { it.contains(x, y) }; if (k >= 0) m.autoBars = LENS[k] }
+                }
+            }
+            MotionEvent.ACTION_MOVE -> { val pi = e.findPointerIndex(faderPtr); if (pi >= 0) setFromX(e.getX(pi)) }
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_POINTER_UP -> if (e.getPointerId(i) == faderPtr) faderPtr = -1
+            MotionEvent.ACTION_CANCEL -> faderPtr = -1
+        }
+    }
+}

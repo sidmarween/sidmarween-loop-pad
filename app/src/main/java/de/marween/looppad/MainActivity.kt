@@ -101,6 +101,7 @@ class MainActivity : Activity() {
         pads.onToCollection = { exportAllToCollection() }
         pads.onExportWaves = { exportAllWaves() }
         pads.onExportStem = { stem, name -> exportInstrument(stem, name) }
+        pads.onLooperFx = { p -> showLooperFx(p) }
         UserSamples.load(this)
         pads.euclid.onSamples = { showVoiceSamples(true) }
         pads.songBuilder.onPickSection = { bar -> pads.songEd.onPickSection?.invoke(bar) }
@@ -2002,6 +2003,8 @@ class MainActivity : Activity() {
                 Item("🎤 VOCAL-HARMONIZER · Chor aus dem Gesang" + st(Harmonizer.on)) { if (djMode) dj.openHarm() else pads.openHarm(); hint("▶ AN, dann Akkord-Pads halten – der Gesang des Decks wird zum Chor · XY: Formant und Tuning") }
             ),
             "🛠 WERKZEUGE" to listOf(
+                Item("🔁 LIVE-LOOPER · 4 Spuren wie RC-505 (Länge, Overdub, FX)") { pad(); pads.openStation(); hint("Großen Knopf tippen: Aufnahme · nochmal: Loop läuft · nochmal: Overdub · LÄNGE = frei oder feste Takte") },
+                Item("🎛 PERFORMANCE-SZENEN · Mix A ↔ B morphen, Auto-Morph im Takt") { pad(); pads.openPerf(4); hint("🎛 📸 A speichern, Mix ändern, 📸 B speichern – dann Regler ziehen oder ZU B ⏩ (oder Vorlage wählen)") },
                 Item("🚀 FX-GENERATOR · Riser, Impacts, Drops im Takt") { pad(); pads.openPerf(0); hint("🚀 Länge wählen, Effekt antippen – er startet auf der nächsten Eins und endet nach N Takten genau auf der Eins") },
                 Item("⚡ CHAOS-TRIGGER · zerlegt den laufenden Mix live (DJ)") {
                     if (djMode) dj.openChaos() else pads.openChaos()
@@ -2897,7 +2900,7 @@ class MainActivity : Activity() {
                     pads.openLauncher()
                     hint("Zeile = Szene: ▶ startet sie auf der nächsten Eins · Felder antippen = Spur an/aus bzw. Pattern A–D · ▶ lange drücken = leeren")
                 }
-                add("🔁 Loop Station: 4 Spuren, ein großer Knopf") {
+                add("🔁 Live-Looper: 4 Spuren wie RC-505 (Länge, Overdub, FX)") {
                     if (djMode) switchMode(false)
                     pads.openStation()
                     hint("Großen Knopf tippen: Aufnahme · nochmal: Loop läuft · nochmal: Overdub · ■/▶ stoppt/startet die Spur")
@@ -7339,6 +7342,26 @@ class MainActivity : Activity() {
 
     /** Bis zu drei Effekte für ein Pad wählen und einstellen. */
     private fun chainName(p: Int): String = if (p == Engine.MIC_CHAIN) "Mikrofon" else "Pad ${p + 1}"
+
+    /** 🔁 Live-Looper: Spur bearbeiten (wirkt sofort, ↶ UNDO holt den alten Stand zurück). */
+    private fun showLooperFx(p: Int) {
+        val t = p - LoopStationPanel.FIRST + 1
+        val items = arrayOf("⇄ Rückwärts", "⬆ Oktave höher", "⬇ Oktave tiefer", "♯ +1 Halbton", "♭ −1 Halbton", "📢 Normalisieren (lauter machen)", "🎛 Effekte der Spur (Hall, Delay, Filter …)")
+        ui().setTitle("🔁 Spur $t · FX")
+            .setItems(items) { _, i ->
+                val ok = when (i) {
+                    0 -> Engine.reversePad(p)
+                    1 -> Engine.transposePad(p, 12)
+                    2 -> Engine.transposePad(p, -12)
+                    3 -> Engine.transposePad(p, 1)
+                    4 -> Engine.transposePad(p, -1)
+                    5 -> Engine.normalizePad(p)
+                    else -> { showPadFxEditor(p); return@setItems }
+                }
+                hint(if (ok) "Spur $t: ${items[i].substringAfter(' ')} · ↶ UNDO macht es rückgängig" else "Spur $t: geht gerade nicht (läuft noch eine Aufnahme?)")
+            }
+            .setNegativeButton("Abbrechen", null).show()
+    }
 
     private fun showPadFxEditor(p: Int) {
         val d = resources.displayMetrics.density

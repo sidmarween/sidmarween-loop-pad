@@ -859,6 +859,7 @@ object Engine {
         TouchLab.specPlay = false; TouchLab.allOff(); for (r in TouchLab.spec) java.util.Arrays.fill(r, 0f)
         Modular.drone = false; Modular.reset()
         FxGen.stopAll(); Vocoder.on = false; Vocoder.robot = false
+        MixMorph.reset()
         VocalChop.clear(); VocalChop.allOff(); VocalChop.patIdx = -1; VocalChop.pitch = 0; VocalChop.stutter = 0; VocalChop.reverse = false
         ChordPad.recorded.clear(); ChordPad.recording = false; ChordPad.root = -1
     }
