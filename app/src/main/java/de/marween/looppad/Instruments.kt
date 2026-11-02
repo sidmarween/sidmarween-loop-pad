@@ -2498,6 +2498,8 @@ class PolySynth(private val sr: Int, private val t: InstState.SynTrack) {
         val q = 1f - resA * 0.92f
         val vol = st.volNow() * 0.32f
         val spread = st.detune
+        // Vintage-Klänge einstimmig (Bass/Lead) etwas lauter – sonst gegenüber Akkorden zu leise
+        val monoGain = if (st.mono && wave in 37..40) 2.6f else 1.2f
         val chip = InstState.synIsChip(wave)
         val noFilter = wave == 4 || wave == 10 || wave in 11..13 || wave == 16 || wave == 17 || wave == 19 || wave == 25 || wave == 26 || wave == 27 || wave == 28 || wave == 32 || wave == 34 || wave == 35 || wave in 36..40
         // Bass-Labor
@@ -2805,7 +2807,7 @@ class PolySynth(private val sr: Int, private val t: InstState.SynTrack) {
                 val y = tanh(x + 0.12f * vDrive * x * x)
                 tapeLp += (0.55f - 0.35f * vDrive) * (y - tapeLp)
                 out[i] += tapeLp
-            } else out[i] += fastTanh(mix * vol * 1.2f)
+            } else out[i] += fastTanh(mix * vol * monoGain)
         }
         if (ei < evs.size) synchronized(lock) { queue.addAll(evs.subList(ei, evs.size)) }
     }
