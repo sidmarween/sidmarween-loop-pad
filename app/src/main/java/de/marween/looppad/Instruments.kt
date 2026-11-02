@@ -34,6 +34,12 @@ object InstState {
     @Volatile var acidGlide = 0.25f
     @Volatile var acidAccent = 0.6f
     @Volatile var acidDrive = 0.2f
+    /** Verzerrer-Pedal hinter der 303 (wie in den 88er-Rave-Acid-Tracks): 0 = aus. */
+    @Volatile var acidDist = 0f
+    /** Band-Echo (punktierte Achtel, im Takt): 0 = aus. */
+    @Volatile var acidEcho = 0f
+    /** Filter-Fahrt: Cutoff wandert langsam über 8 Takte auf und zu (wie von Hand gedreht): 0 = aus. */
+    @Volatile var acidSweep = 0f
     @Volatile var acidTune = 0
     @Volatile var acidOn = true
     @Volatile var acidFx = true
@@ -644,6 +650,7 @@ object InstState {
         j.put("drumOn", drumOn); j.put("drumFx", drumFx); j.put("drumDrive", drumDrive.toDouble()); j.put("drumVol", drumVol.toDouble())
         j.put("acidTie", ba(acidTie)); j.put("acidLen", acidLen); j.put("drumLen", drumLen)
         j.put("acidGlide", acidGlide.toDouble()); j.put("acidAccent", acidAccent.toDouble()); j.put("acidDrive", acidDrive.toDouble()); j.put("acidTune", acidTune)
+        j.put("acidDist", acidDist.toDouble()); j.put("acidEcho", acidEcho.toDouble()); j.put("acidSweep", acidSweep.toDouble())
         j.put("drumMute", ba(drumMute))
         j.put("acidVel", fa(acidVel))
         j.put("drumVel", JSONArray().apply { for (v in 0 until DV) put(fa(drumVel[v])) })
@@ -688,6 +695,7 @@ object InstState {
         acidLen = j.optInt("acidLen", 16).coerceIn(16, MAX); drumLen = j.optInt("drumLen", 16).coerceIn(16, MAX)
         acidGlide = j.optDouble("acidGlide", 0.25).toFloat(); acidAccent = j.optDouble("acidAccent", 0.6).toFloat()
         acidDrive = j.optDouble("acidDrive", 0.2).toFloat(); acidTune = j.optInt("acidTune", 0)
+        acidDist = j.optDouble("acidDist", 0.0).toFloat(); acidEcho = j.optDouble("acidEcho", 0.0).toFloat(); acidSweep = j.optDouble("acidSweep", 0.0).toFloat()
         // alte Projekte (16 Schritte): Rest leeren
         if (!j.has("acidLen")) for (k in STEPS until MAX) { acidGate[k] = false; acidTie[k] = false }
         if (!j.has("drumLen")) for (v in 0 until DV) for (k in STEPS until MAX) drumSteps[v][k] = 0
@@ -734,6 +742,11 @@ class AcidSynth(private val sr: Int) {
     private var preHp = 0.0; private var preX = 0.0
     private var postHp = 0.0; private var postX = 0.0
     private var cutSm = 0.0
+    // Verzerrer-Pedal und Band-Echo
+    private var dTone = 0f; private var dLp1 = 0f; private var dLp2 = 0f; private var dHp = 0f; private var dHpX = 0f
+    private val echo = FloatArray(sr * 2)
+    private var echoW = 0
+    private var echoLp = 0f
 
     private fun midi(semi: Int): Double = 36.0 + 12 * InstState.acidOct + InstState.acidTune + semi
 
@@ -793,13 +806,32 @@ class AcidSynth(private val sr: Int) {
         val vol = st.acidVolNow() * 1.1f
         val square = st.acidSquare
         // Grund-Cutoff 314 Hz … 2,4 kHz (Original-Bereich), Touchpad dazu
-        val baseCut = 314.0 * (2394.0 / 314.0).pow(st.acidCutNow().toDouble().coerceIn(0.0, 1.0)) * 2.0.pow(st.acidCutMod * 2.0)
+        // Filter-Fahrt: über 8 Takte auf und zu (im Takt-Raster), bis ±1,5 Oktaven
+        val sweep = st.acidSweep
+        val sweepOct = if (sweep > 0.01f) kotlin.math.sin(2 * PI * Engine.beatPos(w) / 32.0) * sweep * 1.5 else 0.0
+        val baseCut = 314.0 * (2394.0 / 314.0).pow(st.acidCutNow().toDouble().coerceIn(0.0, 1.0)) * 2.0.pow(st.acidCutMod * 2.0 + sweepOct)
+        // Pedal: Mitten-Anhebung vor dem Clipping, Tiefpass danach (gegen Kratzen), Ausgang angeglichen
+        val dist = st.acidDist
+        val dGain = 1f + 55f * dist * dist
+        val aTone = (1.0 - exp(-2 * PI * 420.0 / sr)).toFloat()
+        val aDlp = (1.0 - exp(-2 * PI * (6500.0 - 2500.0 * dist) / sr)).toFloat()
+        val aDhp = exp(-2 * PI * 60.0 / sr).toFloat()
+        val dOut = 0.4f / (1f + dist * 0.35f)
+        // Echo: punktierte Achtel im Song-Tempo
+        val ech = st.acidEcho
+        val eLen = (Engine.seqBeatLen() * 0.75).toInt().coerceIn(sr / 20, echo.size - 1)
+        val eFb = 0.3f + 0.35f * ech
+        val eLpA = 0.35f
         val aPre = exp(-2 * PI * 44.0 / sr)
         val aPost = exp(-2 * PI * 24.0 / sr)
         val aFb = exp(-2 * PI * 150.0 / sr)
         for (i in 0 until n) {
             while (ei < evs.size && (evs[ei].frame < 0 || evs[ei].frame <= w + i)) { apply(evs[ei]); ei++ }
-            if (!gate && amp < 1e-5f && abs(y4) < 1e-7) continue
+            if (!gate && amp < 1e-5f && abs(y4) < 1e-7 && (st.acidEcho < 0.01f || abs(echoLp) < 1e-6f)) {
+                // Echo klingt nach, auch wenn die 303 schweigt
+                if (ech > 0.01f) { echo[echoW] = 0f; echoW++; if (echoW >= echo.size) echoW = 0 }
+                continue
+            }
             pitch += (pitchTarget - pitch) * glide
             val f = 440.0 * 2.0.pow((pitch - 69.0) / 12.0)
             val dt = f / sr
@@ -846,7 +878,26 @@ class AcidSynth(private val sr: Int) {
             // Nach-Hochpass, Lautstärke, Accent
             val ph = aPost * (postHp + s - postX); postX = s; postHp = ph
             val a = amp * velNow * (if (accNow) 1f + 0.7f * accAmt * accRc else 1f)
-            out[i] += (tanh(ph * 1.6 * drv) / (0.8 + 0.2 * drv)).toFloat() * a * vol
+            var y = (tanh(ph * 1.6 * drv) / (0.8 + 0.2 * drv)).toFloat() * a
+            if (dist > 0.01f) {
+                // Verzerrer hinter dem VCA (wie ein Pedal am Ausgang): auch ausklingende Töne bleiben rau
+                dTone += aTone * (y - dTone)
+                val pre = (y + (y - dTone) * 1.4f) * dGain + 0.12f
+                val c = pre / (1f + abs(pre)) * 1.6f - 0.12f / (1f + 0.12f)   // asymmetrisch → geradzahlige Obertöne
+                val cl = c.coerceIn(-1f, 1f)
+                dLp1 += aDlp * (cl - dLp1); dLp2 += aDlp * (dLp1 - dLp2)
+                val hp = aDhp * (dHp + dLp2 - dHpX); dHpX = dLp2; dHp = hp
+                y = y * (1f - dist) + hp * dOut * dist * 1.8f
+            }
+            if (ech > 0.01f) {
+                var rp = echoW - eLen; if (rp < 0) rp += echo.size
+                val d = echo[rp]
+                echoLp += eLpA * (d - echoLp)
+                echo[echoW] = y + echoLp * eFb
+                echoW++; if (echoW >= echo.size) echoW = 0
+                y += echoLp * ech * 0.7f
+            }
+            out[i] += y * vol
         }
         if (ei < evs.size) synchronized(lock) { queue.addAll(evs.subList(ei, evs.size)) }
     }
