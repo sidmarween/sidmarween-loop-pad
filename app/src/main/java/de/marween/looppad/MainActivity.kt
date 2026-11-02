@@ -2008,7 +2008,7 @@ class MainActivity : Activity() {
                 Item("📘 HANDBUCH · alle Instrumente kurz erklärt") { showInstHelp() },
                 Item("🎯 RASTER · Generatoren exakt im Takt: " + (if (Engine.tightGrid) "AN" else "AUS (frei, verschleppt)")) {
                     Engine.tightGrid = !Engine.tightGrid
-                    prefs.edit().putBoolean("tightGrid", Engine.tightGrid).apply()
+                    getSharedPreferences("marvpad", MODE_PRIVATE).edit().putBoolean("tightGrid", Engine.tightGrid).apply()
                     hint(if (Engine.tightGrid) "🎯 RASTER an: Orbits, Architect und Euklid-POLY spielen exakt im 16tel-Raster (mit dem Sequenzer-Swing)" else "RASTER aus: Orbits frei, Architect mit eigenem Chaos-Swing, Euklid-POLY teilt den Takt in n gleiche Teile")
                 },
                 Item("🔁 LIVE-LOOPER · 4 Spuren wie RC-505 (Länge, Overdub, FX)") { pad(); pads.openStation(); hint("Großen Knopf tippen: Aufnahme · nochmal: Loop läuft · nochmal: Overdub · LÄNGE = frei oder feste Takte") },

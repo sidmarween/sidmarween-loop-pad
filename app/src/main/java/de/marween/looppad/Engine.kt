@@ -2098,13 +2098,13 @@ object Engine {
     @Volatile var outBufferFrames = 0
         private set
     @Volatile var underruns = 0
+        private set
     /** Rechenlast des Mischers (0..1+, Anteil der Blockdauer). */
     @Volatile var dspLoad = 0f
     /** Zeitpunkt (ms) der letzten Überlast. */
     @Volatile var overloadAt = 0L
     /** 🎯 RASTER: Generatoren (Orbits, Architect) spielen exakt im 16tel-Raster statt frei/verschleppt. */
     @Volatile var tightGrid = true
-        private set
     @Volatile var fastPath = false
         private set
 
