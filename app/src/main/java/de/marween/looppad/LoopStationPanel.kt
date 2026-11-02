@@ -111,7 +111,7 @@ class LoopStationPanel(private val host: View) {
         c.drawRoundRect(box, dp(14f), dp(14f), stroke)
         text.textAlign = Paint.Align.LEFT
         text.color = Color.WHITE
-        c.drawText(fitLabel(text, "🔁 LIVE-LOOPER", bExp.left - box.left - dp(18f), dp(16f), dp(9f)), box.left + dp(12f), bClose.centerY() + dp(1f), text)
+        c.drawText(fitLabel(text, "🔁 LOOPER", bExp.left - box.left - dp(18f), dp(16f), dp(9f)), box.left + dp(12f), bClose.centerY() + dp(1f), text)
         // Eingangspegel
         val lv = min(1f, Engine.inputLevel * 3f)
         val mr = RectF(box.left + dp(12f), bClose.bottom + dp(8f), box.right - dp(12f), bClose.bottom + dp(14f))

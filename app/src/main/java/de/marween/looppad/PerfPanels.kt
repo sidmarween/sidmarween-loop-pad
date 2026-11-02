@@ -615,14 +615,14 @@ class MixMorphPanel(host: View) : PerfPanel(host) {
         fader.set(l, y, r, y + dp(84f))
         fill.color = Color.rgb(34, 28, 18); c.drawRoundRect(fader, dp(12f), dp(12f), fill)
         val ready = m.ready()
-        val px = fader.left + dp(28f) + (fader.width() - dp(56f)) * m.pos
+        val px = fader.left + dp(48f) + (fader.width() - dp(96f)) * m.pos
         fill.shader = android.graphics.LinearGradient(fader.left, 0f, fader.right, 0f, Color.argb(120, 120, 200, 255), Color.argb(120, 255, 140, 120), android.graphics.Shader.TileMode.CLAMP)
         c.drawRoundRect(RectF(fader.left + dp(4f), fader.centerY() - dp(4f), fader.right - dp(4f), fader.centerY() + dp(4f)), dp(4f), dp(4f), fill)
         fill.shader = null
         text.textSize = dp(22f); text.color = Color.rgb(120, 200, 255)
-        c.drawText("A", fader.left + dp(16f), fader.centerY() + dp(8f), text)
+        c.drawText("A", fader.left + dp(17f), fader.centerY() + dp(8f), text)
         text.color = Color.rgb(255, 140, 120)
-        c.drawText("B", fader.right - dp(16f), fader.centerY() + dp(8f), text)
+        c.drawText("B", fader.right - dp(17f), fader.centerY() + dp(8f), text)
         if (ready) {
             glow.maskFilter = BlurMaskFilter(dp(10f), BlurMaskFilter.Blur.NORMAL); glow.color = col
             c.drawRoundRect(RectF(px - dp(16f), fader.top + dp(8f), px + dp(16f), fader.bottom - dp(8f)), dp(6f), dp(6f), glow); glow.maskFilter = null
@@ -675,7 +675,7 @@ class MixMorphPanel(host: View) : PerfPanel(host) {
     }
 
     private fun setFromX(x: Float) {
-        val v = ((x - fader.left - dp(28f)) / (fader.width() - dp(56f))).coerceIn(0f, 1f)
+        val v = ((x - fader.left - dp(48f)) / (fader.width() - dp(96f))).coerceIn(0f, 1f)
         MixMorph.stopAuto()
         MixMorph.setPos(v)
     }

@@ -134,7 +134,12 @@ object MixMorph {
     private fun Snap.mulF(name: String, k: Float) { val i = idx(name); if (i >= 0) f[i] = (f[i] * k).coerceIn(0f, 1.5f) }
     private fun Snap.setF(name: String, v: Float) { val i = idx(name); if (i >= 0) f[i] = v }
     private fun Snap.setB(name: String, v: Boolean) { val i = bIdx(name); if (i >= 0) b[i] = v }
-    private fun Snap.allSynthCut(v: Float) { for (t in 0 until InstState.SYN_TRACKS) setF(InstState.synName(t) + "-CUT", v); setF("ACID-CUT", v * 0.8f) }
+    /** Filter aller Synths/ACID Richtung [v] – nur zu (oder nur auf, wenn [open]), nie in die Gegenrichtung. */
+    private fun Snap.allSynthCut(v: Float, open: Boolean = false) {
+        fun one(n: String, x: Float) { val i = idx(n); if (i >= 0) f[i] = if (open) maxOf(f[i], x) else minOf(f[i], x) }
+        for (t in 0 until InstState.SYN_TRACKS) one(InstState.synName(t) + "-CUT", v)
+        one("ACID-CUT", v * 0.8f)
+    }
     private val BASS_NAME get() = InstState.synName(InstState.BASS_TRACK)
 
     val PRESETS = listOf(
@@ -150,7 +155,7 @@ object MixMorph {
         Preset("Drop: alles voll", "alle Spuren an, Filter offen, Lautstärke +20 %") { s -> s.copy().apply {
             for (p in 0 until 12) setB("PAD${p + 1}", true)
             for (c in 0 until InstState.INSTS) if (InstState.instHasNotes(c)) setB("I$c", true)
-            allSynthCut(0.85f)
+            allSynthCut(0.85f, open = true)
             for (n in listOf("ACID", "DRUM", BASS_NAME)) mulF(n, 1.2f)
         } },
         Preset("Intro: nur Flächen", "Drums aus, Pads leise, Atmos lauter") { s -> s.copy().apply {
