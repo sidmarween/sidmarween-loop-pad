@@ -55,6 +55,7 @@ object Projects {
         }
         j.put("chain", ch)
         j.put("instruments", InstState.toJson())
+        j.put("extras", ExtrasStore.toJson())
         j.put("scenes", Engine.scenesToJson())
         j.put("arrangement", Engine.arrToJson())
         j.put("slicer", Slicer.toJson())
@@ -192,6 +193,8 @@ object Projects {
             Engine.padFx[p] = if (p < pa.length()) pa.getJSONObject(p).optBoolean("fx", oldTarget < 0 || oldTarget == p) else true
         }
         Slicer.fromJson(j.optJSONObject("slicer"))
+        // Zusatz-Instrumente zuletzt (Vocal-Chop liest sein Pad)
+        if (j.has("extras")) ExtrasStore.fromJson(j.optJSONObject("extras")) else ExtrasStore.resetToDefaults()
         Engine.markSaved()
     }
 

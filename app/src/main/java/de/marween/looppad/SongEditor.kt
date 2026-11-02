@@ -151,8 +151,8 @@ class SongEditor(private val host: View) {
     private fun lanesOf(t: Int): IntArray = when {
         t == Engine.TRK_INST -> intArrayOf(2, 3)
         t == Engine.TRK_INST + 1 -> intArrayOf(4)
-        t in Engine.TRK_INST + 2 until Engine.TRK_X -> (t - Engine.TRK_INST - 2).let { k -> intArrayOf(5 + 2 * k, 6 + 2 * k) }
-        t == -1 -> intArrayOf(0, 1, 11)
+        t in Engine.TRK_INST + 2 until Engine.TRK_X -> Engine.synAutoLanes(t - Engine.TRK_INST - 2)
+        t == -1 -> intArrayOf(0, 1, 11, Engine.AUTO_MORPH)
         else -> IntArray(0)
     }
 

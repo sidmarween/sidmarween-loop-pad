@@ -4329,8 +4329,13 @@ object Engine {
         fun memBytes(): Long = if (spill != null) 0L else (loop?.data?.size ?: 0).toLong() * 4L
     }
 
-    private class UndoEntry(val label: String, val pads: List<PadSnap>, val pat: PatternSnap?) {
-        val bytes: Long get() = pads.sumOf { it.memBytes() }
+    private class UndoEntry(val label: String, val pads: List<PadSnap>, val pat: PatternSnap?, val extras: String? = null) {
+        val bytes: Long get() = pads.sumOf { it.memBytes() } + (extras?.length?.toLong() ?: 0L) * 2
+    }
+
+    /** Einstellungen der Zusatz-Instrumente (Stand [before], siehe [ExtrasStore.snapshot]) für ↶ merken. */
+    fun pushExtrasUndo(label: String, before: String) {
+        pushEntry(UndoEntry(label, emptyList(), null, before))
     }
 
     private val EMPTY_AUDIO = FloatArray(0)
@@ -4656,7 +4661,8 @@ object Engine {
 
     /** Stellt einen Eintrag her und liefert den bisherigen Zustand derselben Teile (für die Gegenrichtung). */
     private fun applyEntry(e: UndoEntry): UndoEntry {
-        val back = UndoEntry(e.label, e.pads.map { snapPad(it.p) }, if (e.pat != null) snapPattern() else null)
+        val back = UndoEntry(e.label, e.pads.map { snapPad(it.p) }, if (e.pat != null) snapPattern() else null, if (e.extras != null) ExtrasStore.snapshot() else null)
+        e.extras?.let { ExtrasStore.restoreSnapshot(it) }
         for (s in e.pads) {
             takes.set(s.p, null)
             val l = snapLoop(s)
@@ -5218,14 +5224,19 @@ object Engine {
 
     // ================================================================ Automation (Song-Modus: Werte über die Zeit)
 
-    const val AUTO_LANES = 12
+    const val AUTO_LANES = 17
     /** Auflösung: 16 Punkte je Takt. */
     const val AUTO_RES = 16
     val AUTO_NAMES = arrayOf("FX X", "FX Y", "ACID Cutoff", "ACID Lautst.", "DRUM Lautst.", "SYN 1 Cutoff", "SYN 1 Lautst.",
-        "SYN 2 Cutoff", "SYN 2 Lautst.", "SYN 3 Cutoff", "SYN 3 Lautst.", "MASTER Lautst.")
+        "SYN 2 Cutoff", "SYN 2 Lautst.", "SYN 3 Cutoff", "SYN 3 Lautst.", "MASTER Lautst.",
+        "KEYS Cutoff", "KEYS Lautst.", "BASS Cutoff", "BASS Lautst.", "SZENEN-MORPH")
     val AUTO_HELP = arrayOf("Effekt-Fläche waagerecht (Effekt ist an, solange die Linie läuft)", "Effekt-Fläche senkrecht", "Filter des ACID-Basses",
         "Lautstärke ACID", "Lautstärke DRUM 909", "Filter SYNTH 1", "Lautstärke SYNTH 1", "Filter SYNTH 2", "Lautstärke SYNTH 2",
-        "Filter SYNTH 3", "Lautstärke SYNTH 3", "Gesamtlautstärke (Fade-In / Fade-Out)")
+        "Filter SYNTH 3", "Lautstärke SYNTH 3", "Gesamtlautstärke (Fade-In / Fade-Out)",
+        "Filter KEYS", "Lautstärke KEYS", "Filter BASSLINE", "Lautstärke BASSLINE", "Performance-Szenen: unten = Mix A, oben = Mix B")
+    /** Automations-Spuren (Cutoff, Lautstärke) der Synth-Spur [k]: SYNTH 1–3 wie früher, KEYS/BASSLINE hinten angehängt. */
+    fun synAutoLanes(k: Int): IntArray = if (k < 3) intArrayOf(5 + 2 * k, 6 + 2 * k) else intArrayOf(12 + 2 * (k - 3), 13 + 2 * (k - 3))
+    const val AUTO_MORPH = 16
     /** NaN = keine Automation an dieser Stelle (Regler gilt). */
     val auto = Array(AUTO_LANES) { FloatArray(ARR_MAX * AUTO_RES) { Float.NaN } }
     /** Live: Bewegungen auf der Effekt-Fläche im Song-Modus in FX X/Y schreiben. */
@@ -5280,8 +5291,11 @@ object Engine {
         InstState.acidCutAuto = autoAt(2, pos)
         InstState.acidVolAuto = autoAt(3, pos)
         InstState.drumVolAuto = autoAt(4, pos)
-        for ((k, t) in InstState.synTracks.withIndex()) { t.cutAuto = autoAt(5 + 2 * k, pos); t.volAuto = autoAt(6 + 2 * k, pos) }
+        // früher 5 + 2k für alle Spuren → KEYS/BASSLINE lasen über das Ende hinaus (Absturz im Song-Modus)
+        for (k in 0 until InstState.SYN_TRACKS) { val t = InstState.synTracks[k]; val ln = synAutoLanes(k); t.cutAuto = autoAt(ln[0], pos); t.volAuto = autoAt(ln[1], pos) }
         autoMaster = autoAt(11, pos)
+        val mm = autoAt(AUTO_MORPH, pos)
+        if (!mm.isNaN()) MixMorph.fromSong(mm)
     }
 
     private fun autoToJson(): org.json.JSONArray {

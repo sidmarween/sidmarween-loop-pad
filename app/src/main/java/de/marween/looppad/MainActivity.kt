@@ -72,6 +72,7 @@ class MainActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         CrashLog.install(this)
+        ExtrasStore.captureDefaults()
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         if (Build.VERSION.SDK_INT >= 28) {
             val lp = window.attributes
@@ -2003,6 +2004,7 @@ class MainActivity : Activity() {
                 Item("🎤 VOCAL-HARMONIZER · Chor aus dem Gesang" + st(Harmonizer.on)) { if (djMode) dj.openHarm() else pads.openHarm(); hint("▶ AN, dann Akkord-Pads halten – der Gesang des Decks wird zum Chor · XY: Formant und Tuning") }
             ),
             "🛠 WERKZEUGE" to listOf(
+                Item("📘 HANDBUCH · alle Instrumente kurz erklärt") { showInstHelp() },
                 Item("🔁 LIVE-LOOPER · 4 Spuren wie RC-505 (Länge, Overdub, FX)") { pad(); pads.openStation(); hint("Großen Knopf tippen: Aufnahme · nochmal: Loop läuft · nochmal: Overdub · LÄNGE = frei oder feste Takte") },
                 Item("🎛 PERFORMANCE-SZENEN · Mix A ↔ B morphen, Auto-Morph im Takt") { pad(); pads.openPerf(4); hint("🎛 📸 A speichern, Mix ändern, 📸 B speichern – dann Regler ziehen oder ZU B ⏩ (oder Vorlage wählen)") },
                 Item("🚀 FX-GENERATOR · Riser, Impacts, Drops im Takt") { pad(); pads.openPerf(0); hint("🚀 Länge wählen, Effekt antippen – er startet auf der nächsten Eins und endet nach N Takten genau auf der Eins") },
@@ -3177,6 +3179,7 @@ class MainActivity : Activity() {
                     if (pads.infoMode) toast("Info-Modus an: tippe auf ein Element, um es erklärt zu bekommen")
                 }, false))
                 items.add(Triple("🎓 Tour: die App in einer Minute", { if (djMode) switchMode(false); pads.startTour() }, false))
+                items.add(Triple("📘 Handbuch: alle Instrumente & Werkzeuge", { showInstHelp() }, false))
                 items.add(Triple("📄 Info-Seite: Version & alle Änderungen", { showAbout() }, false))
                 items.add(Triple("⏻ Programm schließen", { requestClose() }, false))
             }
@@ -6636,7 +6639,7 @@ class MainActivity : Activity() {
         check(box, "Anschlagdynamik (leise/laut wie gespielt)", Midi.velocity) { Midi.velocity = it }
         val keysBtn = Button(this)
         fun keysLabel() {
-            keysBtn.text = "Tastatur-Kanal: " + (if (Midi.keysChannel == 0) "aus" else "${Midi.keysChannel}") + " · spielt " + (if (Midi.keysPad < 0) "das Piano-Roll-Pad" else "Pad ${Midi.keysPad + 1}")
+            keysBtn.text = "Tastatur-Kanal: " + (if (Midi.keysChannel == 0) "aus" else "${Midi.keysChannel}") + " · spielt " + (if (Midi.keysTarget > 0) Midi.KEYS_TARGETS[Midi.keysTarget] else if (Midi.keysPad < 0) "das Piano-Roll-Pad" else "Pad ${Midi.keysPad + 1}")
         }
         keysLabel()
         keysBtn.setOnClickListener {
@@ -6645,9 +6648,14 @@ class MainActivity : Activity() {
                 .setSingleChoiceItems(names, Midi.keysChannel) { d, w ->
                     Midi.keysChannel = w
                     d.dismiss()
-                    val pn = arrayOf("Pad aus der offenen Piano-Roll") + Array(PadView.VISIBLE_PADS) { "Pad ${it + 1}" }
-                    ui().setTitle("Welches Pad spielt die Tastatur?")
-                        .setItems(pn) { _, p -> Midi.keysPad = p - 1; keysLabel() }.show()
+                    val pn = arrayOf("Pad aus der offenen Piano-Roll") + Array(PadView.VISIBLE_PADS) { "Pad ${it + 1}" } +
+                        arrayOf("🗣 Vocal-Chop (C2–D#3 = Chops 1–16, darüber Tonhöhe)", "🎼 Chord-Pad (weiße Tasten = Akkord-Stufen)", "🚀 FX-Generator (8 Tasten = 8 Effekte)")
+                    ui().setTitle("Was spielt die Tastatur?")
+                        .setItems(pn) { _, p ->
+                            val n = PadView.VISIBLE_PADS + 1
+                            if (p < n) { Midi.keysTarget = 0; Midi.keysPad = p - 1 } else Midi.keysTarget = p - n + 1
+                            keysLabel()
+                        }.show()
                     keysLabel()
                 }.show()
         }
@@ -7342,6 +7350,19 @@ class MainActivity : Activity() {
 
     /** Bis zu drei Effekte für ein Pad wählen und einstellen. */
     private fun chainName(p: Int): String = if (p == Engine.MIC_CHAIN) "Mikrofon" else "Pad ${p + 1}"
+
+    /** 📘 Handbuch: Themen-Liste, dann der Text. */
+    private fun showInstHelp() {
+        val t = InstHelp.TOPICS
+        ui().setTitle("📘 Handbuch")
+            .setItems(t.map { it.first }.toTypedArray()) { _, i ->
+                ui().setTitle(t[i].first).setMessage(t[i].second.trim())
+                    .setPositiveButton("OK", null)
+                    .setNeutralButton("◀ Themen") { _, _ -> showInstHelp() }
+                    .show()
+            }
+            .setNegativeButton("Schließen", null).show()
+    }
 
     /** 🔁 Live-Looper: Spur bearbeiten (wirkt sofort, ↶ UNDO holt den alten Stand zurück). */
     private fun showLooperFx(p: Int) {

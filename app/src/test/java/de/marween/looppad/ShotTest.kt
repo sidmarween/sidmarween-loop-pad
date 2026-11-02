@@ -126,7 +126,7 @@ class ShotTest {
         pv.openOrganism(); shot(pv, w, h, "organism_${tag}"); pv.organism.close()
         VocalChop.loadDemo(0); VocalChop.applyPattern(0)
         pv.openPerf(3); shot(pv, w, h, "vchop_${tag}"); pv.vocalChop.close(); VocalChop.patOn = false
-        MixMorph.applyPreset(0); pv.openPerf(4); shot(pv, w, h, "morph_${tag}"); pv.mixMorph.close()
+        MixMorph.applyPreset(0); MixMorph.storeSlot(0); MixMorph.storeSlot(2); pv.openPerf(4); shot(pv, w, h, "morph_${tag}"); pv.mixMorph.close()
         pv.openStation(); shot(pv, w, h, "looper_${tag}"); pv.closeStation()
     }
 

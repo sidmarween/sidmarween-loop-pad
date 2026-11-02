@@ -374,12 +374,14 @@ class VocalChopPanel(host: View) : PerfPanel(host) {
     private var recording = false
     private var recMark = 0L
     private var recStart = 0L
+    /** Einzähler: Aufnahme startet auf diesem Schlag (NaN = keiner). */
+    private var pendBeat = Double.NaN
     private var envFor: VocalChop.Src? = null
     private val env = FloatArray(160)
     private val COLS = intArrayOf(Color.rgb(255, 150, 220), Color.rgb(255, 190, 120), Color.rgb(150, 220, 255), Color.rgb(190, 255, 150))
     private val NOTE = arrayOf("C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "H", "C'")
 
-    override fun close() { super.close(); VocalChop.allOff(); held.clear(); heldKey.clear(); recording = false }
+    override fun close() { super.close(); VocalChop.allOff(); held.clear(); heldKey.clear(); recording = false; pendBeat = Double.NaN }
 
     private fun get(i: Int) = when (i) { 0 -> (VocalChop.pitch + 12) / 24f; 1 -> VocalChop.tone; 2 -> VocalChop.release; else -> VocalChop.vol }
     private fun set(i: Int, v: Float) {
@@ -402,7 +404,13 @@ class VocalChopPanel(host: View) : PerfPanel(host) {
         val col = Color.rgb(255, 150, 220)
         val v = VocalChop
         val s = v.src
+        // Einzähler abgelaufen → Aufnahme beginnt genau auf der Eins
+        if (!pendBeat.isNaN() && Engine.beatPos(Engine.heardFrame()) >= pendBeat) {
+            pendBeat = Double.NaN; recording = true; recMark = Engine.micMark(); recStart = System.nanoTime()
+        }
+        val beatsLeft = if (pendBeat.isNaN()) 0 else kotlin.math.ceil(pendBeat - Engine.beatPos(Engine.heardFrame())).toInt().coerceAtLeast(1)
         val status = when {
+            !pendBeat.isNaN() -> "⏱ Einzählen … $beatsLeft – Aufnahme startet auf der Eins"
             recording -> "● nimmt auf … ${String.format(java.util.Locale.GERMANY, "%.1f", (System.nanoTime() - recStart) / 1e9)} s – nochmal tippen zum Zerlegen"
             s == null -> "Quelle wählen: Demo-Stimme, Loop eines Pads oder Mikrofon"
             else -> s.name + " · ${s.count} Chops" + (if (v.patOn && v.patIdx >= 0) " · Muster: " + v.PATTERNS[v.patIdx].name else "")
@@ -416,7 +424,7 @@ class VocalChopPanel(host: View) : PerfPanel(host) {
         row(arrayOf(bDemo, bPad, bMic), l, r, y, bh)
         btn(c, bDemo, "◀ " + (if (v.demoIdx >= 0) v.DEMO_NAMES[v.demoIdx] else "DEMO-STIMME") + " ▶", v.demoIdx >= 0 && s != null && s.name.startsWith("Demo"), col)
         btn(c, bPad, if (padSrc >= 0) "∿ PAD ${padSrc + 1} ▶" else "∿ AUS PAD", s != null && s.name.startsWith("Pad"), col)
-        btn(c, bMic, if (recording) "■ STOPP & ZERLEGEN" else "● MIKRO AUFNEHMEN", recording, Color.rgb(255, 90, 90))
+        btn(c, bMic, if (recording) "■ STOPP & ZERLEGEN" else if (!pendBeat.isNaN()) "⏱ $beatsLeft …" else "● MIKRO AUFNEHMEN", recording || !pendBeat.isNaN(), Color.rgb(255, 90, 90))
         y += bh + g
         row(arrayOf(bPat, bPatSel, bMode), l, r, y, bh)
         btn(c, bPat, if (v.patOn) "■ MUSTER" else "▶ MUSTER", v.patOn, Color.rgb(140, 230, 170))
@@ -436,7 +444,14 @@ class VocalChopPanel(host: View) : PerfPanel(host) {
         // Wellenform mit Schnitten
         wave.set(l, y, r, y + dp(46f))
         fill.color = Color.rgb(30, 18, 28); c.drawRoundRect(wave, dp(6f), dp(6f), fill)
-        if (s != null) {
+        if (recording || !pendBeat.isNaN()) {
+            // Eingangspegel während der Aufnahme (rot = zu laut)
+            val lv = min(1f, Engine.inputLevel * 3f)
+            fill.color = if (lv > 0.9f) Color.rgb(255, 70, 70) else Color.rgb(80, 220, 120)
+            c.drawRoundRect(RectF(wave.left + dp(4f), wave.centerY() - dp(8f), wave.left + dp(4f) + (wave.width() - dp(8f)) * lv, wave.centerY() + dp(8f)), dp(4f), dp(4f), fill)
+            text.textSize = dp(10f); text.color = Color.WHITE
+            c.drawText(if (recording) "MIKRO-PEGEL" else "gleich geht's los …", wave.centerX(), wave.bottom - dp(4f), text)
+        } else if (s != null) {
             if (envFor !== s) buildEnv(s)
             val ww = wave.width() / env.size
             val mid = wave.centerY(); val hh = wave.height() * 0.45f
@@ -533,7 +548,13 @@ class VocalChopPanel(host: View) : PerfPanel(host) {
                         else { padSrc = p; if (v.loadPad(p)) onHint?.invoke("∿ Pad ${p + 1} in ${v.src?.count ?: 0} Silben zerlegt · nochmal tippen = nächstes Pad") else onHint?.invoke("Pad ${p + 1} ist zu kurz") }
                     }
                     bMic.contains(x, y) -> {
-                        if (!recording) { recording = true; recMark = Engine.micMark(); recStart = System.nanoTime(); onHint?.invoke("● Sing oder sprich ein paar Silben – dann ■ tippen") }
+                        if (!pendBeat.isNaN()) { pendBeat = Double.NaN; onHint?.invoke("Einzählen abgebrochen") }
+                        else if (!recording && Engine.seqPlaying) {
+                            // läuft der Takt: einen Takt einzählen, Aufnahme beginnt auf der Eins
+                            pendBeat = (Math.floor(Engine.beatPos(Engine.heardFrame()) / 4.0) + 1) * 4.0
+                            onHint?.invoke("⏱ Einzählen – auf der Eins geht die Aufnahme los, dann ■ tippen")
+                        }
+                        else if (!recording) { recording = true; recMark = Engine.micMark(); recStart = System.nanoTime(); onHint?.invoke("● Sing oder sprich ein paar Silben – dann ■ tippen") }
                         else {
                             recording = false
                             val d = Engine.micSince(recMark, 12f)
@@ -584,6 +605,9 @@ class MixMorphPanel(host: View) : PerfPanel(host) {
     private val LENS = intArrayOf(1, 2, 4, 8, 16)
     private val bToB = RectF(); private val bToA = RectF(); private val bStop = RectF()
     private val bJumpA = RectF(); private val bJumpB = RectF()
+    private val slotB = Array(6) { RectF() }
+    private var slotDown = -1
+    private var slotDownAt = 0L
     private var faderPtr = -1
 
     fun draw(c: Canvas, area: RectF, acc: Int) {
@@ -655,7 +679,17 @@ class MixMorphPanel(host: View) : PerfPanel(host) {
         row(arrayOf(bJumpA, bJumpB), l, r, y, dp(40f))
         btn(c, bJumpA, "SOFORT A", ready && m.pos == 0f, Color.rgb(120, 200, 255))
         btn(c, bJumpB, "SOFORT B", ready && m.pos == 1f, Color.rgb(255, 140, 120))
-        y += dp(40f) + dp(14f)
+        y += dp(40f) + dp(12f)
+        text.textAlign = Paint.Align.LEFT; text.textSize = dp(10f); text.color = Color.argb(200, 255, 255, 255)
+        c.drawText("SZENEN 1–6 · antippen = hin-morphen · halten = Mix speichern", l, y + dp(4f), text); text.textAlign = Paint.Align.CENTER
+        y += dp(10f)
+        row(slotB, l, r, y, dp(42f), dp(5f))
+        for (k in 0 until 6) {
+            val has = m.slots[k] != null
+            val held = slotDown == k && System.nanoTime() - slotDownAt > 450_000_000L
+            btn(c, slotB[k], if (held) "📸" else "${k + 1}" + if (has) "" else " ·", has && m.curSlot == k || held, if (has) Color.rgb(200, 255, 140) else Color.rgb(90, 90, 100), 14f)
+        }
+        y += dp(42f) + dp(14f)
         // Unterschiede
         val diffs = m.diffNames(14)
         if (diffs.isNotEmpty()) {
@@ -691,6 +725,8 @@ class MixMorphPanel(host: View) : PerfPanel(host) {
                     faderPtr = e.getPointerId(i); setFromX(x); return
                 }
                 if (e.actionMasked != MotionEvent.ACTION_DOWN) return
+                val sk = slotB.indexOfFirst { it.contains(x, y) }
+                if (sk >= 0) { slotDown = sk; slotDownAt = System.nanoTime(); return }
                 haptic()
                 when {
                     bClose.contains(x, y) -> close()
@@ -709,8 +745,18 @@ class MixMorphPanel(host: View) : PerfPanel(host) {
                 }
             }
             MotionEvent.ACTION_MOVE -> { val pi = e.findPointerIndex(faderPtr); if (pi >= 0) setFromX(e.getX(pi)) }
-            MotionEvent.ACTION_UP, MotionEvent.ACTION_POINTER_UP -> if (e.getPointerId(i) == faderPtr) faderPtr = -1
-            MotionEvent.ACTION_CANCEL -> faderPtr = -1
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_POINTER_UP -> {
+                if (e.getPointerId(i) == faderPtr) faderPtr = -1
+                val sk = slotDown
+                if (sk >= 0 && e.actionMasked == MotionEvent.ACTION_UP) {
+                    slotDown = -1
+                    haptic()
+                    if (System.nanoTime() - slotDownAt > 450_000_000L) { m.storeSlot(sk); onHint?.invoke("📸 Jetziger Mix in Szene ${sk + 1} gespeichert") }
+                    else if (m.slots[sk] == null) onHint?.invoke("Szene ${sk + 1} ist leer – halten speichert den jetzigen Mix")
+                    else { m.goSlot(sk, true); onHint?.invoke("⏩ Ab der nächsten Eins in ${m.autoBars} Takt" + (if (m.autoBars > 1) "en" else "") + " zu Szene ${sk + 1} (SOFORT B = gleich hin)") }
+                }
+            }
+            MotionEvent.ACTION_CANCEL -> { faderPtr = -1; slotDown = -1 }
         }
     }
 }

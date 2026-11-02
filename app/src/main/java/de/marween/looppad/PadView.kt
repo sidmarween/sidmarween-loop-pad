@@ -948,22 +948,23 @@ class PadView(context: Context) : View(context) {
         if (station.isOpen) station.draw(canvas, RectF(dp(6f), insetTop + dp(6f), width - dp(6f), height - insetBottom - dp(6f)), overlayColors()[2])
         if (launcher.isOpen) launcher.draw(canvas, RectF(dp(6f), insetTop + dp(6f), width - dp(6f), height - insetBottom - dp(6f)), overlayColors()[2])
         if (ghost.isOpen) ghost.draw(canvas, RectF(dp(6f), insetTop + dp(6f), width - dp(6f), height - insetBottom - dp(6f)), overlayColors()[2])
-        if (euclid.isOpen) euclid.draw(canvas, RectF(dp(6f), insetTop + dp(6f), width - dp(6f), height - insetBottom - dp(6f)), overlayColors()[2])
-        if (harm.isOpen) harm.draw(canvas, RectF(dp(6f), insetTop + dp(6f), width - dp(6f), height - insetBottom - dp(6f)), overlayColors()[2])
-        if (atmos.isOpen) atmos.draw(canvas, RectF(dp(6f), insetTop + dp(6f), width - dp(6f), height - insetBottom - dp(6f)), overlayColors()[2])
-        if (wolf.isOpen) wolf.draw(canvas, RectF(dp(6f), insetTop + dp(6f), width - dp(6f), height - insetBottom - dp(6f)), overlayColors()[2])
-        if (architect.isOpen) architect.draw(canvas, RectF(dp(6f), insetTop + dp(6f), width - dp(6f), height - insetBottom - dp(6f)), overlayColors()[2])
-        if (orbits.isOpen) orbits.draw(canvas, RectF(dp(6f), insetTop + dp(6f), width - dp(6f), height - insetBottom - dp(6f)), overlayColors()[2])
-        if (bassLab.isOpen) bassLab.draw(canvas, RectF(dp(6f), insetTop + dp(6f), width - dp(6f), height - insetBottom - dp(6f)), overlayColors()[2])
-        if (vibe.isOpen) vibe.draw(canvas, RectF(dp(6f), insetTop + dp(6f), width - dp(6f), height - insetBottom - dp(6f)), overlayColors()[2])
-        if (chaos.isOpen) chaos.draw(canvas, RectF(dp(6f), insetTop + dp(6f), width - dp(6f), height - insetBottom - dp(6f)), overlayColors()[2])
-        if (touchLab.isOpen) touchLab.draw(canvas, RectF(dp(6f), insetTop + dp(6f), width - dp(6f), height - insetBottom - dp(6f)), overlayColors()[2])
-        if (organism.isOpen) organism.draw(canvas, RectF(dp(6f), insetTop + dp(6f), width - dp(6f), height - insetBottom - dp(6f)), overlayColors()[2])
-        if (fxGen.isOpen) fxGen.draw(canvas, RectF(dp(6f), insetTop + dp(6f), width - dp(6f), height - insetBottom - dp(6f)), overlayColors()[2])
-        if (chordPad.isOpen) chordPad.draw(canvas, RectF(dp(6f), insetTop + dp(6f), width - dp(6f), height - insetBottom - dp(6f)), overlayColors()[2])
-        if (vocoder.isOpen) vocoder.draw(canvas, RectF(dp(6f), insetTop + dp(6f), width - dp(6f), height - insetBottom - dp(6f)), overlayColors()[2])
-        if (vocalChop.isOpen) vocalChop.draw(canvas, RectF(dp(6f), insetTop + dp(6f), width - dp(6f), height - insetBottom - dp(6f)), overlayColors()[2])
-        if (mixMorph.isOpen) mixMorph.draw(canvas, RectF(dp(6f), insetTop + dp(6f), width - dp(6f), height - insetBottom - dp(6f)), overlayColors()[2])
+        if (euclid.isOpen) euclid.draw(canvas, RectF(dp(6f), insetTop + dp(6f), width - dp(6f), xPanelBottom()), overlayColors()[2])
+        if (harm.isOpen) harm.draw(canvas, RectF(dp(6f), insetTop + dp(6f), width - dp(6f), xPanelBottom()), overlayColors()[2])
+        if (atmos.isOpen) atmos.draw(canvas, RectF(dp(6f), insetTop + dp(6f), width - dp(6f), xPanelBottom()), overlayColors()[2])
+        if (wolf.isOpen) wolf.draw(canvas, RectF(dp(6f), insetTop + dp(6f), width - dp(6f), xPanelBottom()), overlayColors()[2])
+        if (architect.isOpen) architect.draw(canvas, RectF(dp(6f), insetTop + dp(6f), width - dp(6f), xPanelBottom()), overlayColors()[2])
+        if (orbits.isOpen) orbits.draw(canvas, RectF(dp(6f), insetTop + dp(6f), width - dp(6f), xPanelBottom()), overlayColors()[2])
+        if (bassLab.isOpen) bassLab.draw(canvas, RectF(dp(6f), insetTop + dp(6f), width - dp(6f), xPanelBottom()), overlayColors()[2])
+        if (vibe.isOpen) vibe.draw(canvas, RectF(dp(6f), insetTop + dp(6f), width - dp(6f), xPanelBottom()), overlayColors()[2])
+        if (chaos.isOpen) chaos.draw(canvas, RectF(dp(6f), insetTop + dp(6f), width - dp(6f), xPanelBottom()), overlayColors()[2])
+        if (touchLab.isOpen) touchLab.draw(canvas, RectF(dp(6f), insetTop + dp(6f), width - dp(6f), xPanelBottom()), overlayColors()[2])
+        if (organism.isOpen) organism.draw(canvas, RectF(dp(6f), insetTop + dp(6f), width - dp(6f), xPanelBottom()), overlayColors()[2])
+        if (fxGen.isOpen) fxGen.draw(canvas, RectF(dp(6f), insetTop + dp(6f), width - dp(6f), xPanelBottom()), overlayColors()[2])
+        if (chordPad.isOpen) chordPad.draw(canvas, RectF(dp(6f), insetTop + dp(6f), width - dp(6f), xPanelBottom()), overlayColors()[2])
+        if (vocoder.isOpen) vocoder.draw(canvas, RectF(dp(6f), insetTop + dp(6f), width - dp(6f), xPanelBottom()), overlayColors()[2])
+        if (vocalChop.isOpen) vocalChop.draw(canvas, RectF(dp(6f), insetTop + dp(6f), width - dp(6f), xPanelBottom()), overlayColors()[2])
+        if (mixMorph.isOpen) mixMorph.draw(canvas, RectF(dp(6f), insetTop + dp(6f), width - dp(6f), xPanelBottom()), overlayColors()[2])
+        if (xPanelOpen()) drawUndoBar(canvas)
         if (!masterPanel.isOpen) drawMasterButton(canvas)
         if (masterPanel.isOpen) masterPanel.draw(canvas, RectF(dp(6f), insetTop + dp(6f), width - dp(6f), height - insetBottom - dp(6f)), overlayColors()[2])
         drawInfo(canvas)
@@ -4219,6 +4220,7 @@ class PadView(context: Context) : View(context) {
             invalidate()
             return true
         }
+        if (xPanelOpen() && xPanelTouch(e)) { invalidate(); return true }
         if (euclid.isOpen) {
             euclid.touch(e)
             invalidate()
@@ -9356,6 +9358,60 @@ class PadView(context: Context) : View(context) {
     val chordPad = ChordPadPanel(this).also { it.onHint = { m -> hint(m) } }
     val vocoder = VocoderPanel(this).also { it.onHint = { m -> hint(m) } }
     val vocalChop = VocalChopPanel(this).also { it.onHint = { m -> hint(m) } }
+
+    // ---------------------------------------------------------------- ↶ in den Instrument-Feldern
+    /** Ein Feld der Zusatz-Instrumente ist offen (dann gibt es unten die ↶/↷-Leiste). */
+    private fun xPanelOpen(): Boolean = euclid.isOpen || harm.isOpen || atmos.isOpen || wolf.isOpen || architect.isOpen || orbits.isOpen ||
+        bassLab.isOpen || vibe.isOpen || chaos.isOpen || touchLab.isOpen || organism.isOpen || fxGen.isOpen || chordPad.isOpen ||
+        vocoder.isOpen || vocalChop.isOpen || mixMorph.isOpen
+    private fun xPanelBottom(): Float = height - insetBottom - dp(6f) - dp(48f)
+    private val undoBarL = RectF(); private val undoBarR = RectF()
+    /** Stand vor der laufenden Berührung (für ↶). */
+    private var xPreSnap: String? = null
+    private var xUndoFlash = 0L
+
+    private fun drawUndoBar(c: Canvas) {
+        val top = xPanelBottom() + dp(6f)
+        val bot = height - insetBottom - dp(6f)
+        val mid = width / 2f
+        undoBarL.set(dp(6f), top, mid - dp(3f), bot)
+        undoBarR.set(mid + dp(3f), top, width - dp(6f), bot)
+        val canU = Engine.undoCount > 0; val canR = Engine.redoCount > 0
+        for ((r, on) in listOf(undoBarL to canU, undoBarR to canR)) {
+            fillPaint.shader = null
+            fillPaint.color = if (on) Color.rgb(44, 44, 56) else Color.rgb(24, 24, 30)
+            c.drawRoundRect(r, dp(10f), dp(10f), fillPaint)
+        }
+        val oa = textPaint.textAlign; val os = textPaint.textSize; val oc = textPaint.color
+        textPaint.textAlign = Paint.Align.CENTER
+        textPaint.textSize = dp(14f)
+        textPaint.color = if (canU) Color.WHITE else Color.argb(90, 255, 255, 255)
+        c.drawText("↶ RÜCKGÄNGIG", undoBarL.centerX(), undoBarL.centerY() + dp(5f), textPaint)
+        textPaint.color = if (canR) Color.WHITE else Color.argb(90, 255, 255, 255)
+        c.drawText("↷ WIEDERHOLEN", undoBarR.centerX(), undoBarR.centerY() + dp(5f), textPaint)
+        textPaint.textAlign = oa; textPaint.textSize = os; textPaint.color = oc
+    }
+
+    /** Leiste antippen; sonst Stand vor/nach der Berührung vergleichen und Änderungen für ↶ merken. */
+    private fun xPanelTouch(e: MotionEvent): Boolean {
+        val x = e.getX(e.actionIndex); val y = e.getY(e.actionIndex)
+        if (e.actionMasked == MotionEvent.ACTION_DOWN && (undoBarL.contains(x, y) || undoBarR.contains(x, y))) {
+            val l = if (undoBarL.contains(x, y)) Engine.undo() else Engine.redo()
+            performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+            hint(if (l != null) (if (undoBarL.contains(x, y)) "↶ " else "↷ ") + l else "Nichts mehr da")
+            return true
+        }
+        if (e.actionMasked == MotionEvent.ACTION_DOWN) xPreSnap = try { ExtrasStore.snapshot() } catch (ex: Exception) { null }
+        if (e.actionMasked == MotionEvent.ACTION_UP || e.actionMasked == MotionEvent.ACTION_CANCEL) {
+            val before = xPreSnap
+            xPreSnap = null
+            if (before != null) post {
+                val after = try { ExtrasStore.snapshot() } catch (ex: Exception) { null }
+                if (after != null && after != before) Engine.pushExtrasUndo("Einstellung im Instrument", before)
+            }
+        }
+        return false
+    }
     val mixMorph = MixMorphPanel(this).also { it.onHint = { m -> hint(m) } }
     fun openPerf(k: Int) { closeFocus(); when (k) { 0 -> fxGen.open(); 1 -> chordPad.open(); 2 -> vocoder.open(); 3 -> vocalChop.open(); else -> mixMorph.open() }; invalidate() }
     val harm = HarmonizerPanel(this).also { it.onHint = { m -> hint(m) } }

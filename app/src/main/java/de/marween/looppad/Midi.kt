@@ -36,6 +36,10 @@ object Midi {
     @Volatile var keysChannel = 2
     /** Pad, das die Tastatur spielt (-1 = das gerade in der Piano-Roll geöffnete bzw. Pad 1). */
     @Volatile var keysPad = -1
+    /** Was die Tastatur spielt: 0 = Pad (siehe [keysPad]), 1 = Vocal-Chop, 2 = Chord-Pad, 3 = FX-Generator. */
+    @Volatile var keysTarget = 0
+    val KEYS_TARGETS = arrayOf("Pad", "🗣 Vocal-Chop", "🎼 Chord-Pad", "🚀 FX-Generator")
+    private val mainH = Handler(android.os.Looper.getMainLooper())
     @Volatile var clockIn = false
     @Volatile var clockOut = false
     @Volatile var transportIn = true
@@ -49,7 +53,7 @@ object Midi {
         "Deck A Pitch", "Deck B Pitch", "Mikrofon (Mithören)", "Deck A Effekt", "Deck B Effekt",
         "Deck A HI", "Deck A MID", "Deck A LOW", "Deck B HI", "Deck B MID", "Deck B LOW", "Deck A Gain", "Deck B Gain",
         "Deck A Jog-Rad Rand (Pitch-Bend)", "Deck B Jog-Rad Rand (Pitch-Bend)", "Deck A Jog-Rad oben (Scratch)", "Deck B Jog-Rad oben (Scratch)",
-        "Vorhören-Lautstärke"
+        "Vorhören-Lautstärke", "🎛 Performance-Szenen: Morph A ↔ B", "🗣 Vocal-Chop: Tonhöhe", "🚀 FX-Generator: Intensität"
     )
 
     /** DJ-Tasten je Deck (gelernt als Kanal + Note). */
@@ -144,6 +148,7 @@ object Midi {
             velocity = o.optBoolean("vel", true)
             keysChannel = o.optInt("keysCh", 2)
             keysPad = o.optInt("keysPad", -1)
+            keysTarget = o.optInt("keysTarget", 0).coerceIn(0, 3)
             clockIn = o.optBoolean("clockIn", false)
             clockOut = o.optBoolean("clockOut", false)
             transportIn = o.optBoolean("transport", true)
@@ -163,7 +168,7 @@ object Midi {
     fun save(p: SharedPreferences) {
         val o = JSONObject()
         o.put("on", enabled); o.put("ch", channel); o.put("base", padBase); o.put("vel", velocity)
-        o.put("keysCh", keysChannel); o.put("keysPad", keysPad); o.put("clockIn", clockIn); o.put("clockOut", clockOut)
+        o.put("keysCh", keysChannel); o.put("keysPad", keysPad); o.put("keysTarget", keysTarget); o.put("clockIn", clockIn); o.put("clockOut", clockOut)
         o.put("transport", transportIn); o.put("prog", programScenes)
         o.put("pads", JSONArray().apply { padNotes.forEach { put(it) } })
         o.put("cc", JSONArray().apply { ccMap.forEach { put(it) } })
@@ -419,7 +424,30 @@ object Midi {
         onPad?.invoke(p, on)
     }
 
+    /** Tastatur → neue Instrumente. Vocal-Chop: C2–D#3 (36–51) = Chops 1–16, sonst Tonhöhe des gewählten Chops (C4 = Original).
+     *  Chord-Pad: weiße Tasten C D E F G A H = Stufen I–VII, C eine Oktave höher = I'. FX-Generator: Note mod 8 = Effekt. */
+    private fun keysExtra(note: Int, on: Boolean, vel: Int): Boolean {
+        val v = if (velocity) max(0.05f, vel / 127f) else 0.9f
+        when (keysTarget) {
+            1 -> {
+                val s = VocalChop.src ?: return true
+                if (note in 36..51) { val c = note - 36; if (c < s.count) { if (on) VocalChop.on(c, 0, 3000 + note) else VocalChop.off(3000 + note) } }
+                else if (on) VocalChop.on(VocalChop.sel.coerceIn(0, s.count - 1), note - 60, 3000 + note) else VocalChop.off(3000 + note)
+            }
+            2 -> {
+                val white = intArrayOf(0, -1, 1, -1, 2, 3, -1, 4, -1, 5, -1, 6)[note % 12]
+                if (white < 0) return true
+                val deg = if (white == 0 && (note / 12) % 2 == 1) 7 else white
+                if (on) ChordPad.play(deg, v, 6000 + note * 16) else ChordPad.release(6000 + note * 16)
+            }
+            3 -> if (on) { FxGen.fire(note % 8); if (!Engine.seqPlaying && FxGen.quant) mainH.post { Engine.transportPlay(false) } }
+            else -> return false
+        }
+        return true
+    }
+
     private fun keys(note: Int, on: Boolean, vel: Int) {
+        if (keysTarget != 0 && keysExtra(note, on, vel)) { onKeysNote?.invoke(note - 60, on); return }
         val p = when {
             keysPad >= 0 -> keysPad
             openRollPad >= 0 -> openRollPad
@@ -468,6 +496,9 @@ object Midi {
             24 -> b.gain = v
             25, 26, 27, 28 -> jog(if (t == 25 || t == 27) 0 else 1, raw, t >= 27)
             29 -> Dj.cueGain = v * 1.5f
+            30 -> mainH.post { if (MixMorph.ready()) { MixMorph.stopAuto(); MixMorph.setPos(v) } }
+            31 -> VocalChop.pitch = Math.round(v * 24f) - 12
+            32 -> FxGen.intensity = v
         }
     }
 

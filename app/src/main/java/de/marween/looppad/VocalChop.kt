@@ -115,6 +115,43 @@ object VocalChop {
 
     fun clear() { src = null; lastData = null; patOn = false; demoIdx = -1 }
 
+    // ------------------------------------------------------------------ Projekt
+    /** Quelle fürs Projekt: Demo-Nummer, Pad-Nummer oder die Mikro-Aufnahme selbst (16 Bit, Base64). */
+    fun sourceJson(): org.json.JSONObject {
+        val j = org.json.JSONObject()
+        val d = lastData
+        j.put("patOn", patOn)
+        when {
+            d == null -> j.put("kind", "none")
+            lastName.startsWith("Demo") -> { j.put("kind", "demo"); j.put("demo", demoIdx) }
+            lastName.startsWith("Pad ") -> { j.put("kind", "pad"); j.put("pad", (lastName.substring(4).toIntOrNull() ?: 1) - 1) }
+            else -> {
+                val n = min(d.size, Engine.sampleRate * 12)
+                val bb = java.nio.ByteBuffer.allocate(n * 2).order(java.nio.ByteOrder.LITTLE_ENDIAN)
+                for (i in 0 until n) bb.putShort((d[i].coerceIn(-1f, 1f) * 32767f).toInt().toShort())
+                j.put("kind", "mic"); j.put("pcm", android.util.Base64.encodeToString(bb.array(), android.util.Base64.NO_WRAP))
+            }
+        }
+        return j
+    }
+
+    fun restoreSource(j: org.json.JSONObject?) {
+        allOff()
+        if (j == null) { clear(); return }
+        when (j.optString("kind")) {
+            "demo" -> loadDemo(j.optInt("demo", 0))
+            "pad" -> if (!loadPad(j.optInt("pad", 0))) clear()
+            "mic" -> {
+                val b = android.util.Base64.decode(j.optString("pcm"), android.util.Base64.NO_WRAP)
+                val bb = java.nio.ByteBuffer.wrap(b).order(java.nio.ByteOrder.LITTLE_ENDIAN)
+                val d = FloatArray(b.size / 2) { bb.getShort().toFloat() / 32767f }
+                if (d.isNotEmpty()) install(d, "Mikrofon") else clear()
+            }
+            else -> clear()
+        }
+        patOn = j.optBoolean("patOn", false) && src != null && patIdx >= 0
+    }
+
     /** Die Chops als Einzel-Samples (für „auf Pads“). */
     fun chopData(): List<FloatArray> {
         val s = src ?: return emptyList()

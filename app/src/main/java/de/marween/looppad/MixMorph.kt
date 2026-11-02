@@ -58,6 +58,20 @@ object MixMorph {
 
     fun capture(): Snap = Snap(FloatArray(FPS.size) { FPS[it].get() }, BooleanArray(BPS.size) { BPS[it].get() })
 
+    /** 6 Szenen-Speicher: antippen = vom jetzigen Mix dorthin morphen, halten = jetzigen Mix speichern. */
+    val slots = arrayOfNulls<Snap>(6)
+    @Volatile var curSlot = -1
+    fun storeSlot(i: Int) { slots[i] = capture(); curSlot = i }
+    /** Zu Szene [i]: A = jetziger Mix, B = Szene; mit [auto] über [autoBars] Takte ab der nächsten Eins, sonst sofort. */
+    fun goSlot(i: Int, auto: Boolean): Boolean {
+        val t = slots[i] ?: return false
+        stopAuto()
+        a = capture(); b = Snap(t.f.copyOf(), t.b.copyOf())
+        pos = 0f; lastSide = 0; presetIdx = -1; curSlot = i
+        if (auto) startAuto(1f) else setPos(1f)
+        return true
+    }
+
     fun storeA() { a = capture(); pos = 0f; lastSide = 0 }
     fun storeB() { b = capture(); pos = 1f; lastSide = 1 }
     fun ready(): Boolean = a != null && b != null
@@ -114,6 +128,17 @@ object MixMorph {
         ui.post(tick)
     }
 
+    // ---------------------------------------------------------------- Song-Automation (Spur „SZENEN-MORPH“)
+    @Volatile private var songV = Float.NaN
+    private val songApply = Runnable { val v = songV; if (!v.isNaN() && ready() && autoTo.isNaN()) setPos(v) }
+    /** Aus dem Mischer-Thread: Wert der Automations-Spur; angewendet wird auf dem UI-Thread (nur bei Änderung). */
+    fun fromSong(v: Float) {
+        val o = songV
+        if (!o.isNaN() && kotlin.math.abs(v - o) < 0.004f) return
+        songV = v
+        ui.post(songApply)
+    }
+
     fun stopAuto() { autoTo = Float.NaN; ui.removeCallbacks(tick) }
 
     /** Fortschritt des Auto-Morphs (−1 = wartet auf die Eins). */
@@ -123,7 +148,38 @@ object MixMorph {
         return if (p < 0f) -1f else p.coerceIn(0f, 1f)
     }
 
-    fun reset() { stopAuto(); a = null; b = null; pos = 0f; lastSide = -1; presetIdx = -1 }
+    fun snapsJson(): org.json.JSONObject {
+        val j = org.json.JSONObject()
+        fun one(s: Snap?) = s?.let { sn -> org.json.JSONObject().apply {
+            put("f", org.json.JSONArray().apply { for (x in sn.f) put(x.toDouble()) })
+            put("b", org.json.JSONArray().apply { for (x in sn.b) put(x) })
+        } }
+        one(a)?.let { j.put("a", it) }; one(b)?.let { j.put("b", it) }
+        j.put("slots", org.json.JSONArray().apply { for (sl in slots) put(one(sl) ?: org.json.JSONObject.NULL) })
+        j.put("pos", pos.toDouble())
+        return j
+    }
+
+    fun snapsFromJson(j: org.json.JSONObject?) {
+        stopAuto()
+        fun one(o: org.json.JSONObject?): Snap? {
+            o ?: return null
+            val fa = o.optJSONArray("f") ?: return null; val ba = o.optJSONArray("b") ?: return null
+            // Anzahl kann sich mit neuen Versionen ändern: fehlende Werte = jetziger Mix
+            val now = capture()
+            for (i in 0 until minOf(now.f.size, fa.length())) now.f[i] = fa.getDouble(i).toFloat()
+            for (i in 0 until minOf(now.b.size, ba.length())) now.b[i] = ba.getBoolean(i)
+            return now
+        }
+        a = one(j?.optJSONObject("a")); b = one(j?.optJSONObject("b"))
+        val sa = j?.optJSONArray("slots")
+        for (k in slots.indices) slots[k] = if (sa != null && k < sa.length()) one(sa.optJSONObject(k)) else null
+        curSlot = -1
+        pos = (j?.optDouble("pos", 0.0) ?: 0.0).toFloat().coerceIn(0f, 1f)
+        lastSide = if (pos >= 0.5f) 1 else 0
+    }
+
+    fun reset() { stopAuto(); java.util.Arrays.fill(slots, null); curSlot = -1; a = null; b = null; pos = 0f; lastSide = -1; presetIdx = -1 }
 
     // ---------------------------------------------------------------- Vorlagen: B aus dem jetzigen Mix ableiten
     class Preset(val name: String, val desc: String, val make: (Snap) -> Snap)
