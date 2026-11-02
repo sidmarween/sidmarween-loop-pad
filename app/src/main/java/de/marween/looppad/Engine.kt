@@ -684,6 +684,20 @@ object Engine {
         )
     }
 
+    /** Mikrofon-Zähler jetzt (Start einer Aufnahme für Vocal-Chop). */
+    fun micMark(): Long = captured
+
+    /** Mikrofon-Proben seit [from] (höchstens [maxSec] s, nur was der Ringpuffer noch hält). */
+    fun micSince(from: Long, maxSec: Float = 12f): FloatArray {
+        val c = captured
+        val rs = ringSize
+        if (rs <= 1 || ring.size < rs) return FloatArray(0)
+        val n = (c - from).coerceIn(0L, min((maxSec * sampleRate).toLong(), (rs - sampleRate).toLong().coerceAtLeast(0L))).toInt()
+        val out = FloatArray(n)
+        for (i in 0 until n) out[i] = ring[((c - n + i) % rs).toInt()]
+        return out
+    }
+
     private var micTmp = FloatArray(0)
     /** Die zuletzt aufgenommenen [n] Mikrofon-Proben (für Live-Effekte wie den Harmonizer). */
     private fun micLatest(n: Int): FloatArray {
@@ -845,6 +859,7 @@ object Engine {
         TouchLab.specPlay = false; TouchLab.allOff(); for (r in TouchLab.spec) java.util.Arrays.fill(r, 0f)
         Modular.drone = false; Modular.reset()
         FxGen.stopAll(); Vocoder.on = false; Vocoder.robot = false
+        VocalChop.clear(); VocalChop.allOff(); VocalChop.patIdx = -1; VocalChop.pitch = 0; VocalChop.stutter = 0; VocalChop.reverse = false
         ChordPad.recorded.clear(); ChordPad.recording = false; ChordPad.root = -1
     }
 
@@ -1725,6 +1740,24 @@ object Engine {
         }
         l.muted = true
         return targets
+    }
+
+    /** Einzelne Samples (z. B. Vocal-Chops) als ⚡ One-Shots auf freie Pads legen. Liefert die Anzahl. */
+    fun samplesToPads(parts: List<FloatArray>, maxPad: Int, undoName: String): Int {
+        val mp = maxPad.coerceAtMost(PADS)
+        pushPadUndo(undoName, *IntArray(mp) { it })
+        var q = 0
+        var count = 0
+        for (d in parts) {
+            while (q < mp && (loops.get(q) != null || takes.get(q) != null || padInst[q] >= 0)) q++
+            if (q >= mp) break
+            if (d.size < 64) continue
+            padOneShot[q] = true
+            importLoopRaw(q, d.copyOf())
+            count++
+            q++
+        }
+        return count
     }
 
     /** Die 16 Slicer-Stücke als ⚡ One-Shots auf freie Pads legen. */
@@ -2761,7 +2794,7 @@ object Engine {
                 }
                 if (sb >= 0) {
                     if (padSource[sb] == 2) cm = padSrcMask[sb] and (1 shl sb).inv()
-                    if (padSource[sb] == 3) cim = padInstMask[sb] and 0xFFF
+                    if (padSource[sb] == 3) cim = padInstMask[sb] and 0x1FFF
                 }
             }
             captureMask = cm
@@ -3111,6 +3144,12 @@ object Engine {
                 Vocoder.render(xL, xR, block, sampleRate, if (Vocoder.on) micLatest(block) else null)
                 mixX(11)
             }
+            // VOCAL-CHOP: Silben einer Stimme auf Pads und Tasten, Muster im Sequenzer-Raster
+            if (VocalChop.active()) {
+                java.util.Arrays.fill(xL, 0, block, 0f); java.util.Arrays.fill(xR, 0, block, 0f)
+                VocalChop.render(xL, xR, block, sampleRate, w, seqStart(), seqBar(), seqPlaying, seqBeatLen(), swingOffset(seqBar()))
+                mixX(12)
+            }
             // CHAOS-TRIGGER: zerlegt den laufenden Master inkl. aller Zusatz-Instrumente (Stutter, Resonatoren, Scratches, Portal)
             if (Chaos.active()) { Chaos.tick(); Chaos.process(mL, mR, block, w, sampleRate) }
             MasterBus.process(mL, mR, block, sampleRate)
@@ -3391,7 +3430,7 @@ object Engine {
     @Volatile private var captureInst = 0
     /** Bei Eingang 3: welche Instrumente (Bit 0 ACID 303, Bit 1 DRUM 909, Bit 2 SYNTH, 3 EUKLID, 4 ATMOS, 5 HARMONIZER). */
     val padInstMask = IntArray(PADS) { 7 }
-    val INST_NAMES = arrayOf("ACID 303", "DRUM 909", "SYNTH", "EUKLID", "ATMOS", "HARMONIZER", "WOLF", "ARCHITECT", "ORBITS", "TOUCH-LAB", "FX-GEN", "VOCODER")
+    val INST_NAMES = arrayOf("ACID 303", "DRUM 909", "SYNTH", "EUKLID", "ATMOS", "HARMONIZER", "WOLF", "ARCHITECT", "ORBITS", "TOUCH-LAB", "FX-GEN", "VOCODER", "VOCAL-CHOP")
     private var padRing = FloatArray(0)
 
     fun maskPads(m: Int): List<Int> = (0 until PADS).filter { (m shr it) and 1 != 0 }
@@ -3485,7 +3524,7 @@ object Engine {
             t.mask = padSrcMask[p] and (1 shl p).inv()
             if (t.mask == 0) t.src = 1
         } else if (t.src == 3) {
-            t.mask = padInstMask[p] and 0xFFF
+            t.mask = padInstMask[p] and 0x1FFF
             if (t.mask == 0) t.src = 1
         }
         t.live = liveBars != 0
@@ -3646,7 +3685,7 @@ object Engine {
             // Instrument-Eingang: aufgenommene Instrumente ausschalten (sonst doppelt)
             if (bounce && (take.src == 3 || take.src == 1) && !take.oneShot) {
                 val off = ArrayList<String>()
-                val im = if (take.src == 1) 0xFFF else take.mask
+                val im = if (take.src == 1) 0x1FFF else take.mask
                 if ((im and 1) != 0 && InstState.acidOn) { InstState.acidOn = false; off.add("303") }
                 if ((im and 2) != 0 && InstState.drumOn) { InstState.drumOn = false; off.add("909") }
                 if ((im and 4) != 0 && InstState.synOn) { InstState.synOn = false; off.add("SYNTH") }
@@ -3658,6 +3697,7 @@ object Engine {
                 if ((im and 256) != 0 && Orbits.on) { Orbits.on = false; off.add("ORBITS") }
                 if ((im and 512) != 0 && TouchLab.specPlay) { TouchLab.specPlay = false; off.add("TOUCH-LAB") }
                 if ((im and 2048) != 0 && Vocoder.on) { Vocoder.on = false; off.add("VOCODER") }
+                if ((im and 4096) != 0 && VocalChop.patOn) { VocalChop.patOn = false; off.add("VOCAL-CHOP") }
                 if (off.isNotEmpty()) onBouncedInst?.invoke(p, off.joinToString(", "))
             }
             onRecorded?.invoke(p, data.copyOf(), sampleRate)
@@ -3707,7 +3747,7 @@ object Engine {
 
     fun instCodeOn(code: Int): Boolean = when (code) {
         in 0 until InstState.INSTS -> InstState.instOn(code)
-        10 -> Euclid.on; 11 -> Atmos.on; 12 -> Harmonizer.on; 13 -> Wolf.on; 14 -> Architect.on; 15 -> Orbits.on; 16 -> TouchLab.specPlay || Modular.drone; 17 -> FxGen.active(); 18 -> Vocoder.on
+        10 -> Euclid.on; 11 -> Atmos.on; 12 -> Harmonizer.on; 13 -> Wolf.on; 14 -> Architect.on; 15 -> Orbits.on; 16 -> TouchLab.specPlay || Modular.drone; 17 -> FxGen.active(); 18 -> Vocoder.on; 19 -> VocalChop.patOn
         else -> false
     }
 
@@ -3720,6 +3760,7 @@ object Engine {
             15 -> { Orbits.on = v; if (v && !seqPlaying) transportPlay(false) }
             17 -> if (!v) FxGen.stopAll()
             18 -> Vocoder.on = v
+            19 -> { VocalChop.patOn = v && VocalChop.src != null; if (VocalChop.patOn && VocalChop.patIdx < 0) VocalChop.patIdx = 0; if (!v) VocalChop.allOff(); if (VocalChop.patOn && !seqPlaying) transportPlay(false) }
             16 -> { if (TouchLab.mode == TouchLab.SPECTRAL) TouchLab.specPlay = v else Modular.drone = v && TouchLab.mode == TouchLab.MODULAR; if (!v) { TouchLab.specPlay = false; Modular.drone = false; TouchLab.allOff() } }
         }
     }
@@ -3739,6 +3780,7 @@ object Engine {
         if (Orbits.on) used.add(15)
         if (TouchLab.specPlay || Modular.drone) used.add(16)
         if (Vocoder.on) used.add(18)
+        if (VocalChop.patOn) used.add(19)
         for (code in used) {
             if (padInst.contains(code)) continue
             val p = (0 until min(12, PADS)).firstOrNull { loops.get(it) == null && takes.get(it) == null && padInst[it] < 0 } ?: return
@@ -4944,17 +4986,17 @@ object Engine {
         private set
     @Volatile private var recLastBar = -1
     /** Zusatz-Spuren im Song: ATMOS, EUKLID, HARMONIZER (an/aus je Takt). */
-    const val ARR_X = 9
+    const val ARR_X = 10
     val arrX = Array(ARR_X) { BooleanArray(ARR_MAX) }
-    val ARR_X_NAMES = arrayOf("ATMOS", "EUKLID", "HARMONIZER", "WOLF", "ARCHITECT", "ORBITS", "TOUCH-LAB", "FX-GEN", "VOCODER")
+    val ARR_X_NAMES = arrayOf("ATMOS", "EUKLID", "HARMONIZER", "WOLF", "ARCHITECT", "ORBITS", "TOUCH-LAB", "FX-GEN", "VOCODER", "VOCAL-CHOP")
     /** Block-Grenzen im Song-Editor: hier beginnt ein neuer Block (auch wenn davor dasselbe liegt). Spuren 0 … TRK_AUTO−1. */
     val arrBreak = Array(ARR_ROWS + ARR_X) { BooleanArray(ARR_MAX) }
     /** Abschnitte: ab diesem Takt beginnt Abschnitt k ([SECTION_NAMES]), -1 = keiner. */
     val arrSection = IntArray(ARR_MAX) { -1 }
     val SECTION_NAMES = arrayOf("INTRO", "HAUPTTEIL", "AUFBAU", "DROP", "BREAK", "BRIDGE", "ENDING")
 
-    private fun xOn(k: Int): Boolean = when (k) { 0 -> Atmos.on; 1 -> Euclid.on; 2 -> Harmonizer.on; 3 -> Wolf.on; 4 -> Architect.on; 5 -> Orbits.on; 6 -> TouchLab.specPlay; 7 -> false; else -> Vocoder.on }
-    private fun setXOn(k: Int, v: Boolean) { when (k) { 0 -> Atmos.on = v; 1 -> Euclid.on = v; 2 -> Harmonizer.on = v; 3 -> Wolf.switch(v); 4 -> Architect.on = v; 5 -> Orbits.on = v; 6 -> TouchLab.specPlay = v; 7 -> {}; else -> Vocoder.on = v } }
+    private fun xOn(k: Int): Boolean = when (k) { 0 -> Atmos.on; 1 -> Euclid.on; 2 -> Harmonizer.on; 3 -> Wolf.on; 4 -> Architect.on; 5 -> Orbits.on; 6 -> TouchLab.specPlay; 7 -> false; 8 -> Vocoder.on; else -> VocalChop.patOn }
+    private fun setXOn(k: Int, v: Boolean) { when (k) { 0 -> Atmos.on = v; 1 -> Euclid.on = v; 2 -> Harmonizer.on = v; 3 -> Wolf.switch(v); 4 -> Architect.on = v; 5 -> Orbits.on = v; 6 -> TouchLab.specPlay = v; 7 -> {}; 8 -> Vocoder.on = v; else -> { VocalChop.patOn = v && VocalChop.src != null; if (VocalChop.patOn && VocalChop.patIdx < 0) VocalChop.patIdx = 0; if (!v) VocalChop.allOff() } } }
 
     /**
      * Song abspielen (aus Baukasten/Editor): Song-Modus nur für diese Wiedergabe – nach ■ sind Pads und Instrumente

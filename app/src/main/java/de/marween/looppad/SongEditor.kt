@@ -64,7 +64,7 @@ class SongEditor(private val host: View) {
     private val SEL = Color.rgb(110, 200, 255)
     private val COL_PAD = intArrayOf(Color.rgb(255, 150, 70), Color.rgb(255, 120, 110), Color.rgb(250, 190, 90), Color.rgb(255, 160, 140))
     private val PAT_COL = intArrayOf(Color.rgb(90, 190, 255), Color.rgb(120, 230, 140), Color.rgb(255, 200, 80), Color.rgb(240, 120, 200))
-    private val COL_X = intArrayOf(Color.rgb(140, 170, 255), Color.rgb(255, 170, 90), Color.rgb(255, 120, 190), Color.rgb(255, 120, 60), Color.rgb(120, 230, 200), Color.rgb(200, 160, 255), Color.rgb(255, 230, 120), Color.rgb(255, 140, 70), Color.rgb(120, 255, 200))
+    private val COL_X = intArrayOf(Color.rgb(140, 170, 255), Color.rgb(255, 170, 90), Color.rgb(255, 120, 190), Color.rgb(255, 120, 60), Color.rgb(120, 230, 200), Color.rgb(200, 160, 255), Color.rgb(255, 230, 120), Color.rgb(255, 140, 70), Color.rgb(120, 255, 200), Color.rgb(255, 150, 220))
     private val COL_AUTO = Color.rgb(250, 225, 110)
     private val SEC_COLS = intArrayOf(Color.rgb(90, 160, 255), Color.rgb(120, 220, 140), Color.rgb(255, 200, 80), Color.rgb(255, 95, 95), Color.rgb(180, 140, 255), Color.rgb(90, 220, 220), Color.rgb(240, 130, 200))
 

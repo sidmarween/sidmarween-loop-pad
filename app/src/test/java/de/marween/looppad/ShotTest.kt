@@ -124,6 +124,8 @@ class ShotTest {
         pv.openChaos(); shot(pv, w, h, "chaos_${tag}"); pv.chaos.close()
         for (m in 0..4) { pv.openTouch(m); shot(pv, w, h, "touch${m}_${tag}"); pv.touchLab.close() }
         pv.openOrganism(); shot(pv, w, h, "organism_${tag}"); pv.organism.close()
+        VocalChop.loadDemo(0); VocalChop.applyPattern(0)
+        pv.openPerf(3); shot(pv, w, h, "vchop_${tag}"); pv.vocalChop.close(); VocalChop.patOn = false
     }
 
     @Test @Config(qualifiers = "w360dp-h800dp-xxhdpi") fun normal() { pads("n"); dj("n"); song("n") }

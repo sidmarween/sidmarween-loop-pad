@@ -355,7 +355,7 @@ object InstPresets {
     )
 
     /** Gruppen, die bei KEYS bzw. BASSLINE oben stehen. */
-    val KEYS_GENRES = listOf("Piano", "E-Piano", "Orgel", "Leads")
+    val KEYS_GENRES = listOf("Piano", "E-Piano", "Orgel", "Orchester", "Leads")
     val BASS_GENRES = listOf("Bassline")
 
     /** Gleicher Akkord-Rhythmus je Takt: [hits] = Paare (Schritt, Länge), [chords] = Paare (Ton, Akkord: 1 DUR, 2 MOLL, 4 DUR7, 5 MOLL7). */
@@ -394,6 +394,23 @@ object InstPresets {
             n(0, 0, 2, 3, 0, 1, 6, 12, 1, 8, 0, 2, 11, 10, 1, 12, 7, 2, 14, 3, 2)),
         Synth("Orgel", "Jazz-Orgel mit Leslie (Am7 · D7)", 110, 13, 0, 0, 0.2f, 0f, 0.5f, 0f, 0.12f, 0.85f, 2,
             cr(intArrayOf(0, 3, 6, 2, 10, 4), -3, 5, 2, 4)),
+        // ---- Orchester (Klänge 29–31)
+        Synth("Orchester", "Orchestra-Hit Rave (Am · F · G · Am)", 130, 29, 0, 0, 0.75f, 0.1f, 0.4f, 0f, 0.25f, 0.35f, 4,
+            cr(intArrayOf(0, 2, 3, 2, 6, 2, 10, 1, 12, 2), -3, 2, -7, 1, -5, 1, -3, 2)),
+        Synth("Orchester", "Hip-Hop-Orchester-Stabs (Am · Dm)", 92, 29, 0, 0, 0.7f, 0.1f, 0.35f, 0f, 0.3f, 0.4f, 2,
+            cr(intArrayOf(0, 2, 7, 1, 10, 2), -3, 2, 2, 2)),
+        Synth("Orchester", "Epic-Trailer-Hits (Am · F)", 90, 29, 0, -1, 0.6f, 0.1f, 0.5f, 0f, 0.45f, 0.5f, 2,
+            cr(intArrayOf(0, 4, 8, 2, 12, 4), -3, 2, -7, 1)),
+        Synth("Orchester", "Brass-Stabs Funk (C7 · F7)", 110, 30, 0, 0, 0.32f, 0.15f, 0.65f, 0.01f, 0.12f, 0.35f, 2,
+            cr(intArrayOf(2, 1, 6, 2, 11, 1, 14, 2), 0, 4, 5, 4)),
+        Synth("Orchester", "House-Brass-Stab (Cm7)", 124, 30, 0, 0, 0.35f, 0.2f, 0.7f, 0f, 0.1f, 0.3f, 1,
+            cr(intArrayOf(3, 1, 6, 1, 10, 2, 14, 1), 0, 5)),
+        Synth("Orchester", "Big-Band-Swell (B♭ · E♭)", 100, 30, 0, 0, 0.4f, 0.1f, 0.4f, 0.3f, 0.3f, 0.4f, 2,
+            cr(intArrayOf(0, 8, 8, 8), -2, 1, 3, 1)),
+        Synth("Orchester", "Streicher-Stabs (Trance-Pizz)", 138, 31, 0, 0, 0.6f, 0.05f, 0.3f, 0f, 0.15f, 0.45f, 4,
+            cr(intArrayOf(0, 1, 3, 1, 6, 1, 8, 1, 11, 1, 14, 1), -3, 2, -7, 1, 0, 1, -5, 1)),
+        Synth("Orchester", "Streicher-Fläche (Epic, Am · F · C · G)", 80, 31, 0, 0, 0.5f, 0.05f, 0.1f, 0.35f, 0.6f, 0.5f, 4,
+            cr(intArrayOf(0, 16), -3, 2, -7, 1, 0, 1, -5, 1)),
         // ---- Leads
         Synth("Leads", "Sync-Lead (Electro)", 128, 14, 0, 0, 0.6f, 0.2f, 0.55f, 0.01f, 0.2f, 0.3f, 2,
             n(0, 12, 2, 2, 15, 2, 4, 19, 2, 6, 17, 1, 7, 15, 1, 8, 12, 4, 12, 10, 2, 14, 12, 2, 16, 12, 2, 18, 15, 2, 20, 22, 2, 22, 19, 2, 24, 17, 4, 28, 15, 4),

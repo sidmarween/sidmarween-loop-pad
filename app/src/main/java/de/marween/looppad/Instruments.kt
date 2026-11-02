@@ -268,7 +268,7 @@ object InstState {
     var synCutMod: Float get() = syn.cutMod; set(v) { syn.cutMod = v }
     val synWaveNames = arrayOf("SAW", "SQR", "SUPER", "PLUCK", "GLOCKE", "NES ▢", "NES △", "NOISE", "SID", "GB-WAVE", "FM-CHIP",
         "PIANO", "E-PIANO", "ORGEL", "SYNC-LEAD", "REESE", "SUB-BASS", "FM-BASS", "WOBBLE", "SAITE",
-        "WT ANALOG", "WT VOCAL", "WT GROWL", "WT DIGITAL", "WT SAMPLE", "MAGMA", "FUNK-SLAP", "VIBE", "ORGAN-BASS")
+        "WT ANALOG", "WT VOCAL", "WT GROWL", "WT DIGITAL", "WT SAMPLE", "MAGMA", "FUNK-SLAP", "VIBE", "ORGAN-BASS", "ORCH-HIT", "BRASS", "STRINGS")
     fun synIsWt(w: Int) = w in 20..24
     /** Chiptune-Klänge (Klang-Nr. 5–10): Akkorde laufen als schnelles Chip-Arpeggio, Lautstärke in 16 Stufen. */
     fun synIsChip(w: Int) = w in 5..10
@@ -279,6 +279,9 @@ object InstState {
         Triple("Tasten", 13, "Orgel (Zugriegel) – CUTOFF = Register, VERST. = Leslie"),
         Triple("Tasten", 4, "FM-Glocke"),
         Triple("Tasten", 27, "🏠 VIBE – House-Stabs, Drift, Pump, Acid-Modus (Vibe-Synth-Feld)"),
+        Triple("Orchester", 29, "🎻 ORCH-HIT – 90er-Orchester-Schlag: Streicher + Blech + Pauke · VERST. = Breite"),
+        Triple("Orchester", 30, "🎺 BRASS – Bläsersatz mit Anblas-Schmettern · FILTER-HÜLLK. = Stab, ATTACK = Swell"),
+        Triple("Orchester", 31, "🎻 STRINGS – Streicher-Ensemble · ATTACK 0 = Stab/Pizz, hoch = Fläche"),
         Triple("Lead", 14, "Sync-Lead – schneidend, FILTER-HÜLLK. = Sync-Fahrt"),
         Triple("Lead", 2, "Supersaw (Trance)"),
         Triple("Lead", 0, "Saw (analog)"),
@@ -315,6 +318,9 @@ object InstState {
             18 -> { t.cut = 0.25f; t.res = 0.55f; t.env = 0.7f; t.atk = 0f; t.rel = 0.15f; t.detune = 0.3f }
             19 -> { t.cut = 0.6f; t.res = 0f; t.env = 0f; t.atk = 0f; t.rel = 0.4f; t.detune = 0.6f }
             in 20..24 -> { t.cut = 0.75f; t.res = 0.15f; t.env = 0.35f; t.atk = 0.01f; t.rel = 0.3f; t.detune = 0.2f }
+            29 -> { t.cut = 0.75f; t.res = 0.1f; t.env = 0.4f; t.atk = 0f; t.rel = 0.25f; t.detune = 0.35f }
+            30 -> { t.cut = 0.32f; t.res = 0.15f; t.env = 0.65f; t.atk = 0.01f; t.rel = 0.12f; t.detune = 0.35f }
+            31 -> { t.cut = 0.55f; t.res = 0.05f; t.env = 0.15f; t.atk = 0f; t.rel = 0.3f; t.detune = 0.45f }
         }
         if (synIsWt(w)) Wavetables.ensure(w - 20)
     }
@@ -1633,6 +1639,12 @@ class PolySynth(private val sr: Int, private val t: InstState.SynTrack) {
                 v.nz = 0f
                 v.lp = 0f; v.bp = 0f; v.fg = 0f
             }
+            29 -> {
+                // ORCH-HIT: Pauken-Tonhöhe, Pauken-Lautstärke, Anschlag-Rauschen neu
+                v.m[0] = 1f; v.m[1] = 1f; v.m[2] = 1f
+                for (k in 0 until 6) v.ph[k] = 0.0
+            }
+            30 -> v.m[0] = 1f   // BRASS: Anblas-Tonhöhe
             28 -> {
                 // ORGAN-BASS: Holz-FM und Klick neu anschlagen
                 v.m[0] = 1f; v.m[1] = 1f
@@ -1961,6 +1973,49 @@ class PolySynth(private val sr: Int, private val t: InstState.SynTrack) {
     private val kWood = exp(-1.0 / (0.04 * sr)).toFloat()
     private val kClick = exp(-1.0 / (0.003 * sr)).toFloat()
 
+    private val kBoomP = exp(-1.0 / (0.05 * sr)).toFloat()
+    private val kBoomA = exp(-1.0 / (0.3 * sr)).toFloat()
+    private val kHitN = exp(-1.0 / (0.02 * sr)).toFloat()
+    private val kBlip = exp(-1.0 / (0.04 * sr)).toFloat()
+
+    /** 🎻 ORCH-HIT: Streicher (2 verstimmte Sägen + Oktave), tiefes Blech, Pauke mit Tonhöhen-Fall, Anschlag-Rauschen. */
+    private fun orchHit(v: Voice, f: Double, spread: Float): Double {
+        val m = v.m
+        val d = 0.004 + spread * 0.012
+        var y = saw(v, 0, f * (1 - d)) + saw(v, 1, f * (1 + d)) + 0.7 * saw(v, 2, f * 2 * (1 + d * 0.5)) + 0.6 * saw(v, 3, f * 0.5)
+        var fb = f * 0.25
+        while (fb > 110.0) fb *= 0.5
+        while (fb < 40.0) fb *= 2.0
+        v.ph[5] += fb * (1 + 1.5 * m[0]) / sr; if (v.ph[5] >= 1.0) v.ph[5] -= 1.0
+        y += sinT(v.ph[5]) * m[1] * 2.2
+        m[0] *= kBoomP; m[1] *= kBoomA
+        if (m[2] > 1e-4f) { y += rnd(v) * m[2] * 1.2; m[2] *= kHitN }
+        return y * 0.3
+    }
+
+    /** 🎺 BRASS: 3 Sägen, kurz zu tief angeblasen, Schmettern (Sättigung) mit dem Anschlag, spätes Vibrato. */
+    private fun brass(v: Voice, f: Double, spread: Float): Double {
+        val m = v.m
+        val fb = f * (1 - 0.018 * m[0]); m[0] *= kBlip
+        val vd = ((v.n - sr * 0.35) / (sr * 0.5)).coerceIn(0.0, 1.0)
+        var vib = 1.0
+        if (vd > 0.0) { v.vph += 5.2 / sr; if (v.vph >= 1.0) v.vph -= 1.0; vib = 1.0 + 0.004 * vd * sinT(v.vph) }
+        val d = 0.002 + spread * 0.008
+        val y = saw(v, 0, fb * vib * (1 - d)) + saw(v, 1, fb * vib * (1 + d)) + 0.8 * saw(v, 2, fb * vib)
+        return fastTanh((y * (0.8 + 1.6 * v.vel * v.fenv)).toFloat()) * 0.55
+    }
+
+    /** 🎻 STRINGS: Ensemble aus 5 verstimmten Sägen + Bass-Oktave, kurzes Bogen-Rauschen beim Anstrich. */
+    private fun strings(v: Voice, f: Double, spread: Float): Double {
+        val d = 0.003 + spread * 0.01
+        var y = 0.0
+        for (k in 0 until 5) y += saw(v, k, f * (1 + det[k] * 9 * d))
+        y += 0.5 * saw(v, 5, f * 0.5 * (1 + d * 0.3))
+        val bow = sr / 8
+        if (v.n < bow) y += rnd(v) * 0.15 * (1f - v.n.toFloat() / bow)
+        return y * 0.25
+    }
+
     /** 🎹 ORGAN-BASS: Zugriegel (1', 2', 3', 4' Obertöne), holziger 1:1-FM-Anschlag, Klick, Sub, aufgeräumter Tiefmitten-Bereich. */
     private fun organBass(v: Voice, f: Double): Double {
         val ob = OrganBass
@@ -2064,8 +2119,8 @@ class PolySynth(private val sr: Int, private val t: InstState.SynTrack) {
         val cutN = st.cutNow(); val envA = st.env; val cutM = st.cutMod; val resA = st.res
         val atk = (1.0 / ((0.002 + st.atk * st.atk * 2.5) * sr)).toFloat()
         val relC = exp(-1.0 / ((0.02 + st.rel * st.rel * 3.0) * sr)).toFloat()
-        val decC = exp(-1.0 / ((if (wave == 3) 0.25 else if (wave == OrganBass.WAVE) 0.03 + OrganBass.decay * OrganBass.decay * 0.9 else 0.6) * sr)).toFloat()
-        val sus = when (wave) { 3, 4 -> 0f; 11, 12, 13, 16, 19, 26 -> 1f; 17 -> 0.75f; 25 -> 0.92f; 28 -> if (OrganBass.legato) 0.45f else 0f; else -> 0.8f }
+        val decC = exp(-1.0 / ((if (wave == 3) 0.25 else if (wave == 29) 0.3 else if (wave == OrganBass.WAVE) 0.03 + OrganBass.decay * OrganBass.decay * 0.9 else 0.6) * sr)).toFloat()
+        val sus = when (wave) { 3, 4, 29 -> 0f; 30 -> 0.85f; 31 -> 0.9f; 11, 12, 13, 16, 19, 26 -> 1f; 17 -> 0.75f; 25 -> 0.92f; 28 -> if (OrganBass.legato) 0.45f else 0f; else -> 0.8f }
         val fDec = exp(-1.0 / ((if (wave == 3) 0.12 else 0.35) * sr)).toFloat()
         val q = 1f - resA * 0.92f
         val vol = st.volNow() * 0.32f
@@ -2311,6 +2366,9 @@ class PolySynth(private val sr: Int, private val t: InstState.SynTrack) {
                     26 -> o = funk(v, f, juice, ksTight)
                     27 -> o = vibe(v, f, vAcid)
                     28 -> o = organBass(v, f)
+                    29 -> o = orchHit(v, f, spread)
+                    30 -> o = brass(v, f, spread)
+                    31 -> o = strings(v, f, spread)
                     1 -> {
                         val dt = f / sr
                         v.ph[0] += dt; if (v.ph[0] >= 1.0) v.ph[0] -= 1.0

@@ -9,6 +9,7 @@ import android.graphics.Typeface
 import android.view.HapticFeedbackConstants
 import android.view.MotionEvent
 import android.view.View
+import kotlin.math.abs
 import kotlin.math.min
 
 /** Gemeinsame Zeichen-Hilfen der Performance-Felder (FX-Generator, Vocoder, Chord-Pad). */
@@ -351,6 +352,224 @@ class VocoderPanel(host: View) : PerfPanel(host) {
             MotionEvent.ACTION_MOVE -> if (drag >= 0) { set(drag, get(drag) + (e.getX(0) - lastX) / sl[drag].width()); lastX = e.getX(0) }
             MotionEvent.ACTION_UP, MotionEvent.ACTION_POINTER_UP, MotionEvent.ACTION_CANCEL -> {
                 if (held.remove(id) != null && held.isEmpty()) v.notes.clear()
+                if (e.actionMasked != MotionEvent.ACTION_POINTER_UP) drag = -1
+            }
+        }
+    }
+}
+
+// ================================================================ 🗣 VOCAL-CHOP
+class VocalChopPanel(host: View) : PerfPanel(host) {
+    private val bDemo = RectF(); private val bPad = RectF(); private val bMic = RectF()
+    private val bPat = RectF(); private val bPatSel = RectF(); private val bMode = RectF()
+    private val bGate = RectF(); private val bRev = RectF(); private val bStut = RectF(); private val bToPads = RectF()
+    private val sl = Array(4) { RectF() }
+    private val SL = arrayOf("TONHÖHE", "KLANG (hell)", "AUSKLANG", "LAUTSTÄRKE")
+    private val wave = RectF()
+    private val chops = Array(VocalChop.N) { RectF() }
+    private val keys = Array(13) { RectF() }
+    private val held = HashMap<Int, Int>()      // Finger → Chop
+    private val heldKey = HashMap<Int, Int>()   // Finger → Taste
+    private var padSrc = -1
+    private var recording = false
+    private var recMark = 0L
+    private var recStart = 0L
+    private var envFor: VocalChop.Src? = null
+    private val env = FloatArray(160)
+    private val COLS = intArrayOf(Color.rgb(255, 150, 220), Color.rgb(255, 190, 120), Color.rgb(150, 220, 255), Color.rgb(190, 255, 150))
+    private val NOTE = arrayOf("C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "H", "C'")
+
+    override fun close() { super.close(); VocalChop.allOff(); held.clear(); heldKey.clear(); recording = false }
+
+    private fun get(i: Int) = when (i) { 0 -> (VocalChop.pitch + 12) / 24f; 1 -> VocalChop.tone; 2 -> VocalChop.release; else -> VocalChop.vol }
+    private fun set(i: Int, v: Float) {
+        val c = v.coerceIn(0f, 1f)
+        when (i) { 0 -> VocalChop.pitch = Math.round(c * 24f) - 12; 1 -> VocalChop.tone = c; 2 -> VocalChop.release = c; else -> VocalChop.vol = c }
+    }
+    private fun value(i: Int): String = when (i) { 0 -> (if (VocalChop.pitch > 0) "+" else "") + VocalChop.pitch + " HT"; else -> "${(get(i) * 100).toInt()}" }
+
+    private fun buildEnv(s: VocalChop.Src) {
+        val d = s.data; val n = env.size
+        for (k in 0 until n) {
+            val a = (d.size.toLong() * k / n).toInt(); val b = (d.size.toLong() * (k + 1) / n).toInt()
+            var pk = 0f; var i = a; while (i < b) { val q = abs(d[i]); if (q > pk) pk = q; i += 4 }
+            env[k] = pk
+        }
+        envFor = s
+    }
+
+    fun draw(c: Canvas, area: RectF, acc: Int) {
+        val col = Color.rgb(255, 150, 220)
+        val v = VocalChop
+        val s = v.src
+        val status = when {
+            recording -> "● nimmt auf … ${String.format(java.util.Locale.GERMANY, "%.1f", (System.nanoTime() - recStart) / 1e9)} s – nochmal tippen zum Zerlegen"
+            s == null -> "Quelle wählen: Demo-Stimme, Loop eines Pads oder Mikrofon"
+            else -> s.name + " · ${s.count} Chops" + (if (v.patOn && v.patIdx >= 0) " · Muster: " + v.PATTERNS[v.patIdx].name else "")
+        }
+        frame(c, area, "🗣 VOCAL-CHOP", col, Color.rgb(20, 10, 18), acc, status)
+        v.decayFlash()
+        val pad = dp(10f); val g = dp(6f)
+        val l = box.left + pad; val r = box.right - pad
+        var y = bClose.bottom + dp(22f)
+        val bh = dp(36f)
+        row(arrayOf(bDemo, bPad, bMic), l, r, y, bh)
+        btn(c, bDemo, "◀ " + (if (v.demoIdx >= 0) v.DEMO_NAMES[v.demoIdx] else "DEMO-STIMME") + " ▶", v.demoIdx >= 0 && s != null && s.name.startsWith("Demo"), col)
+        btn(c, bPad, if (padSrc >= 0) "∿ PAD ${padSrc + 1} ▶" else "∿ AUS PAD", s != null && s.name.startsWith("Pad"), col)
+        btn(c, bMic, if (recording) "■ STOPP & ZERLEGEN" else "● MIKRO AUFNEHMEN", recording, Color.rgb(255, 90, 90))
+        y += bh + g
+        row(arrayOf(bPat, bPatSel, bMode), l, r, y, bh)
+        btn(c, bPat, if (v.patOn) "■ MUSTER" else "▶ MUSTER", v.patOn, Color.rgb(140, 230, 170))
+        btn(c, bPatSel, "◀ " + (if (v.patIdx >= 0) v.PATTERNS[v.patIdx].name else "MUSTER-VORLAGE") + " ▶", v.patIdx >= 0, col)
+        btn(c, bMode, "✂ " + v.MODE_NAMES[v.chopMode], false, col)
+        y += bh + g
+        row(arrayOf(bGate, bRev, bStut, bToPads), l, r, y, bh)
+        btn(c, bGate, if (v.gate) "GATE" else "ONE-SHOT", v.gate, col)
+        btn(c, bRev, "⇄ RÜCKWÄRTS", v.reverse, col)
+        btn(c, bStut, "STUTTER " + v.STUTTER_NAMES[v.stutter], v.stutter > 0, Color.rgb(255, 210, 90))
+        btn(c, bToPads, "→ PADS", false, col)
+        y += bh + g
+        val sw = (r - l - g) / 2; val sh = dp(32f)
+        for (i in 0 until 4) { val rr = i / 2; val cc = i % 2; sl[i].set(l + cc * (sw + g), y + rr * (sh + g), l + cc * (sw + g) + sw, y + rr * (sh + g) + sh) }
+        for (i in 0 until 4) slider(c, sl[i], SL[i], get(i), value(i), col)
+        y = sl[3].bottom + g
+        // Wellenform mit Schnitten
+        wave.set(l, y, r, y + dp(46f))
+        fill.color = Color.rgb(30, 18, 28); c.drawRoundRect(wave, dp(6f), dp(6f), fill)
+        if (s != null) {
+            if (envFor !== s) buildEnv(s)
+            val ww = wave.width() / env.size
+            val mid = wave.centerY(); val hh = wave.height() * 0.45f
+            fill.color = Color.argb(170, 255, 150, 220)
+            for (k in env.indices) { val e = env[k].coerceAtMost(1f) * hh; c.drawRect(wave.left + k * ww, mid - e, wave.left + (k + 1) * ww - 0.5f, mid + e, fill) }
+            val len = s.data.size.toFloat()
+            for (k in 0 until s.count) {
+                val x0 = wave.left + wave.width() * s.starts[k] / len; val x1 = wave.left + wave.width() * s.ends[k] / len
+                fill.color = Color.argb(if (k == v.sel) 90 else 35, 255, 255, 255)
+                c.drawRect(x0, wave.top, x1, wave.bottom, fill)
+                stroke.color = COLS[k % 4]; stroke.strokeWidth = dp(1.2f); c.drawLine(x0, wave.top, x0, wave.bottom, stroke)
+            }
+        } else {
+            text.textSize = dp(10f); text.color = Color.argb(150, 255, 255, 255)
+            c.drawText("noch keine Stimme geladen", wave.centerX(), wave.centerY() + dp(4f), text)
+        }
+        y = wave.bottom + g
+        // 4×4 Chop-Pads und Tasten-Leiste
+        val kh = dp(54f)
+        val gridH = box.bottom - pad - kh - g - y
+        val cw = (r - l - 3 * g) / 4; val ch = (gridH - 3 * g) / 4
+        val n = s?.count ?: 0
+        for (k in 0 until VocalChop.N) {
+            val rr = k / 4; val cc = k % 4
+            chops[k].set(l + cc * (cw + g), y + rr * (ch + g), l + cc * (cw + g) + cw, y + rr * (ch + g) + ch)
+            val pc = COLS[rr]
+            val has = k < n
+            val f = v.flash[k]
+            if (f > 0.05f) { glow.maskFilter = BlurMaskFilter(dp(12f), BlurMaskFilter.Blur.NORMAL); glow.color = Color.argb((200 * f).toInt(), Color.red(pc), Color.green(pc), Color.blue(pc)); c.drawRoundRect(chops[k], dp(10f), dp(10f), glow); glow.maskFilter = null }
+            fill.color = if (!has) Color.rgb(24, 20, 26) else if (f > 0.3f) pc else Color.rgb(44, 30, 42)
+            c.drawRoundRect(chops[k], dp(10f), dp(10f), fill)
+            stroke.strokeWidth = dp(if (k == v.sel && has) 2.2f else 1f); stroke.color = if (has) pc else Color.rgb(60, 50, 60)
+            c.drawRoundRect(chops[k], dp(10f), dp(10f), stroke)
+            text.color = if (has && f > 0.3f) Color.BLACK else if (has) Color.WHITE else Color.argb(80, 255, 255, 255)
+            text.textSize = min(dp(15f), ch * 0.3f)
+            c.drawText("${k + 1}", chops[k].centerX(), chops[k].centerY() + text.textSize * 0.36f, text)
+            if (v.curStep >= 0 && v.patOn && v.patIdx >= 0 && v.PATTERNS[v.patIdx].chop[v.curStep] == k && has) {
+                fill.color = Color.WHITE; c.drawCircle(chops[k].right - dp(8f), chops[k].top + dp(8f), dp(3f), fill)
+            }
+        }
+        val ky = box.bottom - pad - kh
+        val kw = (r - l - 12 * dp(2f)) / 13
+        for (k in 0 until 13) {
+            keys[k].set(l + k * (kw + dp(2f)), ky, l + k * (kw + dp(2f)) + kw, ky + kh)
+            val black = k % 12 in intArrayOf(1, 3, 6, 8, 10)
+            val on = heldKey.values.contains(k)
+            fill.color = if (on) col else if (black) Color.rgb(40, 30, 40) else Color.rgb(225, 215, 225)
+            c.drawRoundRect(keys[k], dp(5f), dp(5f), fill)
+            text.color = if (on || !black) Color.BLACK else Color.WHITE
+            text.textSize = min(dp(10f), kw * 0.42f)
+            c.drawText(NOTE[k], keys[k].centerX(), keys[k].bottom - dp(8f), text)
+        }
+        text.textSize = dp(8.5f); text.color = Color.argb(150, 255, 255, 255)
+        c.drawText("Tasten spielen Chop ${v.sel + 1} in jeder Tonhöhe", (l + r) / 2, ky - dp(2f), text)
+        host.postInvalidateOnAnimation()
+    }
+
+    private fun nextPad(): Int {
+        for (i in 1..Engine.PADS) { val p = Math.floorMod(padSrc + i, min(12, Engine.PADS)); if (Engine.hasLoop(p)) return p }
+        return -1
+    }
+
+    fun touch(e: MotionEvent) {
+        val i = e.actionIndex
+        val id = e.getPointerId(i)
+        val x = e.getX(i); val y = e.getY(i)
+        val v = VocalChop
+        when (e.actionMasked) {
+            MotionEvent.ACTION_DOWN, MotionEvent.ACTION_POINTER_DOWN -> {
+                val s = v.src
+                val k = chops.indexOfFirst { it.contains(x, y) }
+                if (k >= 0) {
+                    if (s != null && k < s.count) { held[id] = k; v.on(k, 0, id) }
+                    else if (s == null) onHint?.invoke("Erst eine Quelle laden – z. B. ◀ DEMO-STIMME ▶")
+                    return
+                }
+                val kk = keys.indexOfFirst { it.contains(x, y) }
+                if (kk >= 0) {
+                    if (s != null) { heldKey[id] = kk; v.on(v.sel.coerceIn(0, s.count - 1), kk, 1000 + id) }
+                    return
+                }
+                for (q in 0 until 4) if (sl[q].contains(x, y)) { drag = q; lastX = x; return }
+                if (e.actionMasked != MotionEvent.ACTION_DOWN) return
+                haptic()
+                when {
+                    bClose.contains(x, y) -> close()
+                    bDemo.contains(x, y) -> {
+                        v.loadDemo(if (v.demoIdx < 0) 0 else if (x < bDemo.centerX()) v.demoIdx - 1 else v.demoIdx + 1)
+                        onHint?.invoke("🗣 ${v.DEMO_NAMES[v.demoIdx]} – ${v.src?.count ?: 0} Silben auf den Pads")
+                    }
+                    bPad.contains(x, y) -> {
+                        val p = nextPad()
+                        if (p < 0) onHint?.invoke("Kein Pad mit Aufnahme – nimm eine Stimme auf ein Pad auf (oder KI-Stems: Gesang auf ein Pad)")
+                        else { padSrc = p; if (v.loadPad(p)) onHint?.invoke("∿ Pad ${p + 1} in ${v.src?.count ?: 0} Silben zerlegt · nochmal tippen = nächstes Pad") else onHint?.invoke("Pad ${p + 1} ist zu kurz") }
+                    }
+                    bMic.contains(x, y) -> {
+                        if (!recording) { recording = true; recMark = Engine.micMark(); recStart = System.nanoTime(); onHint?.invoke("● Sing oder sprich ein paar Silben – dann ■ tippen") }
+                        else {
+                            recording = false
+                            val d = Engine.micSince(recMark, 12f)
+                            onHint?.invoke(if (v.loadRecording(d)) "✂ Aufnahme in ${v.src?.count ?: 0} Silben zerlegt" else "Zu kurz oder zu leise – Mikrofon an? Nochmal versuchen")
+                        }
+                    }
+                    bPat.contains(x, y) -> {
+                        if (v.src == null) { onHint?.invoke("Erst eine Quelle laden"); return }
+                        if (v.patIdx < 0) v.patIdx = 0
+                        v.patOn = !v.patOn
+                        if (v.patOn && !Engine.seqPlaying) Engine.transportPlay(false)
+                        if (!v.patOn) v.allOff()
+                        onHint?.invoke(if (v.patOn) "▶ ${v.PATTERNS[v.patIdx].name} läuft im Takt" else "Muster aus")
+                    }
+                    bPatSel.contains(x, y) -> {
+                        v.applyPattern(if (v.patIdx < 0) 0 else if (x < bPatSel.centerX()) v.patIdx - 1 else v.patIdx + 1)
+                        if (v.src == null) { v.loadDemo(0) }
+                        if (!Engine.seqPlaying) Engine.transportPlay(false)
+                        onHint?.invoke("🗣 Muster: ${v.PATTERNS[v.patIdx].name}")
+                    }
+                    bMode.contains(x, y) -> { v.chopMode = (v.chopMode + 1) % 3; v.rechop(); onHint?.invoke("✂ " + when (v.chopMode) { 0 -> "nach Silben (automatisch)"; 1 -> "in 8 gleiche Stücke"; else -> "in 16 gleiche Stücke" }) }
+                    bGate.contains(x, y) -> { v.gate = !v.gate; onHint?.invoke(if (v.gate) "GATE: klingt, solange du hältst" else "ONE-SHOT: Chop spielt immer ganz") }
+                    bRev.contains(x, y) -> v.reverse = !v.reverse
+                    bStut.contains(x, y) -> { v.stutter = (v.stutter + 1) % 4; onHint?.invoke(if (v.stutter > 0) "Stutter ${v.STUTTER_NAMES[v.stutter]}: gehaltener Chop wiederholt sich im Takt" else "Stutter aus") }
+                    bToPads.contains(x, y) -> {
+                        val parts = v.chopData()
+                        if (parts.isEmpty()) onHint?.invoke("Erst eine Quelle laden")
+                        else { val cnt = Engine.samplesToPads(parts, 12, "Vocal-Chops → Pads"); onHint?.invoke(if (cnt > 0) "→ $cnt Chops als ⚡ One-Shots auf freie Pads gelegt (↶ macht es rückgängig)" else "Keine freien Pads") }
+                    }
+                }
+            }
+            MotionEvent.ACTION_MOVE -> if (drag >= 0) { set(drag, get(drag) + (e.getX(0) - lastX) / sl[drag].width()); lastX = e.getX(0) }
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_POINTER_UP, MotionEvent.ACTION_CANCEL -> {
+                if (held.remove(id) != null) v.off(id)
+                if (heldKey.remove(id) != null) v.off(1000 + id)
+                if (e.actionMasked == MotionEvent.ACTION_CANCEL) { v.allOff(); held.clear(); heldKey.clear() }
                 if (e.actionMasked != MotionEvent.ACTION_POINTER_UP) drag = -1
             }
         }

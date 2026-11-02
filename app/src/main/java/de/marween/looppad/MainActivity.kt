@@ -741,7 +741,7 @@ class MainActivity : Activity() {
 
     /** Reiter „Instrumente“: ACID 303, DRUM 909 und SYNTH einzeln oder zusammen als Eingang. */
     private fun showInstSourcePicker(p: Int) {
-        val names = arrayOf("🔊 ACID 303 (Bass)", "🥁 DRUM 909 (Drumcomputer)", "🎹 SYNTH, KEYS, BASSLINE", "⬡ EUKLID (Polyrhythmen)", "🌌 ATMOS (Klangteppich)", "🎤 HARMONIZER (Chor)", "🐺 WOLF (Loop-Zerhacker)", "🧬 RHYTHM ARCHITECT", "🪐 ORBITS", "🖐 TOUCH-LAB", "🚀 FX-GEN", "🤖 VOCODER")
+        val names = arrayOf("🔊 ACID 303 (Bass)", "🥁 DRUM 909 (Drumcomputer)", "🎹 SYNTH, KEYS, BASSLINE", "⬡ EUKLID (Polyrhythmen)", "🌌 ATMOS (Klangteppich)", "🎤 HARMONIZER (Chor)", "🐺 WOLF (Loop-Zerhacker)", "🧬 RHYTHM ARCHITECT", "🪐 ORBITS", "🖐 TOUCH-LAB", "🚀 FX-GEN", "🤖 VOCODER", "🗣 VOCAL-CHOP")
         val m0 = if (Engine.padSource[p] == 3) Engine.padInstMask[p] else 7
         val checked = BooleanArray(names.size) { (m0 shr it) and 1 != 0 }
         ui()
@@ -1960,6 +1960,20 @@ class MainActivity : Activity() {
                 Item("🎹 SYNTH 1–3 · Lead, Fläche, Bass (polyfon, Akkorde, Arpeggiator)") { synthTrack(0, false) },
                 Item("🎹 KEYS · Piano, E-Piano, Orgel & Leads") { synthTrack(InstState.KEYS_TRACK, true) },
                 Item("🏠 VIBE-SYNTH · House-Stabs, M1-Akkorde, Pump, Acid-Modus") { pad(); pads.openVibe(); hint("🏠 Eine Taste = ein Club-Akkord · PUMP drückt im Takt · STAB ↔ ACID schaltet auf 303-Hybrid") },
+                Item("🎺 ORCHESTRA-HITS & BRASS-STABS · Orchester-Schlag, Bläser, Streicher") {
+                    pad(); InstState.synCur = InstState.KEYS_TRACK; pads.openSynthEditor()
+                    val list = InstPresets.SYNTHS.filter { it.genre == "Orchester" }
+                    ui().setTitle("🎺 Orchester-Stabs · auf KEYS")
+                        .setItems((list.map { "${it.name} · ${it.bpm} BPM" } + listOf("🎛 Nur den Klang wählen (ORCH-HIT / BRASS / STRINGS) …")).toTypedArray()) { _, i ->
+                            if (i >= list.size) { showSynthWaves(); return@setItems }
+                            val p = list[i]
+                            Engine.pushPatternUndo("SYNTH Preset")
+                            InstPresets.applySynth(p)
+                            presetTempo(p.bpm)
+                            pads.invalidate()
+                            hint("🎺 ${p.name} – Klang ${InstState.synWaveNames[p.wave]} · ▶ startet · in KLANG zwischen ORCH-HIT, BRASS und STRINGS wechseln")
+                        }.setNegativeButton("Abbrechen", null).show()
+                },
                 Item("🧪 WAVETABLE · Klangformen durchfahren (Growl, Vocal, Digital …)") { pad(); pads.openSynthEditor(); showWavetablePresets() },
                 Item("👾 CHIPTUNE · 8-Bit-Klänge (Presets)") {
                     pad(); pads.openSynthEditor()
@@ -1983,6 +1997,7 @@ class MainActivity : Activity() {
             ),
             "🌌 FLÄCHEN & STIMME" to listOf(
                 Item("🌌 ATMOS · Klangteppich & Drones" + st(Atmos.on)) { openAtmos() },
+                Item("🗣 VOCAL-CHOP · Stimme in Silben zerlegen und spielen" + st(VocalChop.patOn)) { pad(); pads.openPerf(3); hint("🗣 Quelle wählen (Demo-Stimme, Pad oder Mikro) – Chops antippen, Tasten spielen sie in jeder Tonhöhe") },
                 Item("🤖 VOCODER · Roboter-Stimme aus Mikro + Akkord" + st(Vocoder.on)) { pad(); pads.openPerf(2); hint("🤖 ▶ AN, ins Mikro sprechen und eine Akkord-Taste halten (Kopfhörer!)") },
                 Item("🎤 VOCAL-HARMONIZER · Chor aus dem Gesang" + st(Harmonizer.on)) { if (djMode) dj.openHarm() else pads.openHarm(); hint("▶ AN, dann Akkord-Pads halten – der Gesang des Decks wird zum Chor · XY: Formant und Tuning") }
             ),
@@ -4032,7 +4047,7 @@ class MainActivity : Activity() {
 
     /** 💾 Ein Klick: alles, was gerade läuft, einmal im Takt aufnehmen – jede Spur als eigene WAV + Gesamtmix, nach Musik/Marv PAD. */
     private fun exportAllWaves() {
-        val any = (0 until PadView.VISIBLE_PADS).any { Engine.hasLoop(it) } || (0 until InstState.INSTS).any { InstState.instHasNotes(it) } || Euclid.on || Atmos.on || Wolf.on || Architect.on || Orbits.on || TouchLab.specPlay || Modular.drone
+        val any = (0 until PadView.VISIBLE_PADS).any { Engine.hasLoop(it) } || (0 until InstState.INSTS).any { InstState.instHasNotes(it) } || Euclid.on || Atmos.on || Wolf.on || Architect.on || Orbits.on || TouchLab.specPlay || Modular.drone || VocalChop.patOn
         if (!any) { toast("Noch läuft nichts – erst Pads oder Instrumente füllen"); return }
         if (android.os.Build.VERSION.SDK_INT < 29) { toast("Braucht Android 10 oder neuer – sonst Menü › Exportieren › Song + Stems"); return }
         var bars = 8
@@ -4070,7 +4085,7 @@ class MainActivity : Activity() {
         if (InstState.drumHasNotes()) list.add("🥁 DRUM 909" to 1)
         for (t in 0 until InstState.SYN_TRACKS) if (InstState.synTracks[t].hasNotes()) list.add("🎹 ${InstState.synName(t)} (${InstState.synWaveNames[InstState.synTracks[t].wave.coerceIn(0, InstState.synWaveNames.size - 1)]})" to if (t < 3) 2 + t else if (t == InstState.KEYS_TRACK) 6 else 7)
         for (p in 0 until PadView.VISIBLE_PADS) if (Engine.hasLoop(p)) list.add("∿ Pad ${p + 1} · ${Engine.padName(p) ?: "Loop"}" to StemRecorder.PAD0 + p)
-        val xs = arrayOf("⬡ EUKLID" to Euclid.on, "🌌 ATMOS" to Atmos.on, "🎤 HARMONIZER" to Harmonizer.on, "🐺 WOLF" to Wolf.on, "🧬 RHYTHM ARCHITECT" to Architect.on, "🪐 ORBITS" to Orbits.on, "🖐 TOUCH-LAB" to (TouchLab.specPlay || Modular.drone), "🚀 FX-GEN" to FxGen.active(), "🤖 VOCODER" to Vocoder.on)
+        val xs = arrayOf("⬡ EUKLID" to Euclid.on, "🌌 ATMOS" to Atmos.on, "🎤 HARMONIZER" to Harmonizer.on, "🐺 WOLF" to Wolf.on, "🧬 RHYTHM ARCHITECT" to Architect.on, "🪐 ORBITS" to Orbits.on, "🖐 TOUCH-LAB" to (TouchLab.specPlay || Modular.drone), "🚀 FX-GEN" to FxGen.active(), "🤖 VOCODER" to Vocoder.on, "🗣 VOCAL-CHOP" to (VocalChop.src != null && (VocalChop.patOn || VocalChop.active())))
         for ((k, x) in xs.withIndex()) if (x.second) list.add(x.first to StemRecorder.X0 + k)
         if (list.isEmpty()) { toast("Noch kein Instrument mit Inhalt"); return }
         ui().setTitle("💾 Welches Instrument exportieren?")
