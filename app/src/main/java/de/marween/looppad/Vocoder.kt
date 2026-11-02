@@ -38,6 +38,7 @@ object Vocoder {
     private val gM = FloatArray(N); private val gC = FloatArray(N)
     private var lastFormant = -1f
     private val ph = DoubleArray(24)
+    private val incs = DoubleArray(6)
     private var rnd = 4711
 
     private fun setup(sr: Int) {
@@ -63,7 +64,14 @@ object Vocoder {
             for (k in 0 until N) gC[k] = (2 * sin(PI * min(fc[k] * sh, sr / 6.0) / sr)).toFloat()
             lastFormant = formant
         }
-        val nts = if (on) carrierNotes() else IntArray(0)
+        // Träger-Frequenzen einmal je Block (früher pow() und ein Objekt je Probe und Ton)
+        var nn0 = 0
+        if (on) {
+            val nts = carrierNotes()
+            for (nn in nts) { if (nn0 >= 6) break; incs[nn0] = 440.0 * 2.0.pow((nn - 69) / 12.0) / sr; nn0++ }
+        }
+        val nCount = nn0
+        val cNorm = if (nCount > 0) 1f / kotlin.math.sqrt(nCount.toFloat()) else 1f
         val rel = exp(-1.0 / ((0.01 + release * 0.25) * sr)).toFloat()
         val att = exp(-1.0 / (0.002 * sr)).toFloat()
         val q = 0.12f
@@ -72,17 +80,16 @@ object Vocoder {
             val m = if (on && mic != null) mic[i] * 3f else 0f
             // Träger
             var c = 0f
-            for ((j, nn) in nts.withIndex()) {
-                if (j >= 6) break
-                val f = 440.0 * 2.0.pow((nn - 69) / 12.0)
+            for (j in 0 until nCount) {
+                val inc = incs[j]
                 when (carrier) {
-                    1 -> { ph[j] += f / sr; if (ph[j] >= 1.0) ph[j] -= 1.0; c += if (ph[j] < 0.4) 1f else -1f }
-                    2 -> for (d in 0 until 3) { val idx = 6 + j * 3 + d; if (idx >= ph.size) break; ph[idx] += f * (1 + (d - 1) * 0.008) / sr; if (ph[idx] >= 1.0) ph[idx] -= 1.0; c += ((2 * ph[idx] - 1) * 0.6).toFloat() }
-                    3 -> { ph[j] += f / sr; if (ph[j] >= 1.0) ph[j] -= 1.0; c += (sin(2 * PI * ph[j]) + 0.6 * sin(4 * PI * ph[j]) + 0.4 * sin(6 * PI * ph[j])).toFloat() * 0.7f }
-                    else -> { ph[j] += f / sr; if (ph[j] >= 1.0) ph[j] -= 1.0; c += (2 * ph[j] - 1).toFloat() }
+                    1 -> { ph[j] += inc; if (ph[j] >= 1.0) ph[j] -= 1.0; c += if (ph[j] < 0.4) 1f else -1f }
+                    2 -> for (d in 0 until 3) { val idx = 6 + j * 3 + d; if (idx >= ph.size) break; ph[idx] += inc * (1 + (d - 1) * 0.008); if (ph[idx] >= 1.0) ph[idx] -= 1.0; c += ((2 * ph[idx] - 1) * 0.6).toFloat() }
+                    3 -> { ph[j] += inc; if (ph[j] >= 1.0) ph[j] -= 1.0; val s1 = sin(2 * PI * ph[j]); val c1 = kotlin.math.cos(2 * PI * ph[j]); c += (s1 + 0.6 * 2 * s1 * c1 + 0.4 * s1 * (3 - 4 * s1 * s1)).toFloat() * 0.7f }
+                    else -> { ph[j] += inc; if (ph[j] >= 1.0) ph[j] -= 1.0; c += (2 * ph[j] - 1).toFloat() }
                 }
             }
-            if (nts.isNotEmpty()) c /= kotlin.math.sqrt(nts.size.toFloat())
+            c *= cNorm
             rnd = rnd * 1664525 + 1013904223
             val nz = ((rnd ushr 8) / 16777216f) * 2f - 1f
             var outL = 0f; var outR = 0f

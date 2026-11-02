@@ -761,7 +761,10 @@ class AcidSynth(private val sr: Int) {
     fun render(out: FloatArray, n: Int, w: Long) {
         val evs: List<Ev>
         synchronized(lock) {
-            if (queue.isEmpty()) evs = emptyList() else {
+            // nur wenn ein Ereignis in diesem Block fällig ist, Listen bauen (sonst jeden Block Müll für den GC)
+            var due = false
+            for (qi in 0 until queue.size) if (queue[qi].frame < w + n) { due = true; break }
+            if (!due) evs = emptyList() else {
                 evs = queue.filter { it.frame < w + n }.sortedBy { it.frame }
                 queue.removeAll(evs.toSet())
             }
@@ -1503,6 +1506,8 @@ class PolySynth(private val sr: Int, private val t: InstState.SynTrack) {
         var vph = 0.0
         // Teiltöne (Piano) und Hüllkurven der Modelle
         val inc = DoubleArray(16)
+        /** Sinus-Resonatoren der Teiltöne (y[n] = k·y[n−1] − y[n−2]): ein Multiplizieren statt Tabellen-Sinus. */
+        val rs1 = DoubleArray(16); val rs2 = DoubleArray(16); val rk = DoubleArray(16)
         val pa = FloatArray(16)
         val pd = FloatArray(16)
         var np = 0
@@ -1536,6 +1541,8 @@ class PolySynth(private val sr: Int, private val t: InstState.SynTrack) {
         fun fastTanh(x: Float): Float = if (x > 3f) 1f else if (x < -3f) -1f else { val x2 = x * x; x * (27f + x2) / (27f + 9f * x2) }
         // Orgel-Zugriegel: 16' 8' 5⅓' 4' 2⅔' 2' 1⅗' 1⅓' 1'
         val ORG_R = doubleArrayOf(0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 5.0, 6.0, 8.0)
+        /** dieselben Fußlagen als Vielfache des 16'-Tons */
+        val ORG_M = intArrayOf(1, 2, 3, 4, 6, 8, 10, 12, 16)
         val ORG_JAZZ = floatArrayOf(0.8f, 1f, 0.6f, 0f, 0f, 0f, 0f, 0f, 0f)
         val ORG_GOSPEL = floatArrayOf(1f, 1f, 1f, 0.6f, 0.3f, 0.4f, 0f, 0f, 0f)
         val ORG_FULL = floatArrayOf(1f, 1f, 1f, 1f, 0.8f, 0.8f, 0.6f, 0.6f, 0.7f)
@@ -1548,6 +1555,7 @@ class PolySynth(private val sr: Int, private val t: InstState.SynTrack) {
     private var ageCtr = 0L
     private val det = doubleArrayOf(0.0, -0.11, 0.11, -0.05, 0.05)
     private val orgW = FloatArray(9)
+    private val orgH = FloatArray(17)
     /** Leslie-Rotor (gemeinsam für alle Orgel-Stimmen). */
     private var leslie = 0.0
 
@@ -1591,7 +1599,7 @@ class PolySynth(private val sr: Int, private val t: InstState.SynTrack) {
                 val dt = 1.0 + 0.0004 + t.detune * 0.0012
                 for (k in 0 until min(3, base)) { v.inc[n] = v.inc[k] * dt; v.pa[n] = v.pa[k] * 0.7f; v.pd[n] = v.pd[k]; n++ }
                 v.np = n
-                for (k in 0 until n) v.ph[k] = 0.0
+                for (k in 0 until n) { val wk = 2 * PI * v.inc[k]; v.rk[k] = 2 * kotlin.math.cos(wk); v.rs1[k] = 0.0; v.rs2[k] = -kotlin.math.sin(wk) }
                 v.hn = 0.22f * vel * (0.5f + bright)
             }
             12 -> {
@@ -1787,6 +1795,70 @@ class PolySynth(private val sr: Int, private val t: InstState.SynTrack) {
         return (anchor * bl.sub * 0.9f + top * 0.75f).toDouble()
     }
 
+    /** 🎹 Flügel: Teiltöne als Sinus-Resonatoren + Hammer-Geräusch. */
+    private fun piano(v: Voice, pianoHd: Float): Double {
+        // Flügel
+        var sum = 0f
+        for (k in 0 until v.np) {
+            if (v.pa[k] < 1e-5f) continue   // verklungener Teilton: nicht mehr rechnen
+            val y = v.rk[k] * v.rs1[k] - v.rs2[k]
+            v.rs2[k] = v.rs1[k]; v.rs1[k] = y
+            sum += v.pa[k] * y.toFloat()
+            v.pa[k] *= v.pd[k]
+        }
+        if (v.hn > 1e-4f) {
+            v.nlp += 0.35f * (rnd(v) - v.nlp)
+            sum += v.nlp * v.hn
+            v.hn *= pianoHd
+        }
+        return sum * 0.5
+    }
+
+    /** E-Piano (FM). */
+    private fun ePiano(v: Voice, f: Double, cutN: Float, spread: Float): Double {
+        // E-Piano (FM): Körper 1:1 mit abklingendem Index + metallischer Anschlag (14:1), Tremolo über VERSTIMMUNG
+        val vel = v.vel
+        val bright = cutN
+        v.ph[0] += f / sr; if (v.ph[0] >= 1.0) v.ph[0] -= 1.0
+        v.ph[2] += f * 14.0 / sr; if (v.ph[2] >= 1.0) v.ph[2] -= 1.0
+        val i1 = (0.25 + 1.8 * vel * bright) * (0.3 + 0.7 * v.pa[1])
+        val body = sinT(v.ph[0] + i1 * sinT(v.ph[0]) * TWO_PI_INV)   // Modulator 1:1 läuft phasengleich mit dem Träger
+        val tine = sinT(v.ph[0] + 2.2 * sinT(v.ph[2]) * TWO_PI_INV) * v.pa[2] * 0.35f * vel
+        v.mph += 4.8 / sr; if (v.mph >= 1.0) v.mph -= 1.0
+        val trem = 1f - spread * 0.55f * (0.5f + 0.5f * sinT(v.mph))
+        val o = fastTanh((body * v.pa[0] + tine) * trem * (1f + vel * 0.8f)) * 0.85
+        v.pa[0] *= v.pd[0]; v.pa[1] *= v.pd[1]; v.pa[2] *= v.pd[2]
+        return o
+    }
+
+    /** Orgel (Zugriegel + Leslie). */
+    private fun organ(v: Voice, f: Double, spread: Float, lesV: Float, lesA: Float, orgNorm: Float, envA: Float, clickHd: Float): Double {
+        // Orgel (Zugriegel + Leslie)
+        val fv = f * (1.0 + 0.0035 * spread * lesV)
+        // alle Zugriegel sind ganzzahlige Vielfache des 16'-Tons: ein Tabellen-Sinus + Tschebyschow-Reihe
+        v.ph[0] += fv * 0.5 / sr; if (v.ph[0] >= 1.0) v.ph[0] -= 1.0
+        val h = orgH
+        val s1 = sinT(v.ph[0]); val c2 = 2f * sinT(v.ph[0] + 0.25)
+        h[0] = 0f; h[1] = s1
+        val top = min(16, (sr * 0.45 / (fv * 0.5)).toInt())
+        for (m in 2..top) h[m] = c2 * h[m - 1] - h[m - 2]
+        var sum = 0f
+        for (k in 0 until 9) {
+            val wk = orgW[k]
+            if (wk < 0.01f) continue
+            val mk = ORG_M[k]
+            if (mk > top) continue
+            sum += wk * h[mk]
+        }
+        sum *= orgNorm
+        if (envA > 0.03f && v.pa[0] > 1e-4f && top >= 6) {
+            sum += v.pa[0] * envA * 0.8f * h[6]
+            v.pa[0] *= v.pd[0]
+        }
+        if (v.hn > 1e-4f) { sum += rnd(v) * v.hn; v.hn *= clickHd }
+        return (sum * lesA).toDouble() * 0.8
+    }
+
     /** 🎸 FUNK: Saite (Karplus-Strong) + Slap-Daumen/Pop-Klick/Ghost-Plopp, Auto-Wah, Formant, Phaser, Band-Sättigung, Thumb-Sub. */
     private fun funk(v: Voice, f: Double, juice: Float, tightT: Double): Double {
         val bl = BassLab
@@ -1976,7 +2048,10 @@ class PolySynth(private val sr: Int, private val t: InstState.SynTrack) {
     fun render(out: FloatArray, n: Int, w: Long) {
         val evs: List<Ev>
         synchronized(lock) {
-            if (queue.isEmpty()) evs = emptyList() else {
+            // nur wenn ein Ereignis in diesem Block fällig ist, Listen bauen (sonst jeden Block Müll für den GC)
+            var due = false
+            for (qi in 0 until queue.size) if (queue[qi].frame < w + n) { due = true; break }
+            if (!due) evs = emptyList() else {
                 evs = queue.filter { it.frame < w + n }.sortedBy { it.frame }
                 queue.removeAll(evs.toSet())
             }
@@ -2142,58 +2217,9 @@ class PolySynth(private val sr: Int, private val t: InstState.SynTrack) {
                         }
                         o = v.nz.toDouble()
                     }
-                    11 -> {
-                        // Flügel
-                        var sum = 0f
-                        for (k in 0 until v.np) {
-                            if (v.pa[k] < 1e-5f) continue   // verklungener Teilton: nicht mehr rechnen
-                            v.ph[k] += v.inc[k]; if (v.ph[k] >= 1.0) v.ph[k] -= 1.0
-                            sum += v.pa[k] * sinT(v.ph[k])
-                            v.pa[k] *= v.pd[k]
-                        }
-                        if (v.hn > 1e-4f) {
-                            v.nlp += 0.35f * (rnd(v) - v.nlp)
-                            sum += v.nlp * v.hn
-                            v.hn *= pianoHd
-                        }
-                        o = sum * 0.5
-                    }
-                    12 -> {
-                        // E-Piano (FM): Körper 1:1 mit abklingendem Index + metallischer Anschlag (14:1), Tremolo über VERSTIMMUNG
-                        val vel = v.vel
-                        val bright = cutN
-                        v.ph[0] += f / sr; if (v.ph[0] >= 1.0) v.ph[0] -= 1.0
-                        v.ph[1] += f / sr; if (v.ph[1] >= 1.0) v.ph[1] -= 1.0
-                        v.ph[2] += f * 14.0 / sr; if (v.ph[2] >= 1.0) v.ph[2] -= 1.0
-                        val i1 = (0.25 + 1.8 * vel * bright) * (0.3 + 0.7 * v.pa[1])
-                        val body = sinT(v.ph[0] + i1 * sinT(v.ph[1]) * TWO_PI_INV)
-                        val tine = sinT(v.ph[0] + 2.2 * sinT(v.ph[2]) * TWO_PI_INV) * v.pa[2] * 0.35f * vel
-                        v.mph += 4.8 / sr; if (v.mph >= 1.0) v.mph -= 1.0
-                        val trem = 1f - spread * 0.55f * (0.5f + 0.5f * sinT(v.mph))
-                        o = tanh(((body * v.pa[0] + tine) * trem * (1f + vel * 0.8f)).toDouble()) * 0.85
-                        v.pa[0] *= v.pd[0]; v.pa[1] *= v.pd[1]; v.pa[2] *= v.pd[2]
-                    }
-                    13 -> {
-                        // Orgel (Zugriegel + Leslie)
-                        val fv = f * (1.0 + 0.0035 * spread * lesV)
-                        var sum = 0f
-                        for (k in 0 until 9) {
-                            val wk = orgW[k]
-                            if (wk < 0.01f) continue
-                            val fk = fv * ORG_R[k]
-                            if (fk > sr * 0.45) continue
-                            v.ph[k] += fk / sr; if (v.ph[k] >= 1.0) v.ph[k] -= 1.0
-                            sum += wk * sinT(v.ph[k])
-                        }
-                        sum *= orgNorm
-                        if (envA > 0.03f && v.pa[0] > 1e-4f) {
-                            v.ph[9] += fv * 3.0 / sr; if (v.ph[9] >= 1.0) v.ph[9] -= 1.0
-                            sum += v.pa[0] * envA * 0.8f * sinT(v.ph[9])
-                            v.pa[0] *= v.pd[0]
-                        }
-                        if (v.hn > 1e-4f) { sum += rnd(v) * v.hn; v.hn *= clickHd }
-                        o = (sum * lesA).toDouble() * 0.8
-                    }
+                    11 -> o = piano(v, pianoHd)
+                    12 -> o = ePiano(v, f, cutN, spread)
+                    13 -> o = organ(v, f, spread, lesV, lesA, orgNorm, envA, clickHd)
                     14 -> {
                         // Sync-Lead: Slave-Säge an der Master-Phase neu gestartet, Verhältnis über VERSTIMMUNG + Filter-Hüllkurve
                         val dt0 = f / sr

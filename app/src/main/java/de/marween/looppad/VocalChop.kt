@@ -217,10 +217,11 @@ object VocalChop {
         // Muster im Takt
         val pat = if (patOn && playing && patIdx >= 0) PATTERNS[patIdx] else null
         if (pat != null && bar > 0) {
+            // gleiche Rasterpunkte wie der Sequenzer (ms + n·Takt/16, ganzzahlig gerundet) – kein Wegdriften über viele Takte
             val stepLen = max(1L, bar / 16)
-            var st = Math.floorDiv(w - ms + stepLen - 1, stepLen)
+            var st = -Math.floorDiv(-(w - ms) * 16, bar)
             while (true) {
-                val at = ms + st * stepLen
+                val at = ms + Math.floorDiv(st * bar, 16L)
                 if (at >= w + n) break
                 val k = Math.floorMod(st, 16L).toInt()
                 curStep = k

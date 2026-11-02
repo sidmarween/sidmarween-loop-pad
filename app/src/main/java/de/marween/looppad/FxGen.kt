@@ -140,8 +140,8 @@ object FxGen {
                         if (p > 1f) continue
                         val div = when { p < 0.25f -> 4; p < 0.5f -> 8; p < 0.75f -> 16; else -> 32 }
                         val barsN = f.len.toDouble() / bar
-                        val stepLen = (bar / div).toLong().coerceAtLeast(1)
-                        val idx = t / stepLen
+                        // Schlag-Index exakt aus der Taktlänge (kein Rundungs-Drift über lange Builds)
+                        val idx = Math.floorDiv(t * div, bar)
                         if (idx != f.hit) { f.hit = idx; f.hitT = 0; f.hitPh = 0.0 }
                         val ht = f.hitT.toDouble() / sr
                         f.hitT++

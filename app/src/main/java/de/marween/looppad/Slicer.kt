@@ -95,7 +95,10 @@ object Slicer {
         val d = data ?: return
         val evs: List<Ev>
         synchronized(lock) {
-            if (queue.isEmpty()) evs = emptyList() else {
+            // nur wenn ein Ereignis in diesem Block fällig ist, Listen bauen (sonst jeden Block Müll für den GC)
+            var due = false
+            for (qi in 0 until queue.size) if (queue[qi].frame < w + n) { due = true; break }
+            if (!due) evs = emptyList() else {
                 evs = queue.filter { it.frame < w + n }.sortedBy { it.frame }
                 queue.removeAll(evs.toSet())
             }
