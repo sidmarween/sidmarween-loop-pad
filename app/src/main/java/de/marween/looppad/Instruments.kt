@@ -277,13 +277,15 @@ object InstState {
     var synCutMod: Float get() = syn.cutMod; set(v) { syn.cutMod = v }
     val synWaveNames = arrayOf("SAW", "SQR", "SUPER", "PLUCK", "GLOCKE", "NES ▢", "NES △", "NOISE", "SID", "GB-WAVE", "FM-CHIP",
         "PIANO", "E-PIANO", "ORGEL", "SYNC-LEAD", "REESE", "SUB-BASS", "FM-BASS", "WOBBLE", "SAITE",
-        "WT ANALOG", "WT VOCAL", "WT GROWL", "WT DIGITAL", "WT SAMPLE", "MAGMA", "FUNK-SLAP", "VIBE", "ORGAN-BASS", "ORCH-HIT", "BRASS", "STRINGS", "HOUSE-PIANO", "LORE-PAD", "CHOIR", "M1-BELL", "LADDER (Moog-Art)", "SEM (Oberheim-Art)", "PROPHET (Poly-Mod)", "FAIRLIGHT (8 Bit)", "DX-FM (DX7-Art)")
+        "WT ANALOG", "WT VOCAL", "WT GROWL", "WT DIGITAL", "WT SAMPLE", "MAGMA", "FUNK-SLAP", "VIBE", "ORGAN-BASS", "ORCH-HIT", "BRASS", "STRINGS", "HOUSE-PIANO", "LORE-PAD", "CHOIR", "M1-BELL", "LADDER (Moog-Art)", "SEM (Oberheim-Art)", "PROPHET (Poly-Mod)", "FAIRLIGHT (8 Bit)", "DX-FM (DX7-Art)", "RHODES (Fender-Art)", "WURLITZER")
     fun synIsWt(w: Int) = w in 20..24
     /** Chiptune-Klänge (Klang-Nr. 5–10): Akkorde laufen als schnelles Chip-Arpeggio, Lautstärke in 16 Stufen. */
     fun synIsChip(w: Int) = w in 5..10
     /** Auswahl-Liste der Klänge (Gruppe, Klang-Nr., Beschreibung). */
     val synWaveGroups = listOf(
         Triple("Tasten", 11, "Konzertflügel – Anschlag, Saiten, Hammer"),
+        Triple("Tasten", 41, "🎹 RHODES – Tine-Piano (Fender-Art): Glocken-Ping, „Bark“ bei hartem Anschlag · VERST. = Tremolo, CUTOFF = Biss"),
+        Triple("Tasten", 42, "🎹 WURLITZER – Reed-Piano: nasal, knurrt bei hartem Anschlag · VERST. = Tremolo, CUTOFF = Biss"),
         Triple("Tasten", 12, "E-Piano (Rhodes-Art, FM) – VERSTIMMUNG = Tremolo"),
         Triple("Tasten", 13, "Orgel (Zugriegel) – CUTOFF = Register, VERST. = Leslie"),
         Triple("Tasten", 4, "FM-Glocke"),
@@ -337,6 +339,8 @@ object InstState {
             19 -> { t.cut = 0.6f; t.res = 0f; t.env = 0f; t.atk = 0f; t.rel = 0.4f; t.detune = 0.6f }
             in 20..24 -> { t.cut = 0.75f; t.res = 0.15f; t.env = 0.35f; t.atk = 0.01f; t.rel = 0.3f; t.detune = 0.2f }
             36 -> { t.mono = true; t.glide = Ladder.glide; t.atk = 0f }
+            41 -> { t.cut = 0.55f; t.res = 0f; t.env = 0f; t.atk = 0f; t.rel = 0.3f; t.detune = 0.2f }
+            42 -> { t.cut = 0.55f; t.res = 0f; t.env = 0f; t.atk = 0f; t.rel = 0.25f; t.detune = 0.25f }
             37 -> { t.cut = 0.45f; t.res = 0.45f; t.env = 0.45f; t.atk = 0.01f; t.rel = 0.3f; t.detune = 0.2f }
             38 -> { t.cut = 0.4f; t.res = 0.35f; t.env = 0.6f; t.atk = 0.01f; t.rel = 0.3f; t.detune = 0.55f }
             39 -> { t.cut = 0.7f; t.res = 0f; t.env = 0f; t.atk = 0.15f; t.rel = 0.45f; t.detune = 0.1f }
@@ -1747,6 +1751,22 @@ class PolySynth(private val sr: Int, private val t: InstState.SynTrack) {
             }
             33 -> { v.m[0] = 1f; for (k in 0 until 4) v.ph[k] = Math.random() }
             37, 38 -> { v.c[0] = 0f; for (k in 0 until 3) v.ph[k] = Math.random() }
+            41 -> {
+                // RHODES: Lautstärke (lang, tiefe Töne länger), Tine-Ping (kurz), FM-Index (Anschlag)
+                val t0 = (4.0 * (261.6 / f).pow(0.5)).coerceIn(0.8, 9.0)
+                v.pa[0] = 1f; v.pd[0] = exp(-1.0 / (t0 * sr)).toFloat()
+                v.pa[1] = 1f; v.pd[1] = exp(-1.0 / (0.035 * sr)).toFloat()
+                v.pa[2] = 1f; v.pd[2] = exp(-1.0 / (0.35 * sr)).toFloat()
+                for (k in 0 until 3) v.ph[k] = 0.0
+            }
+            42 -> {
+                // WURLITZER: kürzer als Rhodes, Knurren (Anschlag) und Klopfen des Hammers
+                val t0 = (2.2 * (261.6 / f).pow(0.5)).coerceIn(0.5, 5.0)
+                v.pa[0] = 1f; v.pd[0] = exp(-1.0 / (t0 * sr)).toFloat()
+                v.pa[1] = 1f; v.pd[1] = exp(-1.0 / (0.18 * sr)).toFloat()
+                v.pa[2] = 1f; v.pd[2] = exp(-1.0 / (0.012 * sr)).toFloat()
+                for (k in 0 until 3) v.ph[k] = 0.0
+            }
             39 -> { java.util.Arrays.fill(v.m, 0f); v.m[10] = 1f }
             40 -> { v.m[0] = 1f; v.m[1] = 1f; for (k in 0 until 4) v.ph[k] = 0.0 }
             36 -> { v.m[0] = 0f; v.m[1] = 0f; v.m[2] = 0f; v.m[3] = 0f; v.c[0] = 0f }   // LADDER: Hüllkurven neu (Filter-Zustand bleibt – klingt wie das Original)   // LORE: Glocken-Anschlag, freie Phasen
@@ -2110,6 +2130,41 @@ class PolySynth(private val sr: Int, private val t: InstState.SynTrack) {
         val d = 0.002 + spread * 0.008
         val y = saw(v, 0, fb * vib * (1 - d)) + saw(v, 1, fb * vib * (1 + d)) + 0.8 * saw(v, 2, fb * vib)
         return fastTanh((y * (0.8 + 1.6 * v.vel * v.fenv)).toFloat()) * 0.55
+    }
+
+    // ---------------------------------------------------------------- E-Pianos: Rhodes (Tine) und Wurlitzer (Reed)
+    /** 🎹 RHODES: Tine-Grundton mit abklingendem 1:1-FM, kurzer Glocken-Ping (Tonebar), Tonabnehmer-Asymmetrie = „Bark“. */
+    private fun rhodes(v: Voice, f: Double, trem: Float, bite: Float): Double {
+        v.ph[0] += f / sr; if (v.ph[0] >= 1.0) v.ph[0] -= 1.0
+        v.ph[1] += f / sr; if (v.ph[1] >= 1.0) v.ph[1] -= 1.0
+        v.ph[2] += f * 7.0 / sr; if (v.ph[2] >= 1.0) v.ph[2] -= 1.0
+        val vel = v.vel
+        val idx = 0.15 + (0.6 + 1.2 * bite) * vel * v.pa[2]
+        val s = sinT(v.ph[0] + idx * sinT(v.ph[1]) * TWO_PI_INV)
+        // Tonabnehmer: je härter angeschlagen (und je mehr BISS), desto unsymmetrischer → geradzahlige Obertöne, „Bark“
+        val a = (0.1f + 0.75f * vel * vel * (0.3f + bite)) * (0.4f + 0.6f * v.pa[2])
+        var y = s + a * s * s - a * 0.5f
+        y += sinT(v.ph[2]) * v.pa[1] * 0.22f * vel
+        y *= v.pa[0]
+        v.pa[0] *= v.pd[0]; v.pa[1] *= v.pd[1]; v.pa[2] *= v.pd[2]
+        if (trem > 0.05f) { v.mph += 4.6 / sr; if (v.mph >= 1.0) v.mph -= 1.0; y *= 1f - trem * 0.55f * (0.5f + 0.5f * sinT(v.mph)) }
+        return y * 0.85
+    }
+
+    /** 🎹 WURLITZER: Stahlzunge – Grundton + kräftige 2./3. Harmonische, durch den Verstärker getrieben (Knurren beim Anschlag). */
+    private fun wurli(v: Voice, f: Double, trem: Float, bite: Float): Double {
+        v.ph[0] += f / sr; if (v.ph[0] >= 1.0) v.ph[0] -= 1.0
+        val vel = v.vel
+        val s1 = sinT(v.ph[0]); val s2 = sinT(v.ph[0] * 2 + 0.08); val s3 = sinT(v.ph[0] * 3)
+        val x = s1 + 0.32f * s2 + 0.12f * s3
+        val drive = 1f + (0.6f + 3.2f * bite) * vel * vel * v.pa[1] + 0.5f * vel
+        var y = fastTanh(x * drive) / (0.75f + 0.25f * drive)
+        // Hammer-Klopfen
+        if (v.pa[2] > 1e-3f) { v.nlp += 0.3f * (rnd(v) - v.nlp); y += v.nlp * v.pa[2] * 0.5f * vel }
+        y *= v.pa[0]
+        v.pa[0] *= v.pd[0]; v.pa[1] *= v.pd[1]; v.pa[2] *= v.pd[2]
+        if (trem > 0.05f) { v.mph += 5.6 / sr; if (v.mph >= 1.0) v.mph -= 1.0; y *= 1f - trem * 0.6f * (0.5f + 0.5f * sinT(v.mph)) }
+        return y * 0.95
     }
 
     // ---------------------------------------------------------------- Vintage-Synths
@@ -2493,7 +2548,7 @@ class PolySynth(private val sr: Int, private val t: InstState.SynTrack) {
             ladRel = exp(-1.0 / (lp.secs(lp.release) * sr)).toFloat()
         }
         val decC = exp(-1.0 / ((if (wave == 3) 0.25 else if (wave == 29) 0.3 else if (wave == 35) 0.9 else if (wave == 40) (if (st.detune < 0.25f) 3.0 else if (st.detune < 0.5f) 1.2 else if (st.detune < 0.75f) 0.35 else 0.8) else if (wave == OrganBass.WAVE) 0.03 + OrganBass.decay * OrganBass.decay * 0.9 else 0.6) * sr)).toFloat()
-        val sus = when (wave) { 3, 4, 29, 35 -> 0f; 32, 36 -> 1f; 40 -> if (st.detune >= 0.25f && st.detune < 0.5f) 0.8f else 0f; 39 -> 0.9f; 33, 34 -> 0.95f; 30 -> 0.85f; 31 -> 0.9f; 11, 12, 13, 16, 19, 26 -> 1f; 17 -> 0.75f; 25 -> 0.92f; 28 -> if (OrganBass.legato) 0.45f else 0f; else -> 0.8f }
+        val sus = when (wave) { 3, 4, 29, 35 -> 0f; 32, 36, 41, 42 -> 1f; 40 -> if (st.detune >= 0.25f && st.detune < 0.5f) 0.8f else 0f; 39 -> 0.9f; 33, 34 -> 0.95f; 30 -> 0.85f; 31 -> 0.9f; 11, 12, 13, 16, 19, 26 -> 1f; 17 -> 0.75f; 25 -> 0.92f; 28 -> if (OrganBass.legato) 0.45f else 0f; else -> 0.8f }
         val fDec = exp(-1.0 / ((if (wave == 3) 0.12 else 0.35) * sr)).toFloat()
         val q = 1f - resA * 0.92f
         val vol = st.volNow() * 0.32f
@@ -2501,7 +2556,7 @@ class PolySynth(private val sr: Int, private val t: InstState.SynTrack) {
         // Vintage-Klänge einstimmig (Bass/Lead) etwas lauter – sonst gegenüber Akkorden zu leise
         val monoGain = if (st.mono && wave in 37..40) 2.6f else 1.2f
         val chip = InstState.synIsChip(wave)
-        val noFilter = wave == 4 || wave == 10 || wave in 11..13 || wave == 16 || wave == 17 || wave == 19 || wave == 25 || wave == 26 || wave == 27 || wave == 28 || wave == 32 || wave == 34 || wave == 35 || wave in 36..40
+        val noFilter = wave == 4 || wave == 10 || wave in 11..13 || wave == 16 || wave == 17 || wave == 19 || wave == 25 || wave == 26 || wave == 27 || wave == 28 || wave == 32 || wave == 34 || wave == 35 || wave in 36..42
         // Bass-Labor
         val bl = BassLab
         val kick0 = if (wave == 25) bl.kick else 0f
@@ -2656,6 +2711,8 @@ class PolySynth(private val sr: Int, private val t: InstState.SynTrack) {
                     38 -> o = prophet(v, f, spread, cutN, resA, envA)
                     39 -> o = fairlight(v, f, spread, cutN)
                     40 -> o = dxFm(v, f, spread, envA)
+                    41 -> o = rhodes(v, f, spread, cutN)
+                    42 -> o = wurli(v, f, spread, cutN)
                     12 -> o = ePiano(v, f, cutN, spread)
                     13 -> o = organ(v, f, spread, lesV, lesA, orgNorm, envA, clickHd)
                     14 -> {

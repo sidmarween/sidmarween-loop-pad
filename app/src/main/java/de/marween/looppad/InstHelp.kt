@@ -19,6 +19,10 @@ ACID 303: Acid-Bass mit Slide und Akzent – Cutoff, Resonanz, Hüllkurve wie am
         "🎹 SYNTH, KEYS, BASSLINE" to """
 Fünf Synth-Spuren: SYNTH 1–3, KEYS und BASSLINE. Jede hat ihren eigenen Klang (KLANG ▾): Piano, E-Piano, Orgel, Leads, Wavetables, Bässe, Chiptune und Orchester.
 Akkorde, Arpeggiator, MONO + GLIDE. Presets je Spur, Akkordfolgen-Generator, MIDI-Datei laden. 💾 WAV speichert die Spur einzeln.""",
+        "🎹 RHODES & WURLITZER" to """
+RHODES (Fender-Art): Tine-Piano – weicher Glockenton, beim harten Anschlag „bellt“ es (Bark). CUTOFF = Biss, VERSTIMMUNG = Tremolo.
+WURLITZER: Reed-Piano – nasaler, und bei hartem Anschlag knurrt der Verstärker. CUTOFF = Biss, VERSTIMMUNG = Tremolo.
+Vorlagen: KEYS › PRESETS › E-Piano (Ballade, Neo-Soul, Funk-Bark, Soul-Riff, Lo-Fi …). Tipp: über ein MIDI-Keyboard mit Anschlagdynamik spielen – leise = weich, laut = Bark/Knurren.""",
         "🎺 Orchester: ORCH-HIT, BRASS, STRINGS" to """
 ORCH-HIT: der 90er-Orchester-Schlag (Streicher + Blech + Pauke). Kurz anschlagen, Akkord dazu – fertig ist der Rave-Stab.
 BRASS: Bläsersatz. FILTER-HÜLLKURVE hoch = knackige Stabs, ATTACK hoch = langsames Anschwellen (Swell).
