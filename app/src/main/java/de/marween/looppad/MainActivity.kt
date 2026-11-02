@@ -1964,6 +1964,25 @@ class MainActivity : Activity() {
                 Item("🎹 SYNTH 1–3 · Lead, Fläche, Bass (polyfon, Akkorde, Arpeggiator)") { synthTrack(0, false) },
                 Item("🎹 KEYS · Piano, E-Piano, Orgel & Leads") { synthTrack(InstState.KEYS_TRACK, true) },
                 Item("🏠 VIBE-SYNTH · House-Stabs, M1-Akkorde, Pump, Acid-Modus") { pad(); pads.openVibe(); hint("🏠 Eine Taste = ein Club-Akkord · PUMP drückt im Takt · STAB ↔ ACID schaltet auf 303-Hybrid") },
+                Item("🕰 VINTAGE-SYNTHS · SEM, Prophet, Fairlight, DX7, PPG (Klänge im Stil der Klassiker)") {
+                    pad(); InstState.synCur = InstState.KEYS_TRACK; pads.openSynthEditor()
+                    val list = InstPresets.SYNTHS.filter { it.genre == "Vintage" } + InstPresets.SYNTHS.filter { it.wave == 23 }
+                    ui().setTitle("🕰 Vintage-Synths · auf KEYS")
+                        .setItems((list.map { "${it.name} · ${it.bpm} BPM" } + listOf("🎛 LADDER (Moog-Art) öffnen", "🔊 ACID 303 öffnen", "🎹 M1-Klänge …", "🔌 TOUCH MODULAR (Eurorack-Art) öffnen")).toTypedArray()) { _, i ->
+                            when (i - list.size) {
+                                0 -> { pads.openPerf(5); return@setItems }
+                                1 -> { pads.openInstEditor(1); return@setItems }
+                                2 -> { hint("Menü › Instrumente › 🎹 M1-KLÄNGE"); return@setItems }
+                                3 -> { pads.openTouch(TouchLab.MODULAR); return@setItems }
+                            }
+                            val p = list[i]
+                            Engine.pushPatternUndo("SYNTH Preset")
+                            InstPresets.applySynth(p)
+                            presetTempo(p.bpm)
+                            pads.invalidate()
+                            hint("🕰 ${p.name} – Klang ${InstState.synWaveNames[p.wave]} · VERSTIMMUNG wählt den Modus/Patch · ▶ startet")
+                        }.setNegativeButton("Abbrechen", null).show()
+                },
                 Item("🎹 M1-KLÄNGE · House-Piano, Lore-Pad, Choir, Bell (90er)") {
                     pad(); InstState.synCur = InstState.KEYS_TRACK; pads.openSynthEditor()
                     val list = InstPresets.SYNTHS.filter { it.genre == "M1 (90er)" }

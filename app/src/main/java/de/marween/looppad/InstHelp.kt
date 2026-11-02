@@ -43,6 +43,14 @@ Fünf Touch-Instrumente:
 • SPECTRAL PAINTER – Klang ins Spektrum malen, läuft im Takt.
 • GESTEN – Kreisen = Modulation, Wischen = Helligkeit, mehrere Finger = Akkord.
 • TOUCH MODULAR – Module mit Kabeln verbinden (Vorlagen-Patches).""",
+        "🕰 VINTAGE-SYNTHS" to """
+Klänge im Stil der großen Klassiker (eigene Synthese, keine Original-Samples) – Menü › Instrumente › 🕰 VINTAGE-SYNTHS:
+• SEM (Oberheim-Art): 12-dB-Multimode-Filter – VERSTIMMUNG fährt stufenlos Tiefpass → Notch → Hochpass.
+• PROPHET (Prophet-5-Art): Poly-Mod + Sync – die Filter-Hüllkurve zieht OSC A hoch („Cars“-Sweep); VERSTIMMUNG = Menge, 0 = klassisch.
+• FAIRLIGHT (CMI-Art): 8-Bit-Sampler-Klang mit Aliasing – VERSTIMMUNG wählt Chor, Glas-Flöte oder Shakuhachi.
+• DX-FM (DX7-Art): VERSTIMMUNG wählt Röhrenglocken, FM-Brass, Marimba oder Bass 1.
+• PPG: Wavetable „WT DIGITAL“. TB-303: ACID 303. Minimoog: LADDER. M1: M1-Klänge. Eurorack: TOUCH MODULAR.
+• microKORG: dein echtes Gerät über Menü › MIDI › MIDI-Ausgang spielen lassen.""",
         "🎛 LADDER (Moog-Art)" to """
 Monofoner Analog-Synth im Stil der großen 70er-Klassiker: drei Oszillatoren (Wellenform und Fußlage antippen, Pegel und Verstimmung ziehen), Rauschen, DRIVE übersteuert den Mixer (macht fett), 24-dB-Ladder-Filter – EMPHASIS bis zum Pfeifen (Selbstoszillation), KONTUR = wie weit die Filter-Hüllkurve öffnet.
 Zwei Hüllkurven (Filter F-…, Lautstärke A-…) mit gemeinsamem RELEASE, GLIDE wie am Original. Spielt auf BASSLINE (umschaltbar). 8 Vorlagen von Klassik-Bass bis Prog-Lead, ♪ LINIE schreibt eine Bassline.""",

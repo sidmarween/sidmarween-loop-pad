@@ -277,7 +277,7 @@ object InstState {
     var synCutMod: Float get() = syn.cutMod; set(v) { syn.cutMod = v }
     val synWaveNames = arrayOf("SAW", "SQR", "SUPER", "PLUCK", "GLOCKE", "NES ▢", "NES △", "NOISE", "SID", "GB-WAVE", "FM-CHIP",
         "PIANO", "E-PIANO", "ORGEL", "SYNC-LEAD", "REESE", "SUB-BASS", "FM-BASS", "WOBBLE", "SAITE",
-        "WT ANALOG", "WT VOCAL", "WT GROWL", "WT DIGITAL", "WT SAMPLE", "MAGMA", "FUNK-SLAP", "VIBE", "ORGAN-BASS", "ORCH-HIT", "BRASS", "STRINGS", "HOUSE-PIANO", "LORE-PAD", "CHOIR", "M1-BELL", "LADDER (Moog-Art)")
+        "WT ANALOG", "WT VOCAL", "WT GROWL", "WT DIGITAL", "WT SAMPLE", "MAGMA", "FUNK-SLAP", "VIBE", "ORGAN-BASS", "ORCH-HIT", "BRASS", "STRINGS", "HOUSE-PIANO", "LORE-PAD", "CHOIR", "M1-BELL", "LADDER (Moog-Art)", "SEM (Oberheim-Art)", "PROPHET (Poly-Mod)", "FAIRLIGHT (8 Bit)", "DX-FM (DX7-Art)")
     fun synIsWt(w: Int) = w in 20..24
     /** Chiptune-Klänge (Klang-Nr. 5–10): Akkorde laufen als schnelles Chip-Arpeggio, Lautstärke in 16 Stufen. */
     fun synIsChip(w: Int) = w in 5..10
@@ -288,6 +288,10 @@ object InstState {
         Triple("Tasten", 13, "Orgel (Zugriegel) – CUTOFF = Register, VERST. = Leslie"),
         Triple("Tasten", 4, "FM-Glocke"),
         Triple("Tasten", 27, "🏠 VIBE – House-Stabs, Drift, Pump, Acid-Modus (Vibe-Synth-Feld)"),
+        Triple("Vintage", 37, "🟫 SEM – Oberheim-Art: 12-dB-Multimode-Filter · VERST. = Filter-Modus Tiefpass → Notch → Hochpass"),
+        Triple("Vintage", 38, "🟥 PROPHET – Prophet-5-Art: Poly-Mod + Sync („The Cars“-Sweep) · VERST. = Poly-Mod-Menge"),
+        Triple("Vintage", 39, "🟩 FAIRLIGHT – 8-Bit-Sampler der 80er: Chor, Glas-Flöte, Shakuhachi · VERST. = Klangquelle"),
+        Triple("Vintage", 40, "🟦 DX-FM – DX7-Art: Röhrenglocken, FM-Brass, Marimba, Bass 1 · VERST. = Patch"),
         Triple("Bass", 36, "🎛 LADDER – Moog-artiger Analog-Synth: 3 Oszillatoren, 24-dB-Filter, eigenes Bedienfeld (Menü › Instrumente)"),
         Triple("M1 (90er)", 32, "🎹 HOUSE-PIANO – das helle 90er-House-Klavier: harter Anschlag, kurzer Ton, leichter Chorus"),
         Triple("M1 (90er)", 33, "🌌 LORE-PAD – schwebende Fläche mit Glocken-Anschlag · ATTACK = Einblenden"),
@@ -333,6 +337,10 @@ object InstState {
             19 -> { t.cut = 0.6f; t.res = 0f; t.env = 0f; t.atk = 0f; t.rel = 0.4f; t.detune = 0.6f }
             in 20..24 -> { t.cut = 0.75f; t.res = 0.15f; t.env = 0.35f; t.atk = 0.01f; t.rel = 0.3f; t.detune = 0.2f }
             36 -> { t.mono = true; t.glide = Ladder.glide; t.atk = 0f }
+            37 -> { t.cut = 0.45f; t.res = 0.45f; t.env = 0.45f; t.atk = 0.01f; t.rel = 0.3f; t.detune = 0.2f }
+            38 -> { t.cut = 0.4f; t.res = 0.35f; t.env = 0.6f; t.atk = 0.01f; t.rel = 0.3f; t.detune = 0.55f }
+            39 -> { t.cut = 0.7f; t.res = 0f; t.env = 0f; t.atk = 0.15f; t.rel = 0.45f; t.detune = 0.1f }
+            40 -> { t.cut = 0.7f; t.res = 0f; t.env = 0.6f; t.atk = 0f; t.rel = 0.4f; t.detune = 0.1f }
             32 -> { t.cut = 0.8f; t.res = 0f; t.env = 0f; t.atk = 0f; t.rel = 0.2f; t.detune = 0.35f }
             33 -> { t.cut = 0.55f; t.res = 0.1f; t.env = 0.2f; t.atk = 0.35f; t.rel = 0.6f; t.detune = 0.4f }
             34 -> { t.cut = 0.6f; t.res = 0f; t.env = 0f; t.atk = 0.3f; t.rel = 0.5f; t.detune = 0.45f }
@@ -1738,6 +1746,9 @@ class PolySynth(private val sr: Int, private val t: InstState.SynTrack) {
                 v.hn = 0.35f * vel * (0.4f + bright)
             }
             33 -> { v.m[0] = 1f; for (k in 0 until 4) v.ph[k] = Math.random() }
+            37, 38 -> { v.c[0] = 0f; for (k in 0 until 3) v.ph[k] = Math.random() }
+            39 -> { java.util.Arrays.fill(v.m, 0f); v.m[10] = 1f }
+            40 -> { v.m[0] = 1f; v.m[1] = 1f; for (k in 0 until 4) v.ph[k] = 0.0 }
             36 -> { v.m[0] = 0f; v.m[1] = 0f; v.m[2] = 0f; v.m[3] = 0f; v.c[0] = 0f }   // LADDER: Hüllkurven neu (Filter-Zustand bleibt – klingt wie das Original)   // LORE: Glocken-Anschlag, freie Phasen
             34 -> { java.util.Arrays.fill(v.m, 0f); for (k in 0 until 3) v.ph[k] = Math.random() }
             35 -> { v.m[0] = 1f; v.m[1] = 1f; v.ph[0] = 0.0; v.ph[1] = 0.0; v.ph[2] = 0.0 }
@@ -2101,6 +2112,144 @@ class PolySynth(private val sr: Int, private val t: InstState.SynTrack) {
         return fastTanh((y * (0.8 + 1.6 * v.vel * v.fenv)).toFloat()) * 0.55
     }
 
+    // ---------------------------------------------------------------- Vintage-Synths
+    /** 🟫 SEM (Oberheim-Art): Säge + Rechteck → 12-dB-Zustandsvariablen-Filter, stufenlos Tiefpass → Notch → Hochpass. */
+    private fun sem(v: Voice, f: Double, mode: Float, cut: Float, res: Float, env: Float): Double {
+        val m = v.m
+        val x = (0.55 * saw(v, 0, f * 0.997) + 0.45 * pulse(v, 1, f * 1.003, 0.5)).toFloat()
+        if ((v.n and 7L) == 1L || v.c[0] == 0f) {
+            val fc = (40.0 * Math.pow(2.0, cut * 8.8 + env * 5.0 * v.fenv)).coerceIn(20.0, sr * 0.2)
+            v.c[0] = (2 * kotlin.math.sin(PI * fc / sr)).toFloat()
+        }
+        val g = v.c[0]
+        val q = 1.05f - res * 0.98f
+        // zweimal pro Probe rechnen (stabil auch weit oben), SEM-typisch weich gesättigt
+        var lp = 0f; var hp = 0f
+        for (it in 0 until 2) {
+            m[0] += g * 0.5f * m[1]
+            hp = x - m[0] - q * m[1]
+            m[1] += g * 0.5f * hp
+            m[1] = fastTanh(m[1] * 0.8f) * 1.25f
+            lp = m[0]
+        }
+        val notch = lp + hp
+        val y = if (mode < 0.5f) lp + (notch - lp) * (mode * 2f) else notch + (hp - notch) * ((mode - 0.5f) * 2f)
+        return fastTanh(y * 2.4f) * 0.9
+    }
+
+    /** 🟥 PROPHET (Prophet-5-Art): OSC A (Säge) hart auf OSC B synchronisiert, Poly-Mod: Filter-Hüllkurve fährt OSC A hoch,
+     *  dazu 24-dB-Filter. VERSTIMMUNG = Poly-Mod-Menge (0 = klassische zwei Oszillatoren). */
+    private fun prophet(v: Voice, f: Double, poly: Float, cut: Float, res: Float, env: Float): Double {
+        val m = v.m
+        // OSC B (Puls 45 %) als Sync-Master
+        val dtB = f * 1.004 / sr
+        v.ph[1] += dtB
+        var synced = false
+        if (v.ph[1] >= 1.0) { v.ph[1] -= 1.0; synced = poly > 0.05f }
+        val b = (if (v.ph[1] < 0.45) 1.0 else -1.0) + blep(v.ph[1], dtB) - blep((v.ph[1] - 0.45 + 1.0) % 1.0, dtB) - (2 * 0.45 - 1)
+        // OSC A: Poly-Mod (Filter-Hüllkurve → Tonhöhe, bis +3 Oktaven)
+        val fa = f * Math.pow(2.0, poly * 3.0 * v.fenv)
+        val dtA = fa / sr
+        v.ph[0] += dtA
+        if (synced) v.ph[0] = v.ph[1] * (fa / (f * 1.004)) else if (v.ph[0] >= 1.0) v.ph[0] -= 1.0
+        if (v.ph[0] >= 1.0) v.ph[0] -= kotlin.math.floor(v.ph[0])
+        val a = 2.0 * v.ph[0] - 1.0 - (if (!synced) blep(v.ph[0], dtA) else 0.0)
+        val x = (0.62 * a + 0.38 * b).toFloat()
+        if ((v.n and 7L) == 1L || v.c[0] == 0f) {
+            val fc = (30.0 * Math.pow(2.0, cut * 9.3 + env * 5.0 * v.fenv)).coerceIn(20.0, sr * 0.45)
+            v.c[0] = (1 - kotlin.math.exp(-2 * PI * fc / sr)).toFloat()
+        }
+        val g = v.c[0]
+        val k = res * 3.9f
+        val u = fastTanh(x - k * m[7])
+        val t4 = fastTanh(m[4]); val t5 = fastTanh(m[5]); val t6 = fastTanh(m[6])
+        m[4] += g * (u - t4); m[5] += g * (t4 - t5); m[6] += g * (t5 - t6); m[7] += g * (t6 - fastTanh(m[7]))
+        return (m[7] * (1f + res * 0.6f) * 3.0f).toDouble()
+    }
+
+    /** 🟩 FAIRLIGHT (CMI-Art): Klangquelle → 8-Bit, ~16 kHz Abtastung (mit Aliasing) → Ausgangsfilter. VERSTIMMUNG = Quelle. */
+    private fun fairlight(v: Voice, f: Double, src: Float, cut: Float): Double {
+        val m = v.m
+        // Quelle in voller Rate erzeugen
+        var x: Float
+        when {
+            src < 0.34f -> {
+                // Chor „Aah“ (zwei Stimmen durch Formanten)
+                val s0 = 0.5 * (saw(v, 0, f * 0.996) + saw(v, 1, f * 1.004))
+                var o = 0f
+                for (q in 0 until 3) {
+                    val g = flG[q]
+                    m[2 * q] += g * m[2 * q + 1]; val h = s0.toFloat() - m[2 * q] - 0.11f * m[2 * q + 1]; m[2 * q + 1] += g * h
+                    o += m[2 * q + 1] * (if (q == 0) 1f else if (q == 1) 0.7f else 0.3f)
+                }
+                x = o * 0.55f
+            }
+            src < 0.67f -> {
+                // Glas-Flöte: Sinus + Oktave + Atem
+                v.ph[2] += f / sr; if (v.ph[2] >= 1.0) v.ph[2] -= 1.0
+                x = sinT(v.ph[2]) * 0.8f + sinT(v.ph[2] * 2) * 0.15f + rnd(v) * 0.06f
+            }
+            else -> {
+                // Shakuhachi: Tonhöhe fällt am Anfang, viel Atem, kehliges Vibrato
+                val bend = 1.0 - 0.05 * m[10]; m[10] *= 0.9995f
+                v.mph += 5.0 / sr; if (v.mph >= 1.0) v.mph -= 1.0
+                v.ph[2] += f * bend * (1 + 0.006 * sinT(v.mph)) / sr; if (v.ph[2] >= 1.0) v.ph[2] -= 1.0
+                m[7] += 0.2f * (rnd(v) - m[7])
+                x = sinT(v.ph[2]) * 0.65f + m[7] * (0.35f + 0.4f * m[10]) + sinT(v.ph[2] * 3) * 0.08f
+            }
+        }
+        // 8-Bit-Abtastung mit Halten (Aliasing wie beim Original), ~16 kHz
+        m[8] += 16000f / sr
+        if (m[8] >= 1f) { m[8] -= 1f; m[9] = Math.round(x.coerceIn(-1f, 1f) * 127f) / 127f }
+        // Ausgangs-Tiefpass (CUTOFF)
+        val a = 0.15f + 0.8f * cut
+        m[11] += a * (m[9] - m[11])
+        return m[11].toDouble()
+    }
+
+    private val flG = floatArrayOf(700f, 1150f, 2600f).map { (2 * kotlin.math.sin(PI * it / sr)).toFloat() }.toFloatArray()
+    private val kDxI = exp(-1.0 / (0.6 * sr)).toFloat()
+    private val kDxFast = exp(-1.0 / (0.12 * sr)).toFloat()
+
+    /** 🟦 DX-FM (DX7-Art): vier klassische Patches über VERSTIMMUNG – Röhrenglocken, FM-Brass, Marimba, Bass 1. */
+    private fun dxFm(v: Voice, f: Double, patch: Float, env: Float): Double {
+        val m = v.m
+        val y: Float
+        when {
+            patch < 0.25f -> {
+                // Röhrenglocken: 1 : 3,5 und 1 : 2,76, Index klingt langsam ab
+                v.ph[0] += f / sr; v.ph[1] += f * 3.5 / sr; v.ph[2] += f * 2.76 / sr
+                for (k in 0 until 3) if (v.ph[k] >= 1.0) v.ph[k] -= 1.0
+                y = sinT(v.ph[0] + (0.6 + 2.2 * m[0]) * sinT(v.ph[1]) * TWO_PI_INV) * 0.7f + sinT(v.ph[2]) * 0.3f * m[0]
+                m[0] *= kDxI
+            }
+            patch < 0.5f -> {
+                // FM-Brass: 1 : 1 mit Rückkopplung, Index folgt der Filter-Hüllkurve (Swell)
+                v.ph[0] += f / sr; if (v.ph[0] >= 1.0) v.ph[0] -= 1.0
+                v.ph[1] += f * 1.002 / sr; if (v.ph[1] >= 1.0) v.ph[1] -= 1.0
+                val idx = 0.8 + 3.0 * env * (1f - v.fenv * 0.6f)
+                val mod = sinT(v.ph[1] + m[3] * 0.25)
+                m[3] = mod
+                y = sinT(v.ph[0] + idx * mod * TWO_PI_INV) * 0.85f
+            }
+            patch < 0.75f -> {
+                // Marimba: 1 : 4 kurz angeschlagen + Grundton
+                v.ph[0] += f / sr; v.ph[1] += f * 4.0 / sr
+                for (k in 0 until 2) if (v.ph[k] >= 1.0) v.ph[k] -= 1.0
+                y = sinT(v.ph[0] + 1.8 * m[1] * sinT(v.ph[1]) * TWO_PI_INV) * 0.9f
+                m[1] *= kDxFast
+            }
+            else -> {
+                // Bass 1: 1 : 1 mit schnell fallendem Index + Sub
+                v.ph[0] += f / sr; if (v.ph[0] >= 1.0) v.ph[0] -= 1.0
+                v.ph[1] += f / sr; if (v.ph[1] >= 1.0) v.ph[1] -= 1.0
+                y = sinT(v.ph[0] + (0.5 + 4.0 * m[1]) * sinT(v.ph[1]) * TWO_PI_INV) * 1.5f + sinT(v.ph[0]) * 0.6f
+                m[1] *= kDxFast
+            }
+        }
+        return y.toDouble()
+    }
+
     // LADDER: Hüllkurven-Koeffizienten je Block
     private var ladFa = 0.01f; private var ladFd = 0.999f; private var ladFs = 0.3f
     private var ladAa = 0.01f; private var ladAd = 0.999f; private var ladAs = 0.8f; private var ladRel = 0.999f
@@ -2343,14 +2492,14 @@ class PolySynth(private val sr: Int, private val t: InstState.SynTrack) {
             ladAa = (1.0 / (lp.secs(lp.aAtk) * sr)).toFloat(); ladAd = exp(-1.0 / (lp.secs(lp.aDec) * sr)).toFloat(); ladAs = lp.aSus
             ladRel = exp(-1.0 / (lp.secs(lp.release) * sr)).toFloat()
         }
-        val decC = exp(-1.0 / ((if (wave == 3) 0.25 else if (wave == 29) 0.3 else if (wave == 35) 0.9 else if (wave == OrganBass.WAVE) 0.03 + OrganBass.decay * OrganBass.decay * 0.9 else 0.6) * sr)).toFloat()
-        val sus = when (wave) { 3, 4, 29, 35 -> 0f; 32, 36 -> 1f; 33, 34 -> 0.95f; 30 -> 0.85f; 31 -> 0.9f; 11, 12, 13, 16, 19, 26 -> 1f; 17 -> 0.75f; 25 -> 0.92f; 28 -> if (OrganBass.legato) 0.45f else 0f; else -> 0.8f }
+        val decC = exp(-1.0 / ((if (wave == 3) 0.25 else if (wave == 29) 0.3 else if (wave == 35) 0.9 else if (wave == 40) (if (st.detune < 0.25f) 3.0 else if (st.detune < 0.5f) 1.2 else if (st.detune < 0.75f) 0.35 else 0.8) else if (wave == OrganBass.WAVE) 0.03 + OrganBass.decay * OrganBass.decay * 0.9 else 0.6) * sr)).toFloat()
+        val sus = when (wave) { 3, 4, 29, 35 -> 0f; 32, 36 -> 1f; 40 -> if (st.detune >= 0.25f && st.detune < 0.5f) 0.8f else 0f; 39 -> 0.9f; 33, 34 -> 0.95f; 30 -> 0.85f; 31 -> 0.9f; 11, 12, 13, 16, 19, 26 -> 1f; 17 -> 0.75f; 25 -> 0.92f; 28 -> if (OrganBass.legato) 0.45f else 0f; else -> 0.8f }
         val fDec = exp(-1.0 / ((if (wave == 3) 0.12 else 0.35) * sr)).toFloat()
         val q = 1f - resA * 0.92f
         val vol = st.volNow() * 0.32f
         val spread = st.detune
         val chip = InstState.synIsChip(wave)
-        val noFilter = wave == 4 || wave == 10 || wave in 11..13 || wave == 16 || wave == 17 || wave == 19 || wave == 25 || wave == 26 || wave == 27 || wave == 28 || wave == 32 || wave == 34 || wave == 35 || wave == 36
+        val noFilter = wave == 4 || wave == 10 || wave in 11..13 || wave == 16 || wave == 17 || wave == 19 || wave == 25 || wave == 26 || wave == 27 || wave == 28 || wave == 32 || wave == 34 || wave == 35 || wave in 36..40
         // Bass-Labor
         val bl = BassLab
         val kick0 = if (wave == 25) bl.kick else 0f
@@ -2501,6 +2650,10 @@ class PolySynth(private val sr: Int, private val t: InstState.SynTrack) {
                     34 -> o = choir(v, f, spread, cutN)
                     35 -> o = m1Bell(v, f)
                     36 -> o = ladder(v, f)
+                    37 -> o = sem(v, f, spread, cutN, resA, envA)
+                    38 -> o = prophet(v, f, spread, cutN, resA, envA)
+                    39 -> o = fairlight(v, f, spread, cutN)
+                    40 -> o = dxFm(v, f, spread, envA)
                     12 -> o = ePiano(v, f, cutN, spread)
                     13 -> o = organ(v, f, spread, lesV, lesA, orgNorm, envA, clickHd)
                     14 -> {
