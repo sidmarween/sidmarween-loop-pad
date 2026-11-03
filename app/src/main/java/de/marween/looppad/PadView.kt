@@ -943,7 +943,7 @@ class PadView(context: Context) : View(context) {
         if (edPad >= 0) drawEditor(canvas, dt)
         if (songBuilder.isOpen) songBuilder.draw(canvas, RectF(dp(4f), insetTop + dp(4f), width - dp(4f), height - insetBottom - dp(4f)), overlayColors()[2])
         if (songEd.isOpen) songEd.draw(canvas, RectF(dp(4f), insetTop + dp(4f), width - dp(4f), height - insetBottom - dp(4f)), overlayColors()[2])
-        if (instEd.isOpen) instEd.draw(canvas, RectF(dp(6f), insetTop + dp(6f), width - dp(6f), height - insetBottom - dp(6f)), overlayColors())
+        if (instEd.isOpen) instEd.draw(canvas, RectF(dp(6f), insetTop + dp(6f), width - dp(6f), xPanelBottom()), overlayColors())
         if (slicer.isOpen) slicer.draw(canvas, RectF(dp(6f), insetTop + dp(6f), width - dp(6f), height - insetBottom - dp(6f)), overlayColors()[2])
         if (station.isOpen) station.draw(canvas, RectF(dp(6f), insetTop + dp(6f), width - dp(6f), height - insetBottom - dp(6f)), overlayColors()[2])
         if (launcher.isOpen) launcher.draw(canvas, RectF(dp(6f), insetTop + dp(6f), width - dp(6f), height - insetBottom - dp(6f)), overlayColors()[2])
@@ -9376,9 +9376,49 @@ class PadView(context: Context) : View(context) {
 
     private fun xPanelOpen(): Boolean = euclid.isOpen || harm.isOpen || atmos.isOpen || wolf.isOpen || architect.isOpen || orbits.isOpen ||
         bassLab.isOpen || vibe.isOpen || chaos.isOpen || touchLab.isOpen || organism.isOpen || fxGen.isOpen || chordPad.isOpen ||
-        vocoder.isOpen || vocalChop.isOpen || mixMorph.isOpen || ladder.isOpen
+        vocoder.isOpen || vocalChop.isOpen || mixMorph.isOpen || ladder.isOpen || instEd.isOpen
     private fun xPanelBottom(): Float = height - insetBottom - dp(6f) - dp(48f)
     private val undoBarL = RectF(); private val undoBarR = RectF()
+    private val sampleBar = RectF(); private val sampleBars = RectF()
+    /** ⏺ SAMPLE: Länge in Takten (1 · 2 · 4 · 8). */
+    private var sampleLen = 2
+
+    /** Was das offene Feld spielt: Instrument-Bits wie bei der Pad-Aufnahme (Eingang „Instrumente“), oder der ganze Mix. */
+    private fun sampleSource(): Pair<Int, Boolean> = when {
+        instEd.isOpen -> (when (instSel) { 1 -> 1; 2 -> 2; else -> 4 }) to false
+        euclid.isOpen -> 8 to false
+        atmos.isOpen -> 16 to false
+        harm.isOpen -> 32 to false
+        wolf.isOpen -> 64 to false
+        architect.isOpen -> 128 to false
+        orbits.isOpen -> 256 to false
+        touchLab.isOpen -> 512 to false
+        fxGen.isOpen -> 1024 to false
+        vocoder.isOpen -> 2048 to false
+        vocalChop.isOpen -> 4096 to false
+        organism.isOpen -> 2 to false
+        bassLab.isOpen || vibe.isOpen || ladder.isOpen || chordPad.isOpen -> 4 to false
+        else -> 0x1FFF to true   // Chaos, Performance-Szenen: alles, was gerade klingt
+    }
+
+    private fun sampleName(): String = when {
+        instEd.isOpen -> when (instSel) { 1 -> "ACID 303"; 2 -> "DRUM 909"; else -> "SYNTH-Spuren" }
+        organism.isOpen -> "DRUM 909"
+        bassLab.isOpen || vibe.isOpen || ladder.isOpen || chordPad.isOpen -> "SYNTH-Spuren"
+        else -> sampleSource().let { (m, all) -> if (all) "ganzer Mix" else Engine.INST_NAMES.getOrElse(Integer.numberOfTrailingZeros(m)) { "Instrument" } }
+    }
+
+    /** ⏺ SAMPLE: ab der nächsten Eins N Takte von genau diesem Instrument auf ein freies Pad (stumm, Instrument läuft weiter). */
+    private fun takeSample() {
+        val running = Engine.sampleTakePad()
+        if (running >= 0) { hint("⏺ Es läuft schon eine Sample-Aufnahme auf Pad ${running + 1}"); return }
+        if (!Engine.seqPlaying) Engine.transportPlay(false)
+        val (mask, all) = sampleSource()
+        val p = Engine.recordInstLoop(mask, sampleLen, keep = true, wholeMix = all)
+        performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+        hint(if (p >= 0) "⏺ ${sampleName()}: ab der nächsten Eins $sampleLen Takt" + (if (sampleLen > 1) "e" else "") + " → Pad ${p + 1} (liegt danach stumm bereit – Pad antippen = an)"
+             else "Kein freies Pad (1–12) – erst ein Pad leeren")
+    }
     /** Stand vor der laufenden Berührung (für ↶). */
     private var xPreSnap: String? = null
     private var xUndoFlash = 0L
@@ -9386,9 +9426,12 @@ class PadView(context: Context) : View(context) {
     private fun drawUndoBar(c: Canvas) {
         val top = xPanelBottom() + dp(6f)
         val bot = height - insetBottom - dp(6f)
-        val mid = width / 2f
-        undoBarL.set(dp(6f), top, mid - dp(3f), bot)
-        undoBarR.set(mid + dp(3f), top, width - dp(6f), bot)
+        val w0 = width - dp(12f); val g = dp(6f)
+        val uw = (w0 - 2 * g) * 0.29f
+        undoBarL.set(dp(6f), top, dp(6f) + uw, bot)
+        undoBarR.set(undoBarL.right + g, top, undoBarL.right + g + uw, bot)
+        sampleBar.set(undoBarR.right + g, top, width - dp(6f), bot)
+        sampleBars.set(sampleBar.right - sampleBar.width() * 0.3f, top, sampleBar.right, bot)
         val canU = Engine.undoCount > 0; val canR = Engine.redoCount > 0
         for ((r, on) in listOf(undoBarL to canU, undoBarR to canR)) {
             fillPaint.shader = null
@@ -9402,12 +9445,33 @@ class PadView(context: Context) : View(context) {
         c.drawText("↶ RÜCKGÄNGIG", undoBarL.centerX(), undoBarL.centerY() + dp(5f), textPaint)
         textPaint.color = if (canR) Color.WHITE else Color.argb(90, 255, 255, 255)
         c.drawText("↷ WIEDERHOLEN", undoBarR.centerX(), undoBarR.centerY() + dp(5f), textPaint)
+        // ⏺ SAMPLE (rot; blinkt, solange aufgenommen wird) + Längen-Wahl rechts
+        val recP = Engine.sampleTakePad()
+        val blink = recP >= 0 && (System.nanoTime() / 300_000_000L) % 2L == 0L
+        fillPaint.color = if (blink) Color.rgb(230, 60, 70) else Color.rgb(120, 30, 40)
+        c.drawRoundRect(sampleBar, dp(10f), dp(10f), fillPaint)
+        fillPaint.color = Color.argb(70, 0, 0, 0)
+        c.drawRoundRect(sampleBars, dp(10f), dp(10f), fillPaint)
+        textPaint.color = Color.WHITE
+        textPaint.textSize = dp(13f)
+        val main = RectF(sampleBar.left, sampleBar.top, sampleBars.left, sampleBar.bottom)
+        c.drawText(fitLabel(textPaint, if (recP >= 0) "⏺ → PAD ${recP + 1}" else "⏺ SAMPLE", main.width() - dp(6f), dp(13f), dp(8f)), main.centerX(), main.centerY() + dp(5f), textPaint)
+        textPaint.textSize = dp(12f)
+        c.drawText("$sampleLen T", sampleBars.centerX(), sampleBars.centerY() + dp(4f), textPaint)
         textPaint.textAlign = oa; textPaint.textSize = os; textPaint.color = oc
     }
 
     /** Leiste antippen; sonst Stand vor/nach der Berührung vergleichen und Änderungen für ↶ merken. */
     private fun xPanelTouch(e: MotionEvent): Boolean {
         val x = e.getX(e.actionIndex); val y = e.getY(e.actionIndex)
+        if (e.actionMasked == MotionEvent.ACTION_DOWN && sampleBar.contains(x, y)) {
+            if (sampleBars.contains(x, y)) {
+                sampleLen = when (sampleLen) { 1 -> 2; 2 -> 4; 4 -> 8; else -> 1 }
+                performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+                hint("⏺ SAMPLE-Länge: $sampleLen Takt" + if (sampleLen > 1) "e" else "")
+            } else takeSample()
+            return true
+        }
         if (e.actionMasked == MotionEvent.ACTION_DOWN && (undoBarL.contains(x, y) || undoBarR.contains(x, y))) {
             val l = if (undoBarL.contains(x, y)) Engine.undo() else Engine.redo()
             performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)

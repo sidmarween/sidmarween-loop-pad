@@ -82,6 +82,8 @@ class Take(val overdub: Boolean, val fromIn: Long, val downNanos: Long, val oneS
     var bounceSrc: IntArray? = null
     /** Bei src = 2: welche Pads aufgenommen werden (Bitmaske). */
     var mask: Int = 0
+    /** ⏺ SAMPLE aus einem Instrument: Quellen laufen weiter, das Ergebnis liegt stumm auf dem Pad (nichts doppelt). */
+    var keep: Boolean = false
     /** Taktlänge, auf die gerastert wird, wenn es noch kein Master-Tempo gibt (Sequenzer-Takt). */
     var gridBar: Long = 0L
     /** Bei Resample: Ausgabe-Frames der Aufnahme. */
@@ -3488,16 +3490,20 @@ object Engine {
      * Takt genau [bars] Takte ins erste freie Pad. Andere Instrumente (z. B. die 909) laufen unberührt weiter.
      * Ergebnis: Pad-Nummer oder −1 (kein freies Pad / kein Raster).
      */
-    fun recordInstLoop(mask: Int, bars: Int): Int {
+    fun recordInstLoop(mask: Int, bars: Int, keep: Boolean = false, wholeMix: Boolean = false): Int {
         if (!running) return -1
         val p = (0 until 12).firstOrNull { loops.get(it) == null && takes.get(it) == null && padInst[it] < 0 } ?: return -1
         val oldSrc = padSource[p]; val oldMask = padInstMask[p]; val oldLive = liveBars
-        padSource[p] = 3; padInstMask[p] = mask; liveBars = bars.coerceIn(1, 8)
+        padSource[p] = if (wholeMix) 1 else 3; padInstMask[p] = mask; liveBars = bars.coerceIn(1, 8)
         try { startNewTake(p, System.nanoTime()) } finally { padSource[p] = oldSrc; padInstMask[p] = oldMask; liveBars = oldLive }
         val t = takes.get(p) ?: return -1
         if (!t.armed) { takes.compareAndSet(p, t, null); return -1 }
+        t.keep = keep
         return p
     }
+
+    /** Pad, auf dem gerade ein ⏺ SAMPLE aufgenommen wird (−1 = keins) – für die Anzeige. */
+    fun sampleTakePad(): Int = (0 until 12).firstOrNull { takes.get(it)?.keep == true } ?: -1
 
     /** Alle Pads auf einen Eingang stellen. */
     fun setAllSources(src: Int) {
@@ -3675,6 +3681,7 @@ object Engine {
             pushPadUndo("Wave-Aufnahme Pad ${p + 1}", p, *(if (bounce && !take.oneShot) (src ?: IntArray(0)) else IntArray(0)))
             if (!take.oneShot && !seqPlaying && masterLen > 0L) seqPlaying = true
             setWarpSource(loop)
+            if (take.keep) loop.muted = true
             loops.set(p, loop)
             // Effekt schon eingerechnet: Ergebnis am XY-Effekt vorbei, sonst wirkt er doppelt
             // (Stutter/Gate = Aussetzer im Takt, Verzerrer/Bitcrusher = Kratzen)
@@ -3683,7 +3690,7 @@ object Engine {
                 onFxBaked?.invoke(p)
             }
             // Bounce: Quellen stummschalten, damit nichts doppelt klingt (in der Raster-Phase, mit Blende)
-            if (bounce && src != null && src.isNotEmpty() && !take.oneShot) {
+            if (bounce && !take.keep && src != null && src.isNotEmpty() && !take.oneShot) {
                 val muted = ArrayList<Int>()
                 for (q in src) {
                     val l = loops.get(q) ?: continue
@@ -3695,7 +3702,7 @@ object Engine {
                 if (muted.isNotEmpty()) onBounced?.invoke(p, muted)
             }
             // Instrument-Eingang: aufgenommene Instrumente ausschalten (sonst doppelt)
-            if (bounce && (take.src == 3 || take.src == 1) && !take.oneShot) {
+            if (bounce && !take.keep && (take.src == 3 || take.src == 1) && !take.oneShot) {
                 val off = ArrayList<String>()
                 val im = if (take.src == 1) 0x1FFF else take.mask
                 if ((im and 1) != 0 && InstState.acidOn) { InstState.acidOn = false; off.add("303") }
