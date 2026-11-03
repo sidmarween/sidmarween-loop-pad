@@ -9442,9 +9442,9 @@ class PadView(context: Context) : View(context) {
         textPaint.textAlign = Paint.Align.CENTER
         textPaint.textSize = dp(14f)
         textPaint.color = if (canU) Color.WHITE else Color.argb(90, 255, 255, 255)
-        c.drawText("↶ RÜCKGÄNGIG", undoBarL.centerX(), undoBarL.centerY() + dp(5f), textPaint)
+        c.drawText(fitLabel(textPaint, "↶ ZURÜCK", undoBarL.width() - dp(8f), dp(14f), dp(8f)), undoBarL.centerX(), undoBarL.centerY() + dp(5f), textPaint)
         textPaint.color = if (canR) Color.WHITE else Color.argb(90, 255, 255, 255)
-        c.drawText("↷ WIEDERHOLEN", undoBarR.centerX(), undoBarR.centerY() + dp(5f), textPaint)
+        c.drawText(fitLabel(textPaint, "↷ VOR", undoBarR.width() - dp(8f), dp(14f), dp(8f)), undoBarR.centerX(), undoBarR.centerY() + dp(5f), textPaint)
         // ⏺ SAMPLE (rot; blinkt, solange aufgenommen wird) + Längen-Wahl rechts
         val recP = Engine.sampleTakePad()
         val blink = recP >= 0 && (System.nanoTime() / 300_000_000L) % 2L == 0L
