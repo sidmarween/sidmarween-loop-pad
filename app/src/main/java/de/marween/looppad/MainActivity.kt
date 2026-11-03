@@ -243,6 +243,10 @@ class MainActivity : Activity() {
         pads.onSidechain = { showSidechain() }
         pads.onSlicerSource = { pickSlicerSource() }
         pads.onPanelExport = { showPanelExport(it) }
+        pads.vocalChop.onPickFile = {
+            val i = Intent(Intent.ACTION_OPEN_DOCUMENT).apply { addCategory(Intent.CATEGORY_OPENABLE); type = "audio/*" }
+            try { startActivityForResult(i, REQ_VOCAL_FILE) } catch (e: Exception) { toast("Kein Dateimanager gefunden") }
+        }
         pads.applyLayout(getSharedPreferences("marvpad", MODE_PRIVATE).getString("padLayout", null))
         pads.onLayoutChanged = { str -> getSharedPreferences("marvpad", MODE_PRIVATE).edit().putString("padLayout", str).apply() }
         pads.onTourDone = {
@@ -7203,6 +7207,28 @@ class MainActivity : Activity() {
     @Deprecated("Activity-Result-API wird hier bewusst nicht genutzt (keine AndroidX-Abhängigkeit)")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == REQ_VOCAL_FILE) {
+            val u = data?.data
+            if (resultCode != RESULT_OK || u == null) return
+            val name = displayName(u) ?: "Stimme"
+            hint("🗣 Lade $name …")
+            Thread {
+                try {
+                    val d = AudioFiles.decode(this, u, Engine.sampleRate, VocalChop.MAX_FILE_SEC)
+                    val ok = VocalChop.loadFile(d, name)
+                    runOnUiThread {
+                        pads.invalidate()
+                        hint(if (ok) "✂ $name in ${VocalChop.src?.count ?: 0} Silben zerlegt" + (if (d.size >= Engine.sampleRate * (VocalChop.MAX_FILE_SEC - 1)) " (die ersten ${VocalChop.MAX_FILE_SEC} s)" else "")
+                             else "$name ist zu kurz oder zu leise")
+                    }
+                } catch (e: OutOfMemoryError) {
+                    runOnUiThread { toast("Datei zu groß") }
+                } catch (e: Exception) {
+                    runOnUiThread { toast("Laden fehlgeschlagen: ${e.message ?: e}") }
+                }
+            }.start()
+            return
+        }
         if (requestCode == REQ_CAPTURE) {
             if (resultCode != RESULT_OK || data == null) { toast("Aufnahme nicht freigegeben"); return }
             AppCapture.onResult = { runOnUiThread { takeCaptured() } }
@@ -7722,6 +7748,7 @@ class MainActivity : Activity() {
         private const val REQ_VOICE_SAMPLE = 48
         private const val REQ_CAPTURE = 49
         private const val REQ_NOTE = 50
+        private const val REQ_VOCAL_FILE = 51
         /** Ziel eines Cloud-Imports: Pad 0..n, die Sammlung oder ein Deck (CLOUD_DECK + 0/1). */
         private const val CLOUD_COLLECTION = -1
         private const val CLOUD_DECK = 1000

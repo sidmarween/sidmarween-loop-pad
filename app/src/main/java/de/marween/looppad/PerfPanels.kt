@@ -360,7 +360,9 @@ class VocoderPanel(host: View) : PerfPanel(host) {
 
 // ================================================================ 🗣 VOCAL-CHOP
 class VocalChopPanel(host: View) : PerfPanel(host) {
-    private val bDemo = RectF(); private val bPad = RectF(); private val bMic = RectF()
+    private val bDemo = RectF(); private val bPad = RectF(); private val bMic = RectF(); private val bFile = RectF()
+    /** 📂 eigene Stimme als WAV/MP3 laden (öffnet die Dateiauswahl in der App). */
+    var onPickFile: (() -> Unit)? = null
     private val bPat = RectF(); private val bPatSel = RectF(); private val bMode = RectF()
     private val bGate = RectF(); private val bRev = RectF(); private val bStut = RectF(); private val bToPads = RectF()
     private val sl = Array(4) { RectF() }
@@ -412,7 +414,7 @@ class VocalChopPanel(host: View) : PerfPanel(host) {
         val status = when {
             !pendBeat.isNaN() -> "⏱ Einzählen … $beatsLeft – Aufnahme startet auf der Eins"
             recording -> "● nimmt auf … ${String.format(java.util.Locale.GERMANY, "%.1f", (System.nanoTime() - recStart) / 1e9)} s – nochmal tippen zum Zerlegen"
-            s == null -> "Quelle wählen: Demo-Stimme, Loop eines Pads oder Mikrofon"
+            s == null -> "Quelle wählen: Demo-Stimme, Pad, eigene Datei (WAV/MP3) oder Mikrofon"
             else -> s.name + " · ${s.count} Chops" + (if (v.patOn && v.patIdx >= 0) " · Muster: " + v.PATTERNS[v.patIdx].name else "")
         }
         frame(c, area, "🗣 VOCAL-CHOP", col, Color.rgb(20, 10, 18), acc, status)
@@ -421,10 +423,11 @@ class VocalChopPanel(host: View) : PerfPanel(host) {
         val l = box.left + pad; val r = box.right - pad
         var y = bClose.bottom + dp(22f)
         val bh = dp(36f)
-        row(arrayOf(bDemo, bPad, bMic), l, r, y, bh)
-        btn(c, bDemo, "◀ " + (if (v.demoIdx >= 0) v.DEMO_NAMES[v.demoIdx] else "DEMO-STIMME") + " ▶", v.demoIdx >= 0 && s != null && s.name.startsWith("Demo"), col)
-        btn(c, bPad, if (padSrc >= 0) "∿ PAD ${padSrc + 1} ▶" else "∿ AUS PAD", s != null && s.name.startsWith("Pad"), col)
-        btn(c, bMic, if (recording) "■ STOPP & ZERLEGEN" else if (!pendBeat.isNaN()) "⏱ $beatsLeft …" else "● MIKRO AUFNEHMEN", recording || !pendBeat.isNaN(), Color.rgb(255, 90, 90))
+        row(arrayOf(bDemo, bPad, bFile, bMic), l, r, y, bh)
+        btn(c, bDemo, "◀ " + (if (v.demoIdx >= 0) v.DEMO_NAMES[v.demoIdx] else "DEMO") + " ▶", v.demoIdx >= 0 && s != null && s.name.startsWith("Demo"), col, 10f)
+        btn(c, bPad, if (padSrc >= 0) "∿ PAD ${padSrc + 1} ▶" else "∿ AUS PAD", s != null && s.name.startsWith("Pad"), col, 10f)
+        btn(c, bFile, "📂 WAVE LADEN", s != null && s.name.startsWith("Datei"), Color.rgb(120, 200, 255), 10f)
+        btn(c, bMic, if (recording) "■ STOPP" else if (!pendBeat.isNaN()) "⏱ $beatsLeft …" else "● MIKRO", recording || !pendBeat.isNaN(), Color.rgb(255, 90, 90), 10f)
         y += bh + g
         row(arrayOf(bPat, bPatSel, bMode), l, r, y, bh)
         btn(c, bPat, if (v.patOn) "■ MUSTER" else "▶ MUSTER", v.patOn, Color.rgb(140, 230, 170))
@@ -546,6 +549,10 @@ class VocalChopPanel(host: View) : PerfPanel(host) {
                         val p = nextPad()
                         if (p < 0) onHint?.invoke("Kein Pad mit Aufnahme – nimm eine Stimme auf ein Pad auf (oder KI-Stems: Gesang auf ein Pad)")
                         else { padSrc = p; if (v.loadPad(p)) onHint?.invoke("∿ Pad ${p + 1} in ${v.src?.count ?: 0} Silben zerlegt · nochmal tippen = nächstes Pad") else onHint?.invoke("Pad ${p + 1} ist zu kurz") }
+                    }
+                    bFile.contains(x, y) -> {
+                        if (recording || !pendBeat.isNaN()) { onHint?.invoke("Erst die Mikro-Aufnahme beenden"); return }
+                        onPickFile?.invoke() ?: onHint?.invoke("Dateiauswahl nicht verfügbar")
                     }
                     bMic.contains(x, y) -> {
                         if (!pendBeat.isNaN()) { pendBeat = Double.NaN; onHint?.invoke("Einzählen abgebrochen") }

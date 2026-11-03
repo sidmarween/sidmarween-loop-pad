@@ -77,7 +77,7 @@ CHORD-PAD: die Akkorde der Tonart als Pads (I–VII), Stimmführung automatisch,
 VOCODER: deine Stimme (Mikro) formt einen Synth-Akkord – 16 Bänder. Folgt dem Chord-Pad oder eigenen Tasten; ROBOTER = ein fester Ton. Kopfhörer benutzen!""",
         "🗣 VOCAL-CHOP" to """
 Zerlegt eine Stimme in Silben und legt sie auf 16 Chop-Pads.
-Quelle: Demo-Stimme, Loop eines Pads (z. B. Gesang aus den KI-Stems) oder ● MIKRO AUFNEHMEN (läuft der Takt, wird ein Takt eingezählt; der Pegel wird angezeigt).
+Quelle: Demo-Stimme, Loop eines Pads (z. B. Gesang aus den KI-Stems), 📂 WAVE LADEN (eigene Vocals als WAV/MP3, die ersten 20 s, wird im Projekt mitgespeichert) oder ● MIKRO (läuft der Takt, wird ein Takt eingezählt; der Pegel wird angezeigt).
 Tasten unten spielen den gewählten Chop in jeder Tonhöhe. GATE/ONE-SHOT, RÜCKWÄRTS, STUTTER im Takt. ▶ MUSTER: 10 Vorlagen (House-Hook, Future-Bass …). → PADS legt die Chops als ⚡ One-Shots auf freie Pads.""",
         "🔁 LIVE-LOOPER" to """
 Vier Spuren wie bei einer RC-505 (Pads 13–16). Großer Knopf: Aufnahme → Abspielen → Overdub → Abspielen. LÄNGE: FREI (zweites Tippen schließt den Loop) oder 1–8 Takte (startet auf der Eins, schließt sich selbst). FX je Spur: Rückwärts, Oktave, Halbton, Normalisieren, Effekt-Kette. CLEAR halten löscht.""",

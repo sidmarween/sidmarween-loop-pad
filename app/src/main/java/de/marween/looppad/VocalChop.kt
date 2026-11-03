@@ -84,14 +84,20 @@ object VocalChop {
         return true
     }
 
-    fun loadRecording(d: FloatArray): Boolean {
+    /** Längste eigene Datei, die zerlegt (und im Projekt gespeichert) wird. */
+    const val MAX_FILE_SEC = 20
+
+    /** Eigene Stimme aus einer Datei (WAV/MP3 …), schon in Mono und App-Abtastrate. */
+    fun loadFile(d: FloatArray, name: String): Boolean = loadRecording(d, "Datei: " + name.substringBeforeLast('.').take(24))
+
+    fun loadRecording(d: FloatArray, name: String = "Mikrofon"): Boolean {
         if (d.size < Engine.sampleRate / 5) return false
         // Gleichanteil weg, auf −3 dB normalisieren
         var m = 0.0; for (v in d) m += v; val dc = (m / d.size).toFloat()
         var pk = 0f; for (i in d.indices) { d[i] -= dc; pk = max(pk, abs(d[i])) }
         if (pk < 0.003f) return false
         val g = 0.7f / pk; for (i in d.indices) d[i] *= g
-        install(d, "Mikrofon")
+        install(d, name)
         return true
     }
 
@@ -126,10 +132,10 @@ object VocalChop {
             lastName.startsWith("Demo") -> { j.put("kind", "demo"); j.put("demo", demoIdx) }
             lastName.startsWith("Pad ") -> { j.put("kind", "pad"); j.put("pad", (lastName.substring(4).toIntOrNull() ?: 1) - 1) }
             else -> {
-                val n = min(d.size, Engine.sampleRate * 12)
+                val n = min(d.size, Engine.sampleRate * MAX_FILE_SEC)
                 val bb = java.nio.ByteBuffer.allocate(n * 2).order(java.nio.ByteOrder.LITTLE_ENDIAN)
                 for (i in 0 until n) bb.putShort((d[i].coerceIn(-1f, 1f) * 32767f).toInt().toShort())
-                j.put("kind", "mic"); j.put("pcm", android.util.Base64.encodeToString(bb.array(), android.util.Base64.NO_WRAP))
+                j.put("kind", "mic"); j.put("name", lastName); j.put("pcm", android.util.Base64.encodeToString(bb.array(), android.util.Base64.NO_WRAP))
             }
         }
         return j
@@ -145,7 +151,7 @@ object VocalChop {
                 val b = android.util.Base64.decode(j.optString("pcm"), android.util.Base64.NO_WRAP)
                 val bb = java.nio.ByteBuffer.wrap(b).order(java.nio.ByteOrder.LITTLE_ENDIAN)
                 val d = FloatArray(b.size / 2) { bb.getShort().toFloat() / 32767f }
-                if (d.isNotEmpty()) install(d, "Mikrofon") else clear()
+                if (d.isNotEmpty()) install(d, j.optString("name", "Mikrofon").ifEmpty { "Mikrofon" }) else clear()
             }
             else -> clear()
         }
