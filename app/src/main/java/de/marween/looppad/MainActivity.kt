@@ -365,6 +365,7 @@ class MainActivity : Activity() {
         registerUsbWatcher()
         if (savedInstanceState == null) showSplash() else setContentView(mainView())
         hideSystemBars()
+        if (savedInstanceState == null) window.decorView.postDelayed({ handleSharedAudio(intent) }, 1500L)
     }
 
     // ---------------------------------------------------------------- Info-Seite
@@ -604,6 +605,131 @@ class MainActivity : Activity() {
         }
     }
 
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        window.decorView.postDelayed({ handleSharedAudio(intent) }, 400L)
+    }
+
+    // ================================================================ Aus anderen Apps
+
+    private var captureTarget = -1
+    private var captureAsked = false
+
+    /** 📲 Ton einer anderen App mitschneiden (Android 10+). [p] = Wunsch-Pad oder −1 = erstes freies. */
+    private fun startAppCapture(p: Int) {
+        if (AppCapture.running) { showCaptureRunning(); return }
+        if (Build.VERSION.SDK_INT < 29) { toast("Mitschneiden aus anderen Apps gibt es erst ab Android 10 – „Teilen → Marv PAD“ geht aber"); return }
+        captureTarget = p
+        if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED && !captureAsked) {
+            captureAsked = true
+            requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), REQ_NOTE)
+        }
+        ui().setTitle("📲 Aus anderer App sampeln")
+            .setMessage("Marv PAD nimmt den Ton auf, den andere Apps abspielen (YouTube, Browser, Spiele, Musik-Apps …) – sauber digital, ohne Mikrofon.\n\n• Android fragt gleich nach „Aufnehmen/Streamen“ – das ist die Freigabe für den Ton. Bild wird nicht gespeichert.\n• Manche Apps sperren das Mitschneiden (z. B. viele Streaming-Dienste) – dann kommt nur Stille an.\n• Die Aufnahme landet auf ${if (p >= 0) "Pad ${p + 1}" else "dem ersten freien Pad"}, Tempo wird wie beim Datei-Import erkannt.")
+            .setPositiveButton("Los") { _, _ ->
+                try {
+                    val mpm = getSystemService(android.media.projection.MediaProjectionManager::class.java)
+                    startActivityForResult(mpm.createScreenCaptureIntent(), REQ_CAPTURE)
+                } catch (e: Exception) { toast("Auf diesem Gerät nicht verfügbar") }
+            }
+            .setNegativeButton("Abbrechen", null).show()
+    }
+
+    private var captureDlg: AlertDialog? = null
+
+    private fun showCaptureRunning() {
+        if (captureDlg?.isShowing == true) return
+        captureDlg = ui().setTitle("⏺ App-Aufnahme läuft")
+            .setMessage(String.format(Locale.GERMANY, "%.0f s aufgenommen (höchstens %d s) · Pegel %s", AppCapture.seconds(), AppCapture.MAX_SEC,
+                if (AppCapture.level > 0.01f) "▮▮▮ Ton kommt an" else "– noch Stille"))
+            .setPositiveButton("■ STOPP & AUF PAD") { _, _ -> AppCapture.stop(this, true) }
+            .setNeutralButton("Weiter aufnehmen", null)
+            .setNegativeButton("Verwerfen") { _, _ -> AppCapture.stop(this, false) }
+            .show()
+    }
+
+    private fun captureOnResume() {
+        if (isFinishing) return
+        AppCapture.error?.let { AppCapture.error = null; ui().setTitle("📲 App-Aufnahme").setMessage(it).setPositiveButton("OK", null).show() }
+        if (AppCapture.result != null) takeCaptured()
+        else if (AppCapture.running) showCaptureRunning()
+    }
+
+    /** Fertige App-Aufnahme aufs Pad legen. */
+    private fun takeCaptured() {
+        captureDlg?.dismiss()
+        AppCapture.error?.let { AppCapture.error = null; if (AppCapture.result == null) { ui().setTitle("📲 App-Aufnahme").setMessage(it).setPositiveButton("OK", null).show(); return } }
+        val data = AppCapture.result ?: return
+        AppCapture.result = null
+        val p = if (captureTarget >= 0 && !Engine.hasLoop(captureTarget)) captureTarget else Engine.freePad()
+        captureTarget = -1
+        if (p < 0) { AppCapture.result = data; toast("Kein Pad frei – ein Pad leeren, dann Marv PAD neu öffnen"); return }
+        audioToPad(p, data, "App-Aufnahme")
+    }
+
+    private fun audioToPad(p: Int, samples: FloatArray, name: String) {
+        val rate = Engine.sampleRate
+        Thread {
+            try { padProgress(p) {
+                if (Engine.padOneShot[p]) {
+                    Engine.importLoop(p, samples)
+                    runOnUiThread { hint("Pad ${p + 1}: $name geladen") }
+                } else {
+                    val desc = clipToPad(p, samples, rate, name)
+                    runOnUiThread { hint(String.format(Locale.GERMANY, "Pad %d: %s (%.1f s) · %s · antippen startet ihn auf der Eins", p + 1, name, samples.size / rate.toFloat(), desc)) }
+                }
+            } } catch (e: OutOfMemoryError) {
+                runOnUiThread { toast("Zu lang für den Speicher") }
+            } catch (e: Exception) {
+                runOnUiThread { toast("Laden fehlgeschlagen: ${e.message ?: e}") }
+            }
+        }.start()
+    }
+
+    /** „Teilen → Marv PAD“ / „Öffnen mit“ aus einer anderen App: Audio aufs erste freie Pad. */
+    private fun handleSharedAudio(i: Intent?) {
+        if (i == null || isFinishing) return
+        if (i.getBooleanExtra("mpHandled", false)) return
+        val uris = ArrayList<Uri>()
+        when (i.action) {
+            Intent.ACTION_SEND -> {
+                @Suppress("DEPRECATION")
+                (i.getParcelableExtra<Uri>(Intent.EXTRA_STREAM))?.let { uris.add(it) }
+                if (uris.isEmpty()) i.clipData?.let { c -> for (k in 0 until c.itemCount) c.getItemAt(k).uri?.let { uris.add(it) } }
+            }
+            Intent.ACTION_SEND_MULTIPLE -> {
+                @Suppress("DEPRECATION")
+                i.getParcelableArrayListExtra<Uri>(Intent.EXTRA_STREAM)?.let { uris.addAll(it) }
+            }
+            Intent.ACTION_VIEW -> i.data?.let { uris.add(it) }
+            else -> return
+        }
+        i.putExtra("mpHandled", true)
+        if (uris.isEmpty()) { toast("Keine Audio-Datei empfangen"); return }
+        val rate = Engine.sampleRate
+        toast(if (uris.size == 1) "Lade geteilte Datei …" else "Lade ${uris.size} geteilte Dateien …")
+        Thread {
+            var left = uris.size
+            for (u in uris.take(12)) {
+                val p = Engine.freePad()
+                if (p < 0) { val l = left; runOnUiThread { toast("Kein Pad frei – $l Datei(en) nicht geladen") }; break }
+                left--
+                val name = displayName(u) ?: "Geteilte Datei"
+                try { padProgress(p) {
+                    LoadProgress.stage(0f, 0.6f)
+                    val samples = AudioFiles.decode(this, u, rate, memSeconds(rate))
+                    if (Engine.padOneShot[p]) { Engine.importLoop(p, samples); runOnUiThread { hint("Pad ${p + 1}: $name geladen") } }
+                    else { val desc = clipToPad(p, samples, rate, name); runOnUiThread { hint("Pad ${p + 1}: $name · $desc") } }
+                } } catch (e: OutOfMemoryError) {
+                    runOnUiThread { toast("$name: zu lang für den Speicher") }
+                } catch (e: Exception) {
+                    runOnUiThread { toast("$name: ${e.message ?: e}") }
+                }
+            }
+        }.start()
+    }
+
     override fun onStart() {
         super.onStart()
         if (remoteView == null) ensureStarted()
@@ -623,6 +749,7 @@ class MainActivity : Activity() {
         super.onResume()
         pickerOpen = false
         TouchVelocity.update(this)
+        window.decorView.postDelayed({ captureOnResume() }, 400L)
         window.decorView.postDelayed(deckAutosave, 5_000L)
     }
 
@@ -2045,6 +2172,7 @@ class MainActivity : Activity() {
                     getSharedPreferences("marvpad", MODE_PRIVATE).edit().putBoolean("tightGrid", Engine.tightGrid).apply()
                     hint(if (Engine.tightGrid) "🎯 RASTER an: Orbits, Architect und Euklid-POLY spielen exakt im 16tel-Raster (mit dem Sequenzer-Swing)" else "RASTER aus: Orbits frei, Architect mit eigenem Chaos-Swing, Euklid-POLY teilt den Takt in n gleiche Teile")
                 },
+                Item(if (AppCapture.running) "■ APP-AUFNAHME STOPPEN · läuft" else "📲 AUS ANDERER APP SAMPELN · YouTube, Browser, Spiele …") { startAppCapture(-1) },
                 Item("🔁 LIVE-LOOPER · 4 Spuren wie RC-505 (Länge, Overdub, FX)") { pad(); pads.openStation(); hint("Großen Knopf tippen: Aufnahme · nochmal: Loop läuft · nochmal: Overdub · LÄNGE = frei oder feste Takte") },
                 Item("🎛 PERFORMANCE-SZENEN · Mix A ↔ B morphen, Auto-Morph im Takt") { pad(); pads.openPerf(4); hint("🎛 📸 A speichern, Mix ändern, 📸 B speichern – dann Regler ziehen oder ZU B ⏩ (oder Vorlage wählen)") },
                 Item("🚀 FX-GENERATOR · Riser, Impacts, Drops im Takt") { pad(); pads.openPerf(0); hint("🚀 Länge wählen, Effekt antippen – er startet auf der nächsten Eins und endet nach N Takten genau auf der Eins") },
@@ -7075,6 +7203,17 @@ class MainActivity : Activity() {
     @Deprecated("Activity-Result-API wird hier bewusst nicht genutzt (keine AndroidX-Abhängigkeit)")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == REQ_CAPTURE) {
+            if (resultCode != RESULT_OK || data == null) { toast("Aufnahme nicht freigegeben"); return }
+            AppCapture.onResult = { runOnUiThread { takeCaptured() } }
+            try {
+                AppCapture.start(this, resultCode, data)
+                ui().setTitle("⏺ Aufnahme läuft")
+                    .setMessage("Wechsle jetzt in die andere App und spiel das ab, was du sampeln willst.\n\nStoppen: in der Benachrichtigung „■ STOPP & AUF PAD“ – oder zurück in Marv PAD kommen. Höchstens ${AppCapture.MAX_SEC} s, Stille am Anfang und Ende wird abgeschnitten.")
+                    .setPositiveButton("OK", null).show()
+            } catch (e: Exception) { toast("Aufnahme nicht startbar: ${e.message ?: e}") }
+            return
+        }
         if (requestCode == REQ_LIB_IN) {
             if (resultCode != RESULT_OK || data == null) return
             val uris = ArrayList<Uri>()
@@ -7372,6 +7511,7 @@ class MainActivity : Activity() {
                 "📚 Bibliothek & eigene Aufnahmen",
                 "💿 Aus der Musik-Sammlung (schon analysiert – lädt schneller)",
                 "☁ Aus Dropbox / Google Drive / OneDrive oder per Link",
+                "📲 Aus anderer App mitschneiden (YouTube, Browser, Spiele …)",
                 if (shot) "Modus: ⚡ ONE SHOT  →  auf ∞ LOOP" else "Modus: ∞ LOOP  →  auf ⚡ ONE SHOT"
             )) { _, w ->
                 when (w) {
@@ -7379,6 +7519,7 @@ class MainActivity : Activity() {
                     1 -> showLibrary(p)
                     2 -> pickCollectionForPad(p)
                     3 -> showCloudImport(p)
+                    4 -> startAppCapture(p)
                     else -> {
                         Engine.setPadMode(p, !shot)
                         showImportMenu(p)
@@ -7579,6 +7720,8 @@ class MainActivity : Activity() {
         private const val REQ_RESTORE = 29
         private const val REQ_ATMOS_FILE = 47
         private const val REQ_VOICE_SAMPLE = 48
+        private const val REQ_CAPTURE = 49
+        private const val REQ_NOTE = 50
         /** Ziel eines Cloud-Imports: Pad 0..n, die Sammlung oder ein Deck (CLOUD_DECK + 0/1). */
         private const val CLOUD_COLLECTION = -1
         private const val CLOUD_DECK = 1000

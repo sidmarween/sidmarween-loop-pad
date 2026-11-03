@@ -3503,6 +3503,8 @@ object Engine {
     }
 
     /** Pad, auf dem gerade ein ⏺ SAMPLE aufgenommen wird (−1 = keins) – für die Anzeige. */
+    /** Erstes freies Pad (kein Loop, keine Aufnahme, kein Instrument) oder −1. */
+    fun freePad(): Int = (0 until 12).firstOrNull { loops.get(it) == null && takes.get(it) == null && padInst[it] < 0 } ?: -1
     fun sampleTakePad(): Int = (0 until 12).firstOrNull { takes.get(it)?.keep == true } ?: -1
 
     /** Alle Pads auf einen Eingang stellen. */

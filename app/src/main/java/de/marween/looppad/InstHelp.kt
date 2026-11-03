@@ -86,5 +86,10 @@ Zwei Mix-Zustände A und B (Lautstärken, Filter, Pads und Instrumente an/aus) u
 SZENEN 1–6: halten = jetzigen Mix speichern, antippen = dorthin morphen.
 Vorlagen machen aus dem jetzigen Mix ein B (Breakdown, Filter-Sweep, Drop …).
 Im Song-Editor (Automation am MASTER) gibt es die Spur SZENEN-MORPH: unten = A, oben = B.""",
+        "📲 AUS ANDERER APP SAMPELN" to """
+Menü → WERKZEUGE → 📲 AUS ANDERER APP SAMPELN (oder Pad-Menü „Laden“ → 📲). Android 10 oder neuer.
+Android fragt nach „Aufnehmen/Streamen“ – das ist die Freigabe für den Ton (das Bild wird nicht gespeichert). Dann in die andere App wechseln und abspielen. Stoppen über die Benachrichtigung „■ STOPP & AUF PAD“ oder in Marv PAD zurückkommen. Höchstens 90 s, Stille am Anfang/Ende wird abgeschnitten, das Tempo wird wie beim Datei-Import erkannt.
+Manche Apps sperren den Mitschnitt (viele Streaming-Dienste) – dann kommt nur Stille an.
+Andersherum: In jeder App, die Audio „teilen“ kann (Sprachmemos, Dateimanager, WhatsApp-Sprachnachricht …) → Teilen → Marv PAD legt die Datei aufs erste freie Pad.""",
     )
 }
