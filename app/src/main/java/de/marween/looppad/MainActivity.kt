@@ -3271,11 +3271,15 @@ class MainActivity : Activity() {
         when (g) {
             0 -> {
                 title = "💾 Projekt & Dateien"
-                items.add(Triple("💾 Projekt speichern", { askProjectName(null, 0) }, false))
+                Projects.current()?.let { cd ->
+                    items.add(Triple("💾 Speichern · „${Projects.currentName ?: "Projekt"}“ (überschreiben)", { quickSave(cd) }, false))
+                    items.add(Triple("💾 Speichern unter …", { askProjectName(null, 0) }, false))
+                } ?: items.add(Triple("💾 Projekt speichern", { askProjectName(null, 0) }, false))
                 items.add(Triple("📂 Projekt laden", { showProjects() }, false))
                 items.add(Triple("✨ Neues Projekt", {
                     confirm("Neues Projekt?", "Alles auf Anfang: alle Pads und Loops, alle Patterns (A–D) von 303, 909, SYNTH, KEYS und BASSLINE, alle Klänge und Regler, Song, Effekte und die Zusatz-Instrumente (EUKLID, ATMOS, WOLF, ARCHITECT, ORBITS …). Nicht gespeicherte Änderungen gehen verloren.") {
                         Engine.newProject()
+                        Projects.forgetCurrent()
                         pads.invalidate()
                         toast("✨ Neues Projekt – alles auf Anfang")
                     }
@@ -3492,37 +3496,60 @@ class MainActivity : Activity() {
     }
 
     private fun askProjectName(song: ShortArray?, songRate: Int, after: (() -> Unit)? = null) {
+        val cur = Projects.current()
+        val curName = Projects.currentName ?: ""
         val input = EditText(this).apply {
-            setText("Projekt " + SimpleDateFormat("dd.MM. HH:mm", Locale.GERMANY).format(Date()))
+            setText(if (cur != null) curName else "Projekt " + SimpleDateFormat("dd.MM. HH:mm", Locale.GERMANY).format(Date()))
             setSelectAllOnFocus(true)
             setTextColor(Color.WHITE)
         }
         val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
             val pad = (20 * resources.displayMetrics.density).toInt()
             setPadding(pad, pad / 2, pad, 0)
+            if (cur != null) addView(TextView(this@MainActivity).apply {
+                text = "Geöffnet: „$curName“\n💾 ÜBERSCHREIBEN speichert in dieselbe Datei · ➕ ALS NEUES legt eine Kopie an."
+                textSize = 13f
+                setTextColor(Color.rgb(180, 190, 200))
+                setPadding(0, 0, 0, pad / 2)
+            })
             addView(input, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
         }
-        ui()
-            .setTitle("Projekt speichern")
-            .setView(box)
-            .setPositiveButton("Speichern") { _, _ ->
-                val name = input.text.toString().trim().ifEmpty { "Projekt" }
-                toast("Speichere Projekt …")
-                Thread {
-                    try {
-                        Projects.save(applicationContext, name, song, songRate)
-                        runOnUiThread {
-                            toast("Projekt „$name“ gespeichert")
-                            after?.invoke()
-                        }
-                    } catch (e: Exception) {
-                        runOnUiThread { toast("Speichern fehlgeschlagen: ${e.message ?: e}") }
+        fun go(over: java.io.File?) {
+            val name = input.text.toString().trim().ifEmpty { if (over != null) curName.ifEmpty { "Projekt" } else "Projekt" }
+            toast("Speichere Projekt …")
+            Thread {
+                try {
+                    Projects.save(applicationContext, name, song, songRate, over)
+                    runOnUiThread {
+                        toast(if (over != null) "💾 „$name“ überschrieben" else "Projekt „$name“ gespeichert")
+                        after?.invoke()
                     }
-                }.start()
-                if (song != null) pendingSong = null
+                } catch (e: Exception) {
+                    runOnUiThread { toast("Speichern fehlgeschlagen: ${e.message ?: e}") }
+                }
+            }.start()
+            if (song != null) pendingSong = null
+        }
+        val b = ui().setTitle("Projekt speichern").setView(box)
+        if (cur != null) {
+            b.setPositiveButton("💾 Überschreiben") { _, _ -> go(cur) }
+            b.setNeutralButton("➕ Als neues") { _, _ -> go(null) }
+        } else b.setPositiveButton("Speichern") { _, _ -> go(null) }
+        b.setNegativeButton("Abbrechen", null).show()
+    }
+
+    /** Sofort in die geöffnete Projekt-Datei speichern, ohne Rückfrage. */
+    private fun quickSave(over: java.io.File) {
+        val name = Projects.currentName ?: "Projekt"
+        Thread {
+            try {
+                Projects.save(applicationContext, name, null, 0, over)
+                runOnUiThread { toast("💾 „$name“ gespeichert") }
+            } catch (e: Exception) {
+                runOnUiThread { toast("Speichern fehlgeschlagen: ${e.message ?: e}") }
             }
-            .setNegativeButton("Abbrechen", null)
-            .show()
+        }.start()
     }
 
     private fun showProjects() {

@@ -30,9 +30,30 @@ object Projects {
         }.sortedByDescending { it.date }
     }
 
-    fun save(ctx: Context, name: String, song: ShortArray?, songRate: Int): File {
+    /** Das gerade geöffnete Projekt (zuletzt geladen oder gespeichert) – „Speichern“ überschreibt es. */
+    @Volatile var currentDir: File? = null
+    @Volatile var currentName: String? = null
+    fun current(): File? = currentDir?.takeIf { File(it, "project.json").exists() }
+    fun forgetCurrent() { currentDir = null; currentName = null }
+
+    /**
+     * Speichern. [over] = bestehendes Projekt überschreiben: erst komplett in einen neuen Ordner schreiben, dann den alten
+     * löschen – geht beim Speichern etwas schief, bleibt der alte Stand erhalten. Ohne neuen Song bleibt der alte song.wav.
+     */
+    fun save(ctx: Context, name: String, song: ShortArray?, songRate: Int, over: File? = null): File {
         val dir = File(root(ctx), "p_" + System.currentTimeMillis())
         dir.mkdirs()
+        try { saveInto(dir, name, song, songRate) } catch (e: Throwable) { dir.deleteRecursively(); throw e }
+        if (over != null && over.exists() && over.canonicalPath != dir.canonicalPath && over.parentFile?.canonicalPath == root(ctx).canonicalPath) {
+            val oldSong = File(over, "song.wav")
+            if (song == null && oldSong.exists()) try { oldSong.copyTo(File(dir, "song.wav"), true) } catch (e: Exception) { }
+            over.deleteRecursively()
+        }
+        currentDir = dir; currentName = name
+        return dir
+    }
+
+    private fun saveInto(dir: File, name: String, song: ShortArray?, songRate: Int) {
         val rate = Engine.sampleRate
         val pads = Engine.snapshotPads()
         val j = JSONObject()
@@ -111,13 +132,16 @@ object Projects {
         }
         j.put("seq", sq)
         if (song != null) File(dir, "song.wav").outputStream().use { AudioFiles.writeWav(it, song, songRate) }
-        File(dir, "project.json").writeText(j.toString())
+        // erst als .tmp schreiben, dann umbenennen – nie eine halbe project.json
+        val tmp = File(dir, "project.json.tmp")
+        tmp.writeText(j.toString())
+        if (!tmp.renameTo(File(dir, "project.json"))) { tmp.copyTo(File(dir, "project.json"), true); tmp.delete() }
         Engine.markSaved()
-        return dir
     }
 
     fun load(dir: File) {
         val j = JSONObject(File(dir, "project.json").readText())
+        currentDir = dir; currentName = j.optString("name", dir.name)
         val rate = Engine.sampleRate
         val srcRate = j.optInt("sampleRate", rate)
         val pa = j.getJSONArray("pads")
@@ -199,6 +223,7 @@ object Projects {
     }
 
     fun delete(dir: File) {
+        if (currentDir?.canonicalPath == dir.canonicalPath) forgetCurrent()
         dir.deleteRecursively()
     }
 
