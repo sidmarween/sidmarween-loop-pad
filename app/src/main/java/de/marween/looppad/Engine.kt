@@ -824,6 +824,7 @@ object Engine {
         padFxFromJson(null)
         java.util.Arrays.fill(padInst, -1)
         java.util.Arrays.fill(padInstMask, 7)
+        java.util.Arrays.fill(instNoPad, false)
         swing = 0f
     }
 
@@ -3788,9 +3789,30 @@ object Engine {
 
     fun padOfInst(code: Int): Int = padInst.indexOf(code)
 
+    /** Instrumente, die der Nutzer vom Pad genommen hat – bekommen nicht automatisch wieder eins. */
+    val instNoPad = BooleanArray(32)
+    /** Instrument-Pads überhaupt automatisch vergeben? */
+    @Volatile var instPadsAutoOn = true
+
+    /** Zuordnung lösen: Pad wird frei, das Instrument selbst läuft unverändert weiter. */
+    fun unassignInstPad(p: Int) {
+        if (p !in padInst.indices) return
+        val c = padInst[p]
+        if (c < 0) return
+        padInst[p] = -1
+        if (c in instNoPad.indices) instNoPad[c] = true
+    }
+    fun allowInstPadsAgain() { java.util.Arrays.fill(instNoPad, false) }
+    fun instNoPadJson(): org.json.JSONArray = org.json.JSONArray().apply { for (i in instNoPad.indices) if (instNoPad[i]) put(i) }
+    fun instNoPadFromJson(a: org.json.JSONArray?) {
+        java.util.Arrays.fill(instNoPad, false)
+        if (a != null) for (k in 0 until a.length()) { val i = a.optInt(k, -1); if (i in instNoPad.indices) instNoPad[i] = true }
+    }
+
     /** Benutzte Instrumente bekommen das nächste freie Pad (1–12); ein Pad mit Aufnahme gibt seine Zuordnung ab. */
     fun instPadsAuto() {
         for (p in 0 until min(12, PADS)) if (padInst[p] >= 0 && loops.get(p) != null) padInst[p] = -1
+        if (!instPadsAutoOn) return
         val used = ArrayList<Int>()
         for (i in 0 until InstState.INSTS) if (InstState.instOn(i) && InstState.instHasNotes(i)) used.add(i)
         if (Euclid.on) used.add(10)
@@ -3803,7 +3825,7 @@ object Engine {
         if (Vocoder.on) used.add(18)
         if (VocalChop.patOn) used.add(19)
         for (code in used) {
-            if (padInst.contains(code)) continue
+            if (padInst.contains(code) || (code in instNoPad.indices && instNoPad[code])) continue
             val p = (0 until min(12, PADS)).firstOrNull { loops.get(it) == null && takes.get(it) == null && padInst[it] < 0 } ?: return
             padInst[p] = code
         }

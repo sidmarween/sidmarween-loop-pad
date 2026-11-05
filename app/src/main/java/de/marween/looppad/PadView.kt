@@ -2402,7 +2402,7 @@ class PadView(context: Context) : View(context) {
     }
 
     /** Pad-Name groß im Pad (Drum-Modus). */
-    private fun instPadName(code: Int): String = when (code) {
+    fun instPadName(code: Int): String = when (code) {
         0 -> "BASS 303"; 1 -> "DRUMS 909"; in 2..9 -> InstState.synName(code - 2)
         10 -> "EUKLID"; 11 -> "ATMOS"; 13 -> "WOLF"; 14 -> "ARCHITECT"; 15 -> "ORBITS"; 16 -> "TOUCH-LAB"; 17 -> "FX-GEN"; 18 -> "VOCODER"; 19 -> "VOCAL-CHOP"; else -> "HARMONIZER"
     }
@@ -4585,8 +4585,9 @@ class PadView(context: Context) : View(context) {
                 }
                 if (func != F_NONE) {
                     if (Engine.padInst[p] >= 0 && func == F_ERASE) {
-                        Engine.padInst[p] = -1
-                        hint("Pad ${p + 1} wieder frei (Instrument-Zuordnung gelöst)")
+                        val nm = instPadName(Engine.padInst[p])
+                        Engine.unassignInstPad(p)
+                        hint("Pad ${p + 1} wieder frei – $nm bekommt nicht automatisch ein neues Pad (spielt aber weiter)")
                         return true
                     }
                     funcPad(p)

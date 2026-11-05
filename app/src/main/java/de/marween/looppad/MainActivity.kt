@@ -140,6 +140,7 @@ class MainActivity : Activity() {
         }
         Engine.liveBars = prefs.getInt("liveBars", 0)
         Engine.tightGrid = prefs.getBoolean("tightGrid", true)
+        Engine.instPadsAutoOn = prefs.getBoolean("instPadsAuto", true)
         Engine.bounce = prefs.getBoolean("bounce", true)
         Engine.onBouncedInst = { pad, names ->
             runOnUiThread { toast("Bounce → Pad ${pad + 1} · ausgeschaltet: $names (im Reiter Instrumente wieder AN)") }
@@ -1407,6 +1408,14 @@ class MainActivity : Activity() {
         val shot = Engine.isOneShot(p)
         val labels = ArrayList<String>()
         val actions = ArrayList<() -> Unit>()
+        val ic = Engine.padInst[p]
+        if (ic >= 0) {
+            val nm = pads.instPadName(ic)
+            labels.add("✕ $nm vom Pad entfernen (läuft weiter)")
+            actions.add { Engine.unassignInstPad(p); pads.invalidate(); hint("Pad ${p + 1} frei · $nm läuft weiter, bekommt aber kein Pad mehr (zurückholen: Menü → WERKZEUGE → INSTRUMENT-PADS)") }
+            labels.add("⏻ $nm ausschalten und vom Pad entfernen")
+            actions.add { Engine.setInstCodeOn(ic, false); Engine.unassignInstPad(p); pads.invalidate(); hint("$nm aus · Pad ${p + 1} frei") }
+        }
         labels.add("Eingang: " + srcLabel(p) + "  →  ändern …")
         actions.add { showSourceMenu(p) }
         labels.add(if (shot) "Modus: ⚡ ONE SHOT  →  auf ∞ LOOP umschalten" else "Modus: ∞ LOOP  →  auf ⚡ ONE SHOT umschalten")
@@ -2177,6 +2186,7 @@ class MainActivity : Activity() {
                     hint(if (Engine.tightGrid) "🎯 RASTER an: Orbits, Architect und Euklid-POLY spielen exakt im 16tel-Raster (mit dem Sequenzer-Swing)" else "RASTER aus: Orbits frei, Architect mit eigenem Chaos-Swing, Euklid-POLY teilt den Takt in n gleiche Teile")
                 },
                 Item(if (AppCapture.running) "■ APP-AUFNAHME STOPPEN · läuft" else "📲 AUS ANDERER APP SAMPELN · YouTube, Browser, Spiele …") { startAppCapture(-1) },
+                Item("🎛 INSTRUMENT-PADS · automatisch vergeben: " + (if (Engine.instPadsAutoOn) "AN" else "AUS") + (if (Engine.instNoPad.any { it }) " · ${Engine.instNoPad.count { it }} entfernt" else "")) { showInstPadOptions() },
                 Item("🔁 LIVE-LOOPER · 4 Spuren wie RC-505 (Länge, Overdub, FX)") { pad(); pads.openStation(); hint("Großen Knopf tippen: Aufnahme · nochmal: Loop läuft · nochmal: Overdub · LÄNGE = frei oder feste Takte") },
                 Item("🎛 PERFORMANCE-SZENEN · Mix A ↔ B morphen, Auto-Morph im Takt") { pad(); pads.openPerf(4); hint("🎛 📸 A speichern, Mix ändern, 📸 B speichern – dann Regler ziehen oder ZU B ⏩ (oder Vorlage wählen)") },
                 Item("🚀 FX-GENERATOR · Riser, Impacts, Drops im Takt") { pad(); pads.openPerf(0); hint("🚀 Länge wählen, Effekt antippen – er startet auf der nächsten Eins und endet nach N Takten genau auf der Eins") },
@@ -6802,6 +6812,29 @@ class MainActivity : Activity() {
     }
 
     /** 📡 Zeigt live jede ankommende MIDI-Nachricht (auch wenn MIDI aus ist oder der Kanal nicht passt). */
+    /** Instrument-Pads: automatische Vergabe an/aus, entfernte wieder zulassen, alle lösen. */
+    private fun showInstPadOptions() {
+        val prefs = getSharedPreferences("marvpad", MODE_PRIVATE)
+        val items = arrayOf(
+            "Automatisch vergeben: " + (if (Engine.instPadsAutoOn) "AN → ausschalten" else "AUS → einschalten"),
+            "↺ Entfernte Instrumente wieder aufs Pad lassen" + (if (Engine.instNoPad.any { it }) " (${Engine.instNoPad.count { it }})" else ""),
+            "✕ Alle Instrument-Pads jetzt freimachen")
+        ui().setTitle("🎛 Instrument-Pads")
+            .setItems(items) { _, w ->
+                when (w) {
+                    0 -> {
+                        Engine.instPadsAutoOn = !Engine.instPadsAutoOn
+                        prefs.edit().putBoolean("instPadsAuto", Engine.instPadsAutoOn).apply()
+                        hint(if (Engine.instPadsAutoOn) "Benutzte Instrumente bekommen wieder ein freies Pad" else "Instrumente bekommen keine Pads mehr – vorhandene: ✕ im Pad-Menü oder „alle freimachen“")
+                    }
+                    1 -> { Engine.allowInstPadsAgain(); hint("Entfernte Instrumente bekommen wieder ein Pad, sobald sie laufen") }
+                    else -> { for (p in Engine.padInst.indices) Engine.unassignInstPad(p); hint("Alle Instrument-Pads frei · die Instrumente laufen weiter") }
+                }
+                pads.invalidate()
+            }
+            .setNegativeButton("Schließen", null).show()
+    }
+
     private fun showMidiMonitor() {
         val d = resources.displayMetrics.density
         fun px(v: Float) = (v * d).toInt()

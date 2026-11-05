@@ -81,6 +81,7 @@ object Projects {
         j.put("arrangement", Engine.arrToJson())
         j.put("slicer", Slicer.toJson())
         j.put("padFx", Engine.padFxToJson())
+        j.put("instNoPad", Engine.instNoPadJson())
         val kn = JSONArray()
         for (v in Engine.knobs) kn.put(v.toDouble())
         j.put("knobs", kn)
@@ -217,6 +218,7 @@ object Projects {
             Engine.padFx[p] = if (p < pa.length()) pa.getJSONObject(p).optBoolean("fx", oldTarget < 0 || oldTarget == p) else true
         }
         Slicer.fromJson(j.optJSONObject("slicer"))
+        Engine.instNoPadFromJson(j.optJSONArray("instNoPad"))
         // Zusatz-Instrumente zuletzt (Vocal-Chop liest sein Pad)
         if (j.has("extras")) ExtrasStore.fromJson(j.optJSONObject("extras")) else ExtrasStore.resetToDefaults()
         Engine.markSaved()
