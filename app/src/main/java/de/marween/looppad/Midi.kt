@@ -288,6 +288,53 @@ object Midi {
         }
     }
 
+    // ---------------------------------------------------------------- MIDI-Monitor
+    /** Alles, was ankommt – auch wenn MIDI aus ist oder der Kanal nicht passt (zum Prüfen der Verbindung). */
+    object Mon {
+        class Ev(val t: Long, val dev: String, val hex: String, val text: String)
+        private const val MAX = 300
+        private val buf = ArrayDeque<Ev>()
+        @Volatile var total = 0L; private set
+        @Volatile var lastAt = 0L; private set
+        @Volatile var clocks = 0L; private set
+        @Volatile var lastClockAt = 0L; private set
+        @Volatile var sensing = 0L; private set
+        @Volatile var lastSensingAt = 0L; private set
+        @Volatile var clockBpm = 0f; private set
+        @Volatile var paused = false
+        private val clk = LongArray(25); private var ci = 0
+        fun hex(b: IntArray, n: Int) = (0 until n).joinToString(" ") { String.format("%02X", b[it]) }
+        fun add(dev: String, hex: String, text: String) {
+            val now = System.currentTimeMillis()
+            total++; lastAt = now
+            if (paused) return
+            synchronized(buf) { buf.addLast(Ev(now, dev, hex, text)); while (buf.size > MAX) buf.removeFirst() }
+        }
+        fun clock(ts: Long) {
+            val now = System.currentTimeMillis(); clocks++; lastClockAt = now; lastAt = now
+            val t = if (ts > 0) ts else System.nanoTime()
+            clk[ci] = t; ci = (ci + 1) % 25
+            if (clocks >= 25) { val old = clk[ci]; val dt = (t - old) / 24.0; if (dt > 0) clockBpm = (60e9 / (dt * 24)).toFloat() }
+        }
+        fun sense() { sensing++; lastSensingAt = System.currentTimeMillis() }
+        fun snapshot(): List<Ev> = synchronized(buf) { buf.toList() }
+        fun clear() { synchronized(buf) { buf.clear() }; total = 0; clocks = 0; sensing = 0; clockBpm = 0f; lastAt = 0; lastClockAt = 0; lastSensingAt = 0 }
+
+        fun describe(status: Int, d1: Int, d2: Int): String {
+            val ch = (status and 0x0F) + 1
+            return when (status and 0xF0) {
+                0x90 -> if (d2 > 0) "K$ch  NOTE AN   ${noteName(d1)} ($d1) · Anschlag $d2" else "K$ch  NOTE AUS  ${noteName(d1)} ($d1) (Anschlag 0)"
+                0x80 -> "K$ch  NOTE AUS  ${noteName(d1)} ($d1)"
+                0xA0 -> "K$ch  POLY-DRUCK ${noteName(d1)} = $d2"
+                0xB0 -> "K$ch  CC $d1 = $d2" + when (d1) { 1 -> " (Mod-Rad)"; 7 -> " (Lautstärke)"; 10 -> " (Pan)"; 11 -> " (Expression)"; 64 -> " (Sustain)"; 120, 123 -> " (alles aus)"; else -> "" }
+                0xC0 -> "K$ch  PROGRAMM ${d1 + 1}"
+                0xD0 -> "K$ch  KANAL-DRUCK $d1"
+                0xE0 -> "K$ch  PITCH-BEND ${((d2 shl 7) or d1) - 8192}"
+                else -> "?"
+            }
+        }
+    }
+
     // ---------------------------------------------------------------- Eingang
 
     private class Parser(val dev: String) : MidiReceiver() {
@@ -296,17 +343,37 @@ object Midi {
         private var have = 0
         private var need = 0
 
+        private var sysex = -1
+        private val raw = IntArray(3)
+
         override fun onSend(msg: ByteArray, offset: Int, count: Int, timestamp: Long) {
             for (i in offset until offset + count) {
                 val b = msg[i].toInt() and 0xFF
                 if (b >= 0xF8) {
+                    when (b) {
+                        0xF8 -> Mon.clock(timestamp)
+                        0xFE -> Mon.sense()
+                        0xFA -> Mon.add(dev, "FA", "START")
+                        0xFB -> Mon.add(dev, "FB", "WEITER")
+                        0xFC -> Mon.add(dev, "FC", "STOPP")
+                        0xFF -> Mon.add(dev, "FF", "RESET")
+                    }
                     realtime(b, timestamp)
                     continue
                 }
+                if (sysex >= 0 && b < 0x80) { sysex++; continue }
                 if (b >= 0x80) {
+                    if (sysex >= 0) { Mon.add(dev, "F0 … F7", "SYSEX ($sysex Bytes)"); sysex = -1; if (b == 0xF7) continue }
                     if (b >= 0xF0) {
                         running = 0
                         need = 0
+                        when (b) {
+                            0xF0 -> sysex = 0
+                            0xF2 -> Mon.add(dev, "F2", "SONG-POSITION")
+                            0xF3 -> Mon.add(dev, "F3", "SONG-AUSWAHL")
+                            0xF6 -> Mon.add(dev, "F6", "TUNE REQUEST")
+                            0xF1 -> Mon.add(dev, "F1", "MTC-VIERTEL")
+                        }
                         continue
                     }
                     running = b
@@ -317,6 +384,8 @@ object Midi {
                 if (running == 0) continue
                 data[have++] = b
                 if (have >= need) {
+                    raw[0] = running; raw[1] = data[0]; raw[2] = data[1]
+                    Mon.add(dev, Mon.hex(raw, need + 1), Mon.describe(running, data[0], if (need > 1) data[1] else 0))
                     curTs = timestamp
                     message(running, data[0], if (need > 1) data[1] else 0, dev)
                     have = 0

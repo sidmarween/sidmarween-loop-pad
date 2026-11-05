@@ -6801,6 +6801,84 @@ class MainActivity : Activity() {
             .show()
     }
 
+    /** 📡 Zeigt live jede ankommende MIDI-Nachricht (auch wenn MIDI aus ist oder der Kanal nicht passt). */
+    private fun showMidiMonitor() {
+        val d = resources.displayMetrics.density
+        fun px(v: Float) = (v * d).toInt()
+        val mon = Midi.Mon
+        val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(px(14f), px(6f), px(14f), px(4f)) }
+        val dev = TextView(this).apply { textSize = 12f; setTextColor(Color.rgb(200, 200, 210)) }
+        val ledRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = android.view.Gravity.CENTER_VERTICAL; setPadding(0, px(6f), 0, px(6f)) }
+        val led = View(this)
+        val ledBg = android.graphics.drawable.GradientDrawable().apply { shape = android.graphics.drawable.GradientDrawable.OVAL; setColor(Color.rgb(40, 40, 48)) }
+        led.background = ledBg
+        ledRow.addView(led, LinearLayout.LayoutParams(px(22f), px(22f)))
+        val stat = TextView(this).apply { textSize = 13f; setTextColor(Color.WHITE); setPadding(px(10f), 0, 0, 0) }
+        ledRow.addView(stat)
+        val clockTv = TextView(this).apply { textSize = 12f; setTextColor(Color.rgb(140, 230, 170)) }
+        var hideClock = true
+        var showHex = false
+        val opts = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        val pauseBtn = Button(this).apply { text = "⏸ PAUSE"; textSize = 11f }
+        val hexBtn = Button(this).apply { text = "HEX"; textSize = 11f }
+        val clrBtn = Button(this).apply { text = "🗑 LEEREN"; textSize = 11f }
+        for (b in arrayOf(pauseBtn, hexBtn, clrBtn)) opts.addView(b, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+        val log = TextView(this).apply {
+            typeface = android.graphics.Typeface.MONOSPACE; textSize = 11f; setTextColor(Color.rgb(120, 220, 255))
+            setBackgroundColor(Color.rgb(12, 12, 16)); setPadding(px(8f), px(6f), px(8f), px(6f))
+        }
+        val logScroll = android.widget.ScrollView(this).apply { addView(log) }
+        box.addView(dev); box.addView(ledRow); box.addView(clockTv)
+        box.addView(CheckBox(this).apply {
+            text = "Clock & Active Sensing nicht einzeln auflisten"; isChecked = true; setTextColor(Color.WHITE); textSize = 12f
+            setOnCheckedChangeListener { _, c -> hideClock = c }
+        })
+        box.addView(opts)
+        box.addView(logScroll, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, px(260f)))
+        box.addView(TextView(this).apply {
+            textSize = 11f; setTextColor(Color.rgb(150, 150, 160)); setPadding(0, px(6f), 0, 0)
+            text = "Kommt hier nichts an: Kabel/OTG-Adapter prüfen, am Gerät MIDI-Ausgang (USB) einschalten, unter „🔌 Geräte an/aus“ nachsehen. Kommt etwas an, aber Marv PAD reagiert nicht: Kanal (K1–16) mit dem Pad-/Tastatur-Kanal vergleichen."
+        })
+        pauseBtn.setOnClickListener { mon.paused = !mon.paused; pauseBtn.text = if (mon.paused) "▶ WEITER" else "⏸ PAUSE" }
+        hexBtn.setOnClickListener { showHex = !showHex; hexBtn.text = if (showHex) "TEXT" else "HEX" }
+        clrBtn.setOnClickListener { mon.clear() }
+        val tf = SimpleDateFormat("HH:mm:ss.SSS", Locale.GERMANY)
+        var lastTotal = -1L; var lastClocks = -1L; var lastHex = false
+        val ticker = object : Runnable {
+            override fun run() {
+                val now = System.currentTimeMillis()
+                dev.text = if (Midi.deviceNames.isEmpty()) "Kein MIDI-Gerät verbunden" else "Verbunden: " + Midi.deviceNames.joinToString(", ") + (if (!Midi.enabled) "\n⚠ MIDI ist aus – Signale kommen an, werden aber nicht gespielt" else "")
+                val age = if (mon.lastAt == 0L) Long.MAX_VALUE else now - mon.lastAt
+                ledBg.setColor(when { age < 120 -> Color.rgb(60, 255, 120); age < 600 -> Color.rgb(30, 140, 70); else -> Color.rgb(40, 40, 48) })
+                stat.text = if (mon.total == 0L && mon.clocks == 0L) "Warte auf Signal …" else
+                    "${mon.total} Nachrichten" + (if (age < 2000) " · SIGNAL!" else " · zuletzt vor ${age / 1000} s")
+                val cAge = now - mon.lastClockAt
+                clockTv.text = (if (mon.clocks > 0 && cAge < 1000) String.format(Locale.GERMANY, "⏱ MIDI-Clock läuft · ca. %.1f BPM", mon.clockBpm) else if (mon.clocks > 0) "⏱ MIDI-Clock: angekommen, jetzt still" else "⏱ keine MIDI-Clock") +
+                    (if (mon.sensing > 0 && now - mon.lastSensingAt < 1500) " · Active Sensing ✓" else "")
+                val clocksChanged = !hideClock && mon.clocks != lastClocks
+                if (mon.total != lastTotal || showHex != lastHex || clocksChanged) {
+                    lastTotal = mon.total; lastHex = showHex; lastClocks = mon.clocks
+                    val evs = mon.snapshot().takeLast(120)
+                    val sb = StringBuilder()
+                    for (e in evs.asReversed()) {
+                        sb.append(tf.format(Date(e.t))).append("  ")
+                        sb.append(if (showHex) e.hex.padEnd(9) else e.text)
+                        if (showHex) sb.append("  ").append(e.text)
+                        if (Midi.deviceNames.size > 1) sb.append("  [").append(e.dev).append(']')
+                        sb.append('\n')
+                    }
+                    if (!hideClock && mon.clocks > 0) sb.insert(0, "… ${mon.clocks} × CLOCK (F8)\n")
+                    log.text = if (sb.isEmpty()) "(noch nichts empfangen – Taste am Gerät drücken oder Regler drehen)" else sb
+                }
+                log.postDelayed(this, 120L)
+            }
+        }
+        val dlg = ui().setTitle("📡 MIDI-Monitor").setView(box).setPositiveButton("Schließen", null).create()
+        dlg.setOnDismissListener { log.removeCallbacks(ticker); mon.paused = false }
+        dlg.show()
+        ticker.run()
+    }
+
     private fun showMidi() {
         val prefs = getSharedPreferences("marvpad", MODE_PRIVATE)
         val (box, scroll) = dialogBox()
@@ -6815,6 +6893,10 @@ class MainActivity : Activity() {
             }
         }
         ticker.run()
+        box.addView(Button(this).apply {
+            text = "📡 MIDI-MONITOR · sehen, was ankommt …"
+            setOnClickListener { showMidiMonitor() }
+        })
         check(box, "MIDI an", Midi.enabled) { Midi.enabled = it }
         fun chName(c: Int) = if (c == 0) "Omni (alle)" else "$c"
         val chBtn = Button(this)
