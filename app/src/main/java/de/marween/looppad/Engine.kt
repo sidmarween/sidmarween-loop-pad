@@ -439,15 +439,16 @@ object Engine {
     }
 
     /** Touchpad: ACID-Ton an (slide = vom vorigen Ton gleiten). */
-    fun acidLiveOn(semi: Int, slide: Boolean) {
+    fun acidLiveOn(semi: Int, slide: Boolean, acc: Boolean = false, vel: Float = 1f) {
         if (recLive() && !slide) {
             val (step, ahead) = liveStep(InstState.acidLen)
             InstState.acidGate[step] = true
             InstState.acidTie[step] = false
             InstState.acidSemi[step] = semi
+            InstState.acidAcc[step] = acc
             if (ahead) return
         }
-        acid?.queue(-1, true, semi, false, slide)
+        acid?.queue(-1, true, semi, acc, slide, vel)
     }
 
     fun acidLiveOff() {
@@ -485,13 +486,13 @@ object Engine {
     fun previewDrum(v: Int) { drum?.trigger(v, 0, false) }
 
     /** Touchpad/Pads: DRUM-Instrument anschlagen. */
-    fun drumHit(v: Int, accent: Boolean) {
+    fun drumHit(v: Int, accent: Boolean, vel: Float = 1f) {
         if (recLive()) {
             val (step, ahead) = liveStep(InstState.drumLen)
             InstState.drumSteps[v][step] = if (accent) 2 else 1
             if (ahead) return
         }
-        drum?.trigger(v, 0, accent)
+        drum?.trigger(v, 0, accent, vel)
         if (v == 0 && scSource == 0) scKick(written)
     }
 

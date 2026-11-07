@@ -40,6 +40,13 @@ object Midi {
     @Volatile var keysTarget = 0
     val KEYS_TARGETS = arrayOf("Pad", "🗣 Vocal-Chop", "🎼 Chord-Pad", "🚀 FX-Generator")
     private val mainH = Handler(android.os.Looper.getMainLooper())
+    /** 303 live spielen: Kanal (0 = aus). Mehrere Tasten gehalten = Slide, fester Anschlag = Accent. */
+    @Volatile var acidChannel = 0
+    /** 909 live spielen: Kanal (0 = aus), Belegung 0 = der Reihe nach ab C1 (MPK-Pads), 1 = General MIDI. */
+    @Volatile var drumChannel = 0
+    @Volatile var drumMap = 0
+    val DRUM_ORDER = intArrayOf(0, 1, 7, 8, 6, 5, 2, 3, 4, 9, 10)   // BD SD CH OH CP RS LT MT HT CR RD
+    val DRUM_SHORT = arrayOf("BD", "SD", "LT", "MT", "HT", "RS", "CP", "CH", "OH", "CR", "RD")
     @Volatile var clockIn = false
     @Volatile var clockOut = false
     @Volatile var transportIn = true
@@ -53,7 +60,9 @@ object Midi {
         "Deck A Pitch", "Deck B Pitch", "Mikrofon (Mithören)", "Deck A Effekt", "Deck B Effekt",
         "Deck A HI", "Deck A MID", "Deck A LOW", "Deck B HI", "Deck B MID", "Deck B LOW", "Deck A Gain", "Deck B Gain",
         "Deck A Jog-Rad Rand (Pitch-Bend)", "Deck B Jog-Rad Rand (Pitch-Bend)", "Deck A Jog-Rad oben (Scratch)", "Deck B Jog-Rad oben (Scratch)",
-        "Vorhören-Lautstärke", "🎛 Performance-Szenen: Morph A ↔ B", "🗣 Vocal-Chop: Tonhöhe", "🚀 FX-Generator: Intensität"
+        "Vorhören-Lautstärke", "🎛 Performance-Szenen: Morph A ↔ B", "🗣 Vocal-Chop: Tonhöhe", "🚀 FX-Generator: Intensität",
+        "🔊 303: Cutoff", "🔊 303: Resonanz", "🔊 303: Env-Mod", "🔊 303: Decay", "🔊 303: Accent", "🔊 303: Distortion",
+        "🥁 909: Lautstärke", "🔊 303: Lautstärke"
     )
 
     /** DJ-Tasten je Deck (gelernt als Kanal + Note). */
@@ -149,6 +158,9 @@ object Midi {
             keysChannel = o.optInt("keysCh", 2)
             keysPad = o.optInt("keysPad", -1)
             keysTarget = o.optInt("keysTarget", 0).coerceIn(0, 3)
+            acidChannel = o.optInt("acidCh", 0).coerceIn(0, 16)
+            drumChannel = o.optInt("drumCh", 0).coerceIn(0, 16)
+            drumMap = o.optInt("drumMap", 0).coerceIn(0, 1)
             clockIn = o.optBoolean("clockIn", false)
             clockOut = o.optBoolean("clockOut", false)
             transportIn = o.optBoolean("transport", true)
@@ -168,6 +180,7 @@ object Midi {
     fun save(p: SharedPreferences) {
         val o = JSONObject()
         o.put("on", enabled); o.put("ch", channel); o.put("base", padBase); o.put("vel", velocity)
+        o.put("acidCh", acidChannel); o.put("drumCh", drumChannel); o.put("drumMap", drumMap)
         o.put("keysCh", keysChannel); o.put("keysPad", keysPad); o.put("keysTarget", keysTarget); o.put("clockIn", clockIn); o.put("clockOut", clockOut)
         o.put("transport", transportIn); o.put("prog", programScenes)
         o.put("pads", JSONArray().apply { padNotes.forEach { put(it) } })
@@ -454,6 +467,8 @@ object Midi {
                     onHint?.invoke("Pad ${p + 1} ← ${noteName(d1)} ($d1)")
                     return
                 }
+                if (drumChannel > 0 && ch == drumChannel) { if (on) drumNote(d1, d2); return }
+                if (acidChannel > 0 && ch == acidChannel) { acidNote(d1, on, d2); return }
                 if (Harmonizer.takesMidi()) {
                     if (on) Harmonizer.noteOn(d1) else Harmonizer.noteOff(d1)
                     return
@@ -498,6 +513,60 @@ object Midi {
             0xE0 -> {
                 lastEvent = "$dev · Kanal $ch · Pitchbend"
             }
+        }
+    }
+
+    // ---------------------------------------------------------------- 303 / 909 live
+    private val acidHeld = ArrayList<Int>()
+
+    /** Note → Ton der 303: Taste klingt in ihrer echten Tonhöhe (C3 auf dem Keyboard = C3 aus der 303). */
+    private fun acidSemi(note: Int) = note - 36 - 12 * InstState.acidOct - InstState.acidTune
+
+    private fun acidNote(note: Int, on: Boolean, vel: Int) {
+        val acc = velocity && vel >= 100
+        val v = if (velocity) (0.55f + 0.45f * vel / 127f) else 1f
+        if (on) {
+            val legato = acidHeld.isNotEmpty()
+            acidHeld.remove(note); acidHeld.add(note)
+            Engine.acidLiveOn(acidSemi(note), legato, acc, v)
+            onKeysNote?.invoke(note - 60, true)
+        } else {
+            val wasTop = acidHeld.lastOrNull() == note
+            acidHeld.remove(note)
+            onKeysNote?.invoke(note - 60, false)
+            if (!wasTop) return
+            val back = acidHeld.lastOrNull()
+            if (back != null) Engine.acidLiveOn(acidSemi(back), true, false, v)   // zurück zur noch gehaltenen Taste gleiten
+            else Engine.acidLiveOff()
+        }
+    }
+
+    /** Note → 909-Stimme (−1 = keine). */
+    fun drumVoice(note: Int): Int = if (drumMap == 0) {
+        if (note < 36) -1 else DRUM_ORDER[(note - 36) % DRUM_ORDER.size]
+    } else when (note) {
+        35, 36 -> 0; 37 -> 5; 38, 40 -> 1; 39 -> 6; 41, 43 -> 2; 45, 47 -> 3; 48, 50 -> 4
+        42, 44 -> 7; 46 -> 8; 49, 52, 55, 57 -> 9; 51, 53, 59 -> 10
+        else -> -1
+    }
+
+    private fun drumNote(note: Int, vel: Int) {
+        val dv = drumVoice(note)
+        if (dv < 0) return
+        val acc = velocity && vel >= 110
+        val v = if (velocity) max(0.08f, vel / 127f) else 1f
+        Engine.drumHit(dv, acc, v)
+    }
+
+    /** Ein-Tipp-Einstellung für Akai MPK Mini: Tasten (K1) → 303, Pads (K10) → 909, Drehregler K1–K6 → 303. */
+    fun setupMpkMini() {
+        acidChannel = 1; drumChannel = 10; drumMap = 0
+        if (keysChannel == 1 || keysChannel == 10) keysChannel = 0
+        if (channel == 1 || channel == 10) channel = 0
+        for (k in 0 until 8) {
+            val t = intArrayOf(33, 34, 35, 36, 37, 38, 39, 40)[k]
+            for (i in ccMap.indices) if (ccMap[i] == 70 + k) ccMap[i] = -1
+            ccMap[t] = 70 + k
         }
     }
 
@@ -593,6 +662,14 @@ object Midi {
             30 -> mainH.post { if (MixMorph.ready()) { MixMorph.stopAuto(); MixMorph.setPos(v) } }
             31 -> VocalChop.pitch = Math.round(v * 24f) - 12
             32 -> FxGen.intensity = v
+            33 -> { InstState.acidCut = v; InstState.acidCutAuto = Float.NaN }
+            34 -> InstState.acidRes = v
+            35 -> InstState.acidEnv = v
+            36 -> InstState.acidDec = v
+            37 -> InstState.acidAccent = v
+            38 -> InstState.acidDist = v
+            39 -> InstState.drumVol = v
+            40 -> InstState.acidVol = v
         }
     }
 

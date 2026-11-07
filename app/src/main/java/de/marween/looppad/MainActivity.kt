@@ -7011,6 +7011,48 @@ class MainActivity : Activity() {
                 }.show()
         }
         box.addView(keysBtn)
+        note(box, "🔊 303 & 🥁 909 mit dem Controller spielen", Color.rgb(255, 170, 90))
+        val acidBtn = Button(this)
+        val drumBtn = Button(this)
+        val mapBtn = Button(this)
+        fun instLabels() {
+            acidBtn.text = "🔊 303 spielen auf: " + (if (Midi.acidChannel == 0) "aus" else "Kanal ${Midi.acidChannel}")
+            drumBtn.text = "🥁 909 spielen auf: " + (if (Midi.drumChannel == 0) "aus" else "Kanal ${Midi.drumChannel}")
+            mapBtn.text = "909-Belegung: " + (if (Midi.drumMap == 0) "der Reihe nach ab C1 (MPK-Pads)" else "General MIDI (GM)") + " …"
+            keysLabel(); chLabel()
+        }
+        instLabels()
+        box.addView(Button(this).apply {
+            text = "⚡ AKAI MPK MINI EINRICHTEN · Tasten → 303, Pads → 909"
+            setOnClickListener {
+                Midi.setupMpkMini(); instLabels(); Midi.save(prefs)
+                ui().setTitle("⚡ MPK Mini eingerichtet")
+                    .setMessage("• Tasten (Kanal 1) spielen die 303. Zwei Tasten überlappend = Slide, fest anschlagen = Accent.\n" +
+                        "• Pads (Kanal 10) spielen die 909: Pad 1 BD · 2 SD · 3 CH · 4 OH · 5 CP · 6 RS · 7 LT · 8 MT (Bank B: HT, CR, RD …).\n" +
+                        "• Drehregler K1–K8: 303 Cutoff, Resonanz, Env-Mod, Decay, Accent, Distortion, 909-Lautstärke, 303-Lautstärke (MPK Mini 3: CC 70–77; bei anderen Modellen unter „Regler & Fader zuordnen“ neu lernen).\n\n" +
+                        "Mit ⏺ AUFNAHME bei laufendem Sequencer wird ins 303-/909-Muster eingespielt.")
+                    .setPositiveButton("OK", null).show()
+            }
+        })
+        acidBtn.setOnClickListener {
+            val names = arrayOf("aus") + Array(16) { "Kanal ${it + 1}" }
+            ui().setTitle("Kanal, auf dem die Tastatur die 303 spielt")
+                .setSingleChoiceItems(names, Midi.acidChannel) { d, w -> Midi.acidChannel = w; if (w > 0 && w == Midi.drumChannel) Midi.drumChannel = 0; instLabels(); d.dismiss() }.show()
+        }
+        drumBtn.setOnClickListener {
+            val names = arrayOf("aus") + Array(16) { "Kanal ${it + 1}" + if (it == 9) " (üblich für Drum-Pads)" else "" }
+            ui().setTitle("Kanal, auf dem die Pads die 909 spielen")
+                .setSingleChoiceItems(names, Midi.drumChannel) { d, w -> Midi.drumChannel = w; if (w > 0 && w == Midi.acidChannel) Midi.acidChannel = 0; instLabels(); d.dismiss() }.show()
+        }
+        mapBtn.setOnClickListener {
+            val order = (0 until 11).joinToString(" · ") { "${Midi.noteName(36 + it)} ${Midi.DRUM_SHORT[Midi.drumVoice(36 + it).coerceAtLeast(0)]}" }
+            ui().setTitle("909-Belegung")
+                .setSingleChoiceItems(arrayOf("Der Reihe nach ab C1 – passt zu MPK-, MPC- und Launchkey-Pads", "General MIDI – wie Drum-Keyboards und DAWs (36 BD, 38 SD, 42 CH, 46 OH …)"), Midi.drumMap) { d, w ->
+                    Midi.drumMap = w; instLabels(); d.dismiss()
+                    hint(if (w == 0) "Der Reihe nach: " + (0 until 8).joinToString(" · ") { "Pad ${it + 1} ${Midi.DRUM_SHORT[Midi.DRUM_ORDER[it]]}" } else "GM: 36 BD · 38 SD · 39 CP · 42 CH · 46 OH · 41/45/48 Toms · 49 CR · 51 RD")
+                }.show()
+        }
+        box.addView(acidBtn); box.addView(drumBtn); box.addView(mapBtn)
         box.addView(Button(this).apply {
             text = "🎹 MIDI-Ausgang: Instrumente spielen externe Synths …"
             setOnClickListener { midiOutSetup() }
