@@ -6899,7 +6899,7 @@ class MainActivity : Activity() {
         directBtn.setOnClickListener {
             Midi.usbDirect = !Midi.usbDirect
             Midi.save(getSharedPreferences("marvpad", MODE_PRIVATE))
-            if (Midi.usbDirect) { Midi.reopen(); directBtn.postDelayed({ UsbMidiDirect.start(this@MainActivity) }, 400); hint("Direkt-USB: Android fragt evtl. nach Zugriff auf das Gerät – erlauben") }
+            if (Midi.usbDirect) { Midi.reopen(); directBtn.postDelayed({ try { UsbMidiDirect.start(this@MainActivity) } catch (e: Throwable) { toast("Direkt-USB: ${e.message ?: e}") } }, 400); hint("Direkt-USB: Android fragt evtl. nach Zugriff auf das Gerät – erlauben") }
             else { UsbMidiDirect.stop(); Midi.reopen() }
             directLabel()
         }
@@ -6923,7 +6923,10 @@ class MainActivity : Activity() {
             override fun run() {
                 val now = System.currentTimeMillis()
                 dev.text = if (Midi.deviceNames.isEmpty()) "Kein MIDI-Gerät verbunden" else "Verbunden: " + Midi.deviceNames.joinToString(", ") + (if (!Midi.enabled) "\n⚠ MIDI ist aus – Signale kommen an, werden aber nicht gespielt" else "")
-                if (now - diagAt > 1000) { diagAt = now; diag.text = midiDiagText(); directLabel() }
+                if (now - diagAt > 1000) {
+                    diagAt = now; directLabel()
+                    diag.text = midiDiagText() + (if (Midi.usbDirect && UsbMidiDirect.history.isNotEmpty()) "\n— Direkt-USB-Verlauf —\n" + UsbMidiDirect.history.joinToString("\n") else "")
+                }
                 val age = if (mon.lastAt == 0L) Long.MAX_VALUE else now - mon.lastAt
                 ledBg.setColor(when { age < 120 -> Color.rgb(60, 255, 120); age < 600 -> Color.rgb(30, 140, 70); else -> Color.rgb(40, 40, 48) })
                 stat.text = if (mon.total == 0L && mon.clocks == 0L) "Warte auf Signal …" else
@@ -6962,7 +6965,8 @@ class MainActivity : Activity() {
         val live = note(box, "", Color.rgb(120, 220, 255))
         val ticker = object : Runnable {
             override fun run() {
-                status.text = if (Midi.deviceNames.isEmpty()) "Kein MIDI-Gerät verbunden – Controller per USB (OTG-Adapter) anschließen oder eine MIDI-App starten."
+                status.text = if (Midi.usbDirect) "🔌 Direkt-USB: " + UsbMidiDirect.statusLine() + (if (Midi.deviceNames.isNotEmpty()) "\nAndere: " + Midi.deviceNames.joinToString(", ") else "")
+                    else if (Midi.deviceNames.isEmpty()) "Kein MIDI-Gerät verbunden – Controller per USB (OTG-Adapter) anschließen oder eine MIDI-App starten."
                               else "Verbunden: " + Midi.deviceNames.joinToString(", ")
                 live.text = if (Midi.lastEvent.isEmpty()) "Letztes Ereignis: –" else "Letztes Ereignis: ${Midi.lastEvent}"
                 live.postDelayed(this, 250L)
@@ -6972,6 +6976,16 @@ class MainActivity : Activity() {
         box.addView(Button(this).apply {
             text = "📡 MIDI-MONITOR · sehen, was ankommt …"
             setOnClickListener { showMidiMonitor() }
+        })
+        box.addView(Button(this).apply {
+            text = "🔄 CONTROLLER NEU VERBINDEN"
+            setOnClickListener {
+                if (Midi.usbDirect) {
+                    UsbMidiDirect.stop()
+                    postDelayed({ try { UsbMidiDirect.start(this@MainActivity) } catch (e: Throwable) { toast("Direkt-USB: ${e.message ?: e}") } }, 600L)
+                } else Midi.reopen()
+                hint("Controller wird neu verbunden …")
+            }
         })
         check(box, "MIDI an", Midi.enabled) { Midi.enabled = it }
         fun chName(c: Int) = if (c == 0) "Omni (alle)" else "$c"

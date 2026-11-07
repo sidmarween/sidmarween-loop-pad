@@ -21,7 +21,14 @@ import android.os.Build
 object UsbMidiDirect {
     private const val ACTION = "de.marween.looppad.USB_MIDI_PERMISSION"
     @Volatile var running = false; private set
-    @Volatile var status = "aus"; private set
+    /** Verlauf der letzten Zustände (für den Monitor-Screenshot). */
+    val history = java.util.concurrent.ConcurrentLinkedDeque<String>()
+    @Volatile var status = "aus"
+        private set(v) {
+            field = v
+            history.addLast(java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.GERMANY).format(java.util.Date()) + " " + v)
+            while (history.size > 8) history.pollFirst()
+        }
     /** Zähler für die Diagnose: USB-Lesevorgänge mit Daten, empfangene Bytes, davon MIDI-Ereignisse. */
     @Volatile var reads = 0L; private set
     @Volatile var bytes = 0L; private set
@@ -61,24 +68,37 @@ object UsbMidiDirect {
                 receiverOn = true
                 val r = object : BroadcastReceiver() {
                     override fun onReceive(c: Context, i: Intent) {
-                        if (i.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false)) start(app)
+                        val um2 = app.getSystemService(Context.USB_SERVICE) as? UsbManager
+                        val ok = i.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false) || (um2?.deviceList?.values?.any { midiIn(it) != null && um2.hasPermission(it) } == true)
+                        if (ok) { status = "USB-Freigabe erteilt"; start(app) }
                         else { status = "USB-Zugriff abgelehnt"; Midi.onHint?.invoke("USB-Zugriff abgelehnt – Direkt-USB geht so nicht") }
                     }
                 }
                 if (Build.VERSION.SDK_INT >= 33) app.registerReceiver(r, IntentFilter(ACTION), Context.RECEIVER_NOT_EXPORTED)
                 else @Suppress("UnspecifiedRegisterReceiverFlag") app.registerReceiver(r, IntentFilter(ACTION))
             }
-            val flags = if (Build.VERSION.SDK_INT >= 31) PendingIntent.FLAG_MUTABLE else 0
-            val pi = PendingIntent.getBroadcast(app, 0, Intent(ACTION).setPackage(app.packageName), flags)
-            um.requestPermission(dev, pi)
-            status = "Warte auf USB-Freigabe …"; askedAt = System.currentTimeMillis()
+            try {
+                val flags = if (Build.VERSION.SDK_INT >= 31) PendingIntent.FLAG_MUTABLE else 0
+                val pi = PendingIntent.getBroadcast(app, 0, Intent(ACTION).setPackage(app.packageName), flags)
+                um.requestPermission(dev, pi)
+                status = "Warte auf USB-Freigabe …"
+            } catch (e: Throwable) {
+                status = "Freigabe-Anfrage scheiterte (${e.javaClass.simpleName}: ${e.message?.take(80)}) – 2. Versuch"
+                try {
+                    val pi = PendingIntent.getBroadcast(app, 1, Intent(ACTION).setPackage(app.packageName), PendingIntent.FLAG_IMMUTABLE)
+                    um.requestPermission(dev, pi)
+                    status = "Warte auf USB-Freigabe … (2. Weg)"
+                } catch (e2: Throwable) { status = "⚠ Android verweigert die USB-Anfrage: ${e2.javaClass.simpleName}: ${e2.message?.take(80)}" }
+            }
+            askedAt = System.currentTimeMillis()
             return status
         }
         val (intf, ep) = midiIn(dev)!!
         info = "Schnittstelle ${intf.id} (Klasse ${intf.interfaceClass}/${intf.interfaceSubclass}), Endpunkt ${ep.address} " +
             (if (ep.type == UsbConstants.USB_ENDPOINT_XFER_BULK) "Bulk" else "Interrupt") + ", ${ep.maxPacketSize} Bytes"
         reads = 0; bytes = 0; events = 0; lastRaw = ""
-        val c = um.openDevice(dev) ?: return "USB-Gerät ließ sich nicht öffnen".also { status = it }
+        status = "öffne ${dev.deviceName} …"
+        val c = try { um.openDevice(dev) } catch (e: Throwable) { null } ?: return "USB-Gerät ließ sich nicht öffnen".also { status = it }
         if (!c.claimInterface(intf, true)) { c.close(); return "USB-Schnittstelle belegt".also { status = it } }
         conn = c
         stop = false
