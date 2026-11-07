@@ -7012,12 +7012,11 @@ class MainActivity : Activity() {
         }
         box.addView(keysBtn)
         note(box, "🔊 303 & 🥁 909 mit dem Controller spielen", Color.rgb(255, 170, 90))
-        val acidBtn = Button(this)
-        val drumBtn = Button(this)
+        val instBtn = Button(this)
         val mapBtn = Button(this)
         fun instLabels() {
-            acidBtn.text = "🔊 303 spielen auf: " + (if (Midi.acidChannel == 0) "aus" else "Kanal ${Midi.acidChannel}")
-            drumBtn.text = "🥁 909 spielen auf: " + (if (Midi.drumChannel == 0) "aus" else "Kanal ${Midi.drumChannel}")
+            val used = (1..16).filter { Midi.chInst[it - 1] > 0 }
+            instBtn.text = "🎛 Instrumente auf Kanäle: " + (if (used.isEmpty()) "keine" else used.joinToString(" · ") { "K$it ${Midi.INST_TARGETS[Midi.chInst[it - 1]].substringAfter(' ')}" }) + " …"
             mapBtn.text = "909-Belegung: " + (if (Midi.drumMap == 0) "der Reihe nach ab C1 (MPK-Pads)" else "General MIDI (GM)") + " …"
             keysLabel(); chLabel()
         }
@@ -7030,20 +7029,11 @@ class MainActivity : Activity() {
                     .setMessage("• Tasten (Kanal 1) spielen die 303. Zwei Tasten überlappend = Slide, fest anschlagen = Accent.\n" +
                         "• Pads (Kanal 10) spielen die 909: Pad 1 BD · 2 SD · 3 CH · 4 OH · 5 CP · 6 RS · 7 LT · 8 MT (Bank B: HT, CR, RD …).\n" +
                         "• Drehregler K1–K8: 303 Cutoff, Resonanz, Env-Mod, Decay, Accent, Distortion, 909-Lautstärke, 303-Lautstärke (MPK Mini 3: CC 70–77; bei anderen Modellen unter „Regler & Fader zuordnen“ neu lernen).\n\n" +
-                        "Mit ⏺ AUFNAHME bei laufendem Sequencer wird ins 303-/909-Muster eingespielt.")
+                        "Mit ⏺ AUFNAHME bei laufendem Sequencer wird ins 303-/909-Muster eingespielt.\n\nAndere Instrumente (Synths, KEYS, BASSLINE, Vocal-Chop …): unter „🎛 Instrumente auf Kanäle“ einen Kanal geben und am MPK auf diesen Kanal umschalten.")
                     .setPositiveButton("OK", null).show()
             }
         })
-        acidBtn.setOnClickListener {
-            val names = arrayOf("aus") + Array(16) { "Kanal ${it + 1}" }
-            ui().setTitle("Kanal, auf dem die Tastatur die 303 spielt")
-                .setSingleChoiceItems(names, Midi.acidChannel) { d, w -> Midi.acidChannel = w; if (w > 0 && w == Midi.drumChannel) Midi.drumChannel = 0; instLabels(); d.dismiss() }.show()
-        }
-        drumBtn.setOnClickListener {
-            val names = arrayOf("aus") + Array(16) { "Kanal ${it + 1}" + if (it == 9) " (üblich für Drum-Pads)" else "" }
-            ui().setTitle("Kanal, auf dem die Pads die 909 spielen")
-                .setSingleChoiceItems(names, Midi.drumChannel) { d, w -> Midi.drumChannel = w; if (w > 0 && w == Midi.acidChannel) Midi.acidChannel = 0; instLabels(); d.dismiss() }.show()
-        }
+        instBtn.setOnClickListener { midiInstChannels { instLabels() } }
         mapBtn.setOnClickListener {
             val order = (0 until 11).joinToString(" · ") { "${Midi.noteName(36 + it)} ${Midi.DRUM_SHORT[Midi.drumVoice(36 + it).coerceAtLeast(0)]}" }
             ui().setTitle("909-Belegung")
@@ -7052,7 +7042,7 @@ class MainActivity : Activity() {
                     hint(if (w == 0) "Der Reihe nach: " + (0 until 8).joinToString(" · ") { "Pad ${it + 1} ${Midi.DRUM_SHORT[Midi.DRUM_ORDER[it]]}" } else "GM: 36 BD · 38 SD · 39 CP · 42 CH · 46 OH · 41/45/48 Toms · 49 CR · 51 RD")
                 }.show()
         }
-        box.addView(acidBtn); box.addView(drumBtn); box.addView(mapBtn)
+        box.addView(instBtn); box.addView(mapBtn)
         box.addView(Button(this).apply {
             text = "🎹 MIDI-Ausgang: Instrumente spielen externe Synths …"
             setOnClickListener { midiOutSetup() }
@@ -7096,6 +7086,62 @@ class MainActivity : Activity() {
                 Midi.save(prefs)
             }
             .show()
+    }
+
+    /** Jedem MIDI-Kanal ein Instrument geben. */
+    private fun midiInstChannels(done: () -> Unit) {
+        fun synSound(t: Int): String {
+            val st = InstState.synTracks[t]
+            return when (st.wave) {
+                Ladder.WAVE -> " (Ladder)"
+                in 37..40 -> " (Vintage)"
+                41 -> " (Rhodes)"; 42 -> " (Wurlitzer)"
+                in 29..31 -> " (Orchester)"
+                in 32..35 -> " (M1)"
+                else -> ""
+            }
+        }
+        fun label(ch: Int): String {
+            val t = Midi.chInst[ch - 1]
+            var n = Midi.INST_TARGETS[t]
+            if (t >= Midi.T_SYN0 && t < Midi.T_SYN0 + InstState.SYN_TRACKS) n += synSound(t - Midi.T_SYN0)
+            return "Kanal $ch:  " + (if (t == 0) "–" else n) + when {
+                Midi.keysChannel == ch && t == 0 -> "  (Tastatur → Pad/Piano-Roll)"
+                Midi.channel == ch && t == 0 -> "  (Pads starten)"
+                else -> ""
+            }
+        }
+        val items = Array(16) { label(it + 1) }
+        ui().setTitle("🎛 Instrumente auf MIDI-Kanäle")
+            .setItems(items) { _, w ->
+                val ch = w + 1
+                val names = Array(Midi.INST_TARGETS.size) { i ->
+                    var n = if (i == 0) "– nichts (normales Pad-/Tastatur-Verhalten)" else Midi.INST_TARGETS[i]
+                    if (i >= Midi.T_SYN0 && i < Midi.T_SYN0 + InstState.SYN_TRACKS) n += synSound(i - Midi.T_SYN0)
+                    val on = Midi.chOf(i)
+                    if (i > 0 && on > 0 && on != ch) n += "  · liegt auf K$on"
+                    n
+                }
+                ui().setTitle("Kanal $ch spielt …")
+                    .setSingleChoiceItems(names, Midi.chInst[w]) { d, i ->
+                        Midi.setCh(ch, i)
+                        d.dismiss()
+                        done()
+                        midiInstChannels(done)
+                    }.show()
+            }
+            .setNeutralButton("Was geht wo?") { _, _ ->
+                ui().setTitle("Instrumente per MIDI")
+                    .setMessage("• 303: einstimmig, C4 = Grundton, überlappend = Slide, fest = Accent.\n" +
+                        "• 909: Pads der Reihe nach oder General MIDI (siehe 909-Belegung).\n" +
+                        "• SYNTH 1–3, KEYS, BASSLINE: spielen den Klang, der gerade auf der Spur liegt – Ladder/Moog, Vintage-Synths, Orchester, M1, Rhodes, Wurlitzer, Piano, Orgel, Bass-Labor, Organ-Bass, Vibe …\n" +
+                        "• Vocal-Chop: C2–D#3 = Chops 1–16, darüber mit Tonhöhe. Chord-Pad: weiße Tasten = Stufen. FX-Generator: 8 Tasten = 8 Effekte.\n" +
+                        "• Harmonizer: gehaltene Tasten = Akkord. Touch-Lab: chromatisch. Architect: Tasten ab C2 = die 4 Spuren.\n\n" +
+                        "Selbstlaufende Instrumente (Euklid, Atmos, Wolf, Orbits, Modular, Chaos, Groove-Organismus) erzeugen ihre Töne selbst und haben keine Tasten zum Spielen.\n\n" +
+                        "Mit ⏺ AUFNAHME bei laufendem Sequencer werden 303, 909 und die Synth-Spuren ins Muster eingespielt.")
+                    .setPositiveButton("OK", null).show()
+            }
+            .setNegativeButton("Fertig", null).show()
     }
 
     private fun midiLearnPads() {

@@ -473,6 +473,17 @@ object Engine {
         synths?.getOrNull(track)?.queue(if (delay <= 0L) -1L else written + delay, on, semi, vel, tag, intArrayOf(0))
     }
 
+    /** Live-Ton auf einer Synth-Spur – bei ⏺ AUFNAHME und laufendem Sequencer auch ins Muster der Spur. */
+    fun synTrackLiveRec(track: Int, on: Boolean, semi: Int, vel: Float, tag: Int) {
+        val t = InstState.synTracks.getOrNull(track) ?: return
+        if (on && recLive()) {
+            val (step, ahead) = liveStep(t.len)
+            t.gate[step] = true; t.tie[step] = false; t.semi[step] = semi; t.vel[step] = vel
+            if (ahead) return
+        }
+        synths?.getOrNull(track)?.queue(-1, on, semi, vel, tag)
+    }
+
     /** Live-Ton auf einer bestimmten Synth-Spur (Bass-Labor-Tasten). */
     fun synTrackLive(track: Int, on: Boolean, semi: Int, vel: Float, tag: Int) {
         synths?.getOrNull(track)?.queue(-1, on, semi, vel, tag)

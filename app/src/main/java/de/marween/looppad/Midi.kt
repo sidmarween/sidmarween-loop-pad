@@ -40,10 +40,20 @@ object Midi {
     @Volatile var keysTarget = 0
     val KEYS_TARGETS = arrayOf("Pad", "🗣 Vocal-Chop", "🎼 Chord-Pad", "🚀 FX-Generator")
     private val mainH = Handler(android.os.Looper.getMainLooper())
-    /** 303 live spielen: Kanal (0 = aus). Mehrere Tasten gehalten = Slide, fester Anschlag = Accent. */
-    @Volatile var acidChannel = 0
-    /** 909 live spielen: Kanal (0 = aus), Belegung 0 = der Reihe nach ab C1 (MPK-Pads), 1 = General MIDI. */
-    @Volatile var drumChannel = 0
+    /** Instrument je MIDI-Kanal (Index = Kanal − 1, Wert = Eintrag in [INST_TARGETS], 0 = keins). */
+    val chInst = IntArray(16)
+    val INST_TARGETS = arrayOf("–", "🔊 ACID 303", "🥁 DRUM 909", "🎹 SYNTH 1", "🎹 SYNTH 2", "🎹 SYNTH 3", "🎹 KEYS", "🎸 BASSLINE",
+        "🗣 Vocal-Chop", "🎼 Chord-Pad", "🚀 FX-Generator", "🎶 Harmonizer", "✋ Touch-Lab", "🏛 Architect")
+    const val T_ACID = 1; const val T_DRUM = 2; const val T_SYN0 = 3
+    /** Kanal, auf dem ein Instrument liegt (1–16) oder 0. */
+    fun chOf(target: Int): Int = chInst.indexOf(target) + 1
+    /** Instrument auf einen Kanal legen (ein Instrument liegt immer nur auf einem Kanal). */
+    fun setCh(ch: Int, target: Int) {
+        if (ch !in 1..16) return
+        if (target > 0) for (i in chInst.indices) if (chInst[i] == target) chInst[i] = 0
+        chInst[ch - 1] = target
+    }
+    /** 909-Belegung: 0 = der Reihe nach ab C1 (MPK-Pads), 1 = General MIDI. */
     @Volatile var drumMap = 0
     val DRUM_ORDER = intArrayOf(0, 1, 7, 8, 6, 5, 2, 3, 4, 9, 10)   // BD SD CH OH CP RS LT MT HT CR RD
     val DRUM_SHORT = arrayOf("BD", "SD", "LT", "MT", "HT", "RS", "CP", "CH", "OH", "CR", "RD")
@@ -158,8 +168,10 @@ object Midi {
             keysChannel = o.optInt("keysCh", 2)
             keysPad = o.optInt("keysPad", -1)
             keysTarget = o.optInt("keysTarget", 0).coerceIn(0, 3)
-            acidChannel = o.optInt("acidCh", 0).coerceIn(0, 16)
-            drumChannel = o.optInt("drumCh", 0).coerceIn(0, 16)
+            java.util.Arrays.fill(chInst, 0)
+            o.optJSONArray("chInst")?.let { a -> for (i in 0 until min(16, a.length())) chInst[i] = a.optInt(i, 0).coerceIn(0, INST_TARGETS.size - 1) }
+            o.optInt("acidCh", 0).let { if (it in 1..16 && chOf(T_ACID) == 0) setCh(it, T_ACID) }
+            o.optInt("drumCh", 0).let { if (it in 1..16 && chOf(T_DRUM) == 0) setCh(it, T_DRUM) }
             drumMap = o.optInt("drumMap", 0).coerceIn(0, 1)
             clockIn = o.optBoolean("clockIn", false)
             clockOut = o.optBoolean("clockOut", false)
@@ -180,7 +192,7 @@ object Midi {
     fun save(p: SharedPreferences) {
         val o = JSONObject()
         o.put("on", enabled); o.put("ch", channel); o.put("base", padBase); o.put("vel", velocity)
-        o.put("acidCh", acidChannel); o.put("drumCh", drumChannel); o.put("drumMap", drumMap)
+        o.put("chInst", JSONArray().apply { chInst.forEach { put(it) } }); o.put("drumMap", drumMap)
         o.put("keysCh", keysChannel); o.put("keysPad", keysPad); o.put("keysTarget", keysTarget); o.put("clockIn", clockIn); o.put("clockOut", clockOut)
         o.put("transport", transportIn); o.put("prog", programScenes)
         o.put("pads", JSONArray().apply { padNotes.forEach { put(it) } })
@@ -467,8 +479,8 @@ object Midi {
                     onHint?.invoke("Pad ${p + 1} ← ${noteName(d1)} ($d1)")
                     return
                 }
-                if (drumChannel > 0 && ch == drumChannel) { if (on) drumNote(d1, d2); return }
-                if (acidChannel > 0 && ch == acidChannel) { acidNote(d1, on, d2); return }
+                val tgt = chInst[ch - 1]
+                if (tgt > 0) { instNote(tgt, d1, on, d2); return }
                 if (Harmonizer.takesMidi()) {
                     if (on) Harmonizer.noteOn(d1) else Harmonizer.noteOff(d1)
                     return
@@ -519,8 +531,26 @@ object Midi {
     // ---------------------------------------------------------------- 303 / 909 live
     private val acidHeld = ArrayList<Int>()
 
-    /** Note → Ton der 303: Taste klingt in ihrer echten Tonhöhe (C3 auf dem Keyboard = C3 aus der 303). */
-    private fun acidSemi(note: Int) = note - 36 - 12 * InstState.acidOct - InstState.acidTune
+    /** Note → Ton: C4 (60) = Grundton der Spur – wie am Touchpad, die Oktave der Spur gilt weiter. */
+    private fun acidSemi(note: Int) = note - 60
+
+    /** Note auf das Instrument [tgt] (siehe [INST_TARGETS]). */
+    private fun instNote(tgt: Int, note: Int, on: Boolean, vel: Int) {
+        val v = if (velocity) max(0.05f, vel / 127f) else 0.9f
+        when (tgt) {
+            T_ACID -> acidNote(note, on, vel)
+            T_DRUM -> if (on) drumNote(note, vel)
+            in T_SYN0 until T_SYN0 + InstState.SYN_TRACKS -> {
+                val tr = tgt - T_SYN0
+                Engine.synTrackLiveRec(tr, on, note - 60, v, 5000 + tr * 128 + note)
+                onKeysNote?.invoke(note - 60, on)
+            }
+            8, 9, 10 -> extra(tgt - 7, note, on, vel)
+            11 -> if (on) Harmonizer.noteOn(note) else Harmonizer.noteOff(note)
+            12 -> if (on) TouchLab.noteOn(7000 + note, note.toDouble(), v) else TouchLab.noteOff(7000 + note)
+            13 -> if (on) Architect.preview(Math.floorMod(note - 36, Architect.T))
+        }
+    }
 
     private fun acidNote(note: Int, on: Boolean, vel: Int) {
         val acc = velocity && vel >= 100
@@ -560,7 +590,7 @@ object Midi {
 
     /** Ein-Tipp-Einstellung für Akai MPK Mini: Tasten (K1) → 303, Pads (K10) → 909, Drehregler K1–K6 → 303. */
     fun setupMpkMini() {
-        acidChannel = 1; drumChannel = 10; drumMap = 0
+        setCh(1, T_ACID); setCh(10, T_DRUM); drumMap = 0
         if (keysChannel == 1 || keysChannel == 10) keysChannel = 0
         if (channel == 1 || channel == 10) channel = 0
         for (k in 0 until 8) {
@@ -589,9 +619,11 @@ object Midi {
 
     /** Tastatur → neue Instrumente. Vocal-Chop: C2–D#3 (36–51) = Chops 1–16, sonst Tonhöhe des gewählten Chops (C4 = Original).
      *  Chord-Pad: weiße Tasten C D E F G A H = Stufen I–VII, C eine Oktave höher = I'. FX-Generator: Note mod 8 = Effekt. */
-    private fun keysExtra(note: Int, on: Boolean, vel: Int): Boolean {
+    private fun keysExtra(note: Int, on: Boolean, vel: Int): Boolean = extra(keysTarget, note, on, vel)
+
+    private fun extra(target: Int, note: Int, on: Boolean, vel: Int): Boolean {
         val v = if (velocity) max(0.05f, vel / 127f) else 0.9f
-        when (keysTarget) {
+        when (target) {
             1 -> {
                 val s = VocalChop.src ?: return true
                 if (note in 36..51) { val c = note - 36; if (c < s.count) { if (on) VocalChop.on(c, 0, 3000 + note) else VocalChop.off(3000 + note) } }
