@@ -54,6 +54,12 @@ object Midi {
         if (target > 0) for (i in chInst.indices) if (chInst[i] == target) chInst[i] = 0
         chInst[ch - 1] = target
     }
+    /** Gelernte 909-Pads: je Stimme (Index = Position in [DRUM_ORDER]) Kanal+Note als (ch−1)·128+Note, −1 = keins.
+     *  Haben Vorrang vor der Kanal-Belegung – so gehen Pads auch, wenn sie auf demselben Kanal wie die Tasten senden. */
+    val drumNotes = IntArray(11) { -1 }
+    /** Lernen: Position in [DRUM_ORDER], die das nächste angeschlagene Pad bekommt (−1 = aus). */
+    @Volatile var learnDrum = -1
+    fun drumLearnedCount() = drumNotes.count { it >= 0 }
     /** 909-Belegung: 0 = der Reihe nach ab C1 (MPK-Pads), 1 = General MIDI. */
     @Volatile var drumMap = 0
     val DRUM_ORDER = intArrayOf(0, 1, 7, 8, 6, 5, 2, 3, 4, 9, 10)   // BD SD CH OH CP RS LT MT HT CR RD
@@ -175,6 +181,8 @@ object Midi {
             o.optInt("drumCh", 0).let { if (it in 1..16 && chOf(T_DRUM) == 0) setCh(it, T_DRUM) }
             drumMap = o.optInt("drumMap", 0).coerceIn(0, 1)
             usbDirect = o.optBoolean("usbDirect", false)
+            java.util.Arrays.fill(drumNotes, -1)
+            o.optJSONArray("drumNotes")?.let { a -> for (i in 0 until min(drumNotes.size, a.length())) drumNotes[i] = a.optInt(i, -1) }
             clockIn = o.optBoolean("clockIn", false)
             clockOut = o.optBoolean("clockOut", false)
             transportIn = o.optBoolean("transport", true)
@@ -195,6 +203,7 @@ object Midi {
         val o = JSONObject()
         o.put("on", enabled); o.put("ch", channel); o.put("base", padBase); o.put("vel", velocity)
         o.put("chInst", JSONArray().apply { chInst.forEach { put(it) } }); o.put("drumMap", drumMap); o.put("usbDirect", usbDirect)
+        o.put("drumNotes", JSONArray().apply { drumNotes.forEach { put(it) } })
         o.put("keysCh", keysChannel); o.put("keysPad", keysPad); o.put("keysTarget", keysTarget); o.put("clockIn", clockIn); o.put("clockOut", clockOut)
         o.put("transport", transportIn); o.put("prog", programScenes)
         o.put("pads", JSONArray().apply { padNotes.forEach { put(it) } })
@@ -499,6 +508,16 @@ object Midi {
                     onHint?.invoke("Pad ${p + 1} ← ${noteName(d1)} ($d1)")
                     return
                 }
+                if (on && learnDrum >= 0) {
+                    val k = learnDrum
+                    for (i in drumNotes.indices) if (i != k && drumNotes[i] == code) drumNotes[i] = -1
+                    drumNotes[k] = code
+                    onHint?.invoke("909 ${DRUM_SHORT[DRUM_ORDER[k]]} ← Kanal $ch · ${noteName(d1)} ($d1)")
+                    learnDrum = if (k + 1 < DRUM_ORDER.size) k + 1 else -1
+                    return
+                }
+                val di = drumNotes.indexOf(code)
+                if (di >= 0) { if (on) { val v = if (velocity) max(0.08f, d2 / 127f) else 1f; Engine.drumHit(DRUM_ORDER[di], velocity && d2 >= 110, v) }; return }
                 val tgt = chInst[ch - 1]
                 if (tgt > 0) { instNote(tgt, d1, on, d2); return }
                 if (Harmonizer.takesMidi()) {

@@ -7052,7 +7052,11 @@ class MainActivity : Activity() {
                     hint(if (w == 0) "Der Reihe nach: " + (0 until 8).joinToString(" · ") { "Pad ${it + 1} ${Midi.DRUM_SHORT[Midi.DRUM_ORDER[it]]}" } else "GM: 36 BD · 38 SD · 39 CP · 42 CH · 46 OH · 41/45/48 Toms · 49 CR · 51 RD")
                 }.show()
         }
-        box.addView(instBtn); box.addView(mapBtn)
+        val learnDrBtn = Button(this)
+        fun learnDrLabel() { learnDrBtn.text = "🎓 909-Pads lernen (Pad antippen → Klang)" + (if (Midi.drumLearnedCount() > 0) " · ${Midi.drumLearnedCount()} gelernt" else "") + " …" }
+        learnDrLabel()
+        learnDrBtn.setOnClickListener { midiLearnDrums { learnDrLabel() } }
+        box.addView(instBtn); box.addView(learnDrBtn); box.addView(mapBtn)
         box.addView(Button(this).apply {
             text = "🎹 MIDI-Ausgang: Instrumente spielen externe Synths …"
             setOnClickListener { midiOutSetup() }
@@ -7096,6 +7100,48 @@ class MainActivity : Activity() {
                 Midi.save(prefs)
             }
             .show()
+    }
+
+    /** 909-Pads der Reihe nach lernen: BD, SD, CH, OH … – das jeweils angeschlagene Pad bekommt den Klang. */
+    private fun midiLearnDrums(done: () -> Unit) {
+        val tv = TextView(this).apply {
+            textSize = 20f; setTextColor(Color.WHITE); gravity = android.view.Gravity.CENTER
+            val p = (20 * resources.displayMetrics.density).toInt(); setPadding(p, p, p, p / 2)
+        }
+        val sub = TextView(this).apply {
+            textSize = 13f; setTextColor(Color.rgb(170, 175, 185)); gravity = android.view.Gravity.CENTER
+            val p = (20 * resources.displayMetrics.density).toInt(); setPadding(p, 0, p, p / 2)
+        }
+        val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; addView(tv); addView(sub) }
+        val names = arrayOf("Bass Drum", "Snare", "Closed Hat", "Open Hat", "Clap", "Rimshot", "Low Tom", "Mid Tom", "High Tom", "Crash", "Ride")
+        Midi.learnDrum = 0
+        var dlg: AlertDialog? = null
+        val tick = object : Runnable {
+            override fun run() {
+                val k = Midi.learnDrum
+                if (k < 0) { tv.text = "✓ Fertig"; sub.text = "${Midi.drumLearnedCount()} Pads spielen jetzt die 909 – egal auf welchem Kanal sie senden."; return }
+                tv.text = "Pad für ${names[k]} (${Midi.DRUM_SHORT[Midi.DRUM_ORDER[k]]}) anschlagen"
+                sub.text = "Schritt ${k + 1} von ${names.size} · gelernte Pads haben Vorrang vor der Kanal-Belegung"
+                tv.postDelayed(this, 100L)
+            }
+        }
+        dlg = ui().setTitle("🎓 909-Pads lernen").setView(box)
+            .setPositiveButton("Fertig", null)
+            .setNeutralButton("Überspringen", null)
+            .setNegativeButton("Alle löschen", null)
+            .create()
+        dlg.setOnShowListener {
+            dlg.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener {
+                val k = Midi.learnDrum
+                if (k >= 0) { Midi.drumNotes[k] = -1; Midi.learnDrum = if (k + 1 < names.size) k + 1 else -1; if (Midi.learnDrum < 0) tick.run() }
+            }
+            dlg.getButton(AlertDialog.BUTTON_NEGATIVE).setOnClickListener {
+                java.util.Arrays.fill(Midi.drumNotes, -1); Midi.learnDrum = 0; tv.removeCallbacks(tick); tick.run(); hint("Gelernte 909-Pads gelöscht")
+            }
+        }
+        dlg.setOnDismissListener { tv.removeCallbacks(tick); Midi.learnDrum = -1; Midi.save(getSharedPreferences("marvpad", MODE_PRIVATE)); done() }
+        dlg.show()
+        tick.run()
     }
 
     /** Jedem MIDI-Kanal ein Instrument geben. */
