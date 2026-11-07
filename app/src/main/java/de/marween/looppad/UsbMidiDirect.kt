@@ -22,6 +22,13 @@ object UsbMidiDirect {
     private const val ACTION = "de.marween.looppad.USB_MIDI_PERMISSION"
     @Volatile var running = false; private set
     @Volatile var status = "aus"; private set
+    /** Zähler für die Diagnose: USB-Lesevorgänge mit Daten, empfangene Bytes, davon MIDI-Ereignisse. */
+    @Volatile var reads = 0L; private set
+    @Volatile var bytes = 0L; private set
+    @Volatile var events = 0L; private set
+    @Volatile var lastRaw = ""; private set
+    @Volatile var info = ""; private set
+    fun statusLine(): String = if (!running) status else "$status · USB-Pakete $reads · Bytes $bytes · MIDI $events" + (if (lastRaw.isNotEmpty()) " · zuletzt $lastRaw" else "")
     @Volatile private var stop = false
     private var conn: UsbDeviceConnection? = null
     private var thread: Thread? = null
@@ -66,6 +73,9 @@ object UsbMidiDirect {
             return status
         }
         val (intf, ep) = midiIn(dev)!!
+        info = "Schnittstelle ${intf.id} (Klasse ${intf.interfaceClass}/${intf.interfaceSubclass}), Endpunkt ${ep.address} " +
+            (if (ep.type == UsbConstants.USB_ENDPOINT_XFER_BULK) "Bulk" else "Interrupt") + ", ${ep.maxPacketSize} Bytes"
+        reads = 0; bytes = 0; events = 0; lastRaw = ""
         val c = um.openDevice(dev) ?: return "USB-Gerät ließ sich nicht öffnen".also { status = it }
         if (!c.claimInterface(intf, true)) { c.close(); return "USB-Schnittstelle belegt".also { status = it } }
         conn = c
@@ -80,6 +90,10 @@ object UsbMidiDirect {
             while (!stop) {
                 val n = try { c.bulkTransfer(ep, buf, buf.size, 250) } catch (e: Throwable) { -2 }
                 if (n == -2 || (n < 0 && um.deviceList.values.none { it.deviceId == dev.deviceId })) break   // abgezogen
+                if (n > 0) {
+                    reads++; bytes += n
+                    lastRaw = (0 until minOf(n, 8)).joinToString(" ") { String.format("%02X", buf[it]) }
+                }
                 var i = 0
                 while (i + 4 <= n) {
                     val len = when (buf[i].toInt() and 0x0F) {
@@ -88,7 +102,7 @@ object UsbMidiDirect {
                         0x3, 0x4, 0x7, 0x8, 0x9, 0xA, 0xB, 0xE -> 3
                         else -> 0
                     }
-                    if (len > 0) { m[0] = buf[i + 1]; m[1] = buf[i + 2]; m[2] = buf[i + 3]; Midi.feed(name, m, len) }
+                    if (len > 0) { m[0] = buf[i + 1]; m[1] = buf[i + 2]; m[2] = buf[i + 3]; Midi.feed(name, m, len); events++ }
                     i += 4
                 }
             }

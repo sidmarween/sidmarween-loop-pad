@@ -6889,7 +6889,7 @@ class MainActivity : Activity() {
         }
         val logScroll = android.widget.ScrollView(this).apply { addView(log) }
         val directBtn = Button(this).apply { textSize = 11f }
-        fun directLabel() { directBtn.text = if (Midi.usbDirect) "🔌 DIREKT-USB: AN · ${UsbMidiDirect.status}" else "🔌 KOMMT NICHTS AN? DIREKT-USB VERSUCHEN" }
+        fun directLabel() { directBtn.text = if (Midi.usbDirect) "🔌 DIREKT-USB: AN · ${UsbMidiDirect.statusLine()}" + (if (UsbMidiDirect.running && UsbMidiDirect.info.isNotEmpty()) "\n${UsbMidiDirect.info}" else "") else "🔌 KOMMT NICHTS AN? DIREKT-USB VERSUCHEN" }
         directLabel()
         directBtn.setOnClickListener {
             Midi.usbDirect = !Midi.usbDirect
