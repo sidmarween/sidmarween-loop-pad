@@ -6,6 +6,7 @@ import android.media.midi.MidiDevice
 import android.media.midi.MidiDeviceInfo
 import android.media.midi.MidiInputPort
 import android.media.midi.MidiManager
+import android.os.Build
 import android.media.midi.MidiOutputPort
 import android.media.midi.MidiReceiver
 import android.os.Handler
@@ -239,8 +240,7 @@ object Midi {
         t.start()
         thread = t
         handler = Handler(t.looper)
-        @Suppress("DEPRECATION")
-        for (info in m.devices) open(info)
+        for (info in midiDevices(m)) open(info)
         @Suppress("DEPRECATION")
         m.registerDeviceCallback(object : MidiManager.DeviceCallback() {
             override fun onDeviceAdded(device: MidiDeviceInfo) {
@@ -274,23 +274,26 @@ object Midi {
                 deviceNames = emptyList()
                 devStatus.clear()
             }
-            @Suppress("DEPRECATION")
-            for (info in m.devices) open(info)
+            for (info in midiDevices(m)) try { open(info) } catch (e: Throwable) { }
         }
     }
+
+    /** Geräte für klassisches MIDI 1.0 (ab Android 13 über die Transport-Abfrage). */
+    private fun midiDevices(m: MidiManager): Collection<MidiDeviceInfo> = try {
+        if (Build.VERSION.SDK_INT >= 33) m.getDevicesForTransport(MidiManager.TRANSPORT_MIDI_BYTE_STREAM)
+        else @Suppress("DEPRECATION") m.devices.toList()
+    } catch (e: Throwable) { try { @Suppress("DEPRECATION") m.devices.toList() } catch (e2: Throwable) { emptyList() } }
 
     /** Alle angeschlossenen Geräte (auch ausgeschaltete) – für die Einstellungen. */
     fun allDevices(): List<String> {
         val m = manager ?: return emptyList()
-        @Suppress("DEPRECATION")
-        return m.devices.map { nameOf(it) }.distinct()
+        return midiDevices(m).map { nameOf(it) }.distinct()
     }
 
     /** Diagnose: jedes Gerät, das Android als MIDI meldet, mit Anschlüssen und Zustand. */
     fun diagnose(): List<String> {
         val m = manager ?: return emptyList()
-        @Suppress("DEPRECATION")
-        return m.devices.map { info ->
+        return midiDevices(m).map { info ->
             val n = nameOf(info)
             val outs = info.outputPortCount; val ins = info.inputPortCount
             val kind = when (info.type) { MidiDeviceInfo.TYPE_USB -> "USB"; MidiDeviceInfo.TYPE_BLUETOOTH -> "Bluetooth"; else -> "virtuell" }
@@ -305,7 +308,7 @@ object Midi {
         if (usbDirect && info.type == MidiDeviceInfo.TYPE_USB) { devStatus[name] = "läuft über Direkt-USB"; return }
         devStatus[name] = "wird geöffnet …"
         // eigene virtuelle Ports und reine Synthesizer überspringen wir nicht – die Auswahl macht der Nutzer
-        m.openDevice(info, { dev ->
+        try { m.openDevice(info, { dev ->
             if (dev == null) { devStatus[name] = "⚠ Android konnte das Gerät nicht öffnen (von anderer App belegt?)"; return@openDevice }
             var opened = 0; var failed = 0
             synchronized(devices) {
@@ -326,7 +329,10 @@ object Midi {
                 failed > 0 -> "⚠ Sende-Anschluss belegt – eine andere MIDI-App schließen und NEU VERBINDEN"
                 else -> "⚠ Gerät sendet kein MIDI (kein Ausgang)"
             }
-        }, handler)
+        }, handler) } catch (e: Throwable) {
+            // Android 17 (Samsung) wirft hier teils intern eine NullPointerException im MIDI-Dienst
+            devStatus[name] = "⚠ Android-MIDI-Dienst meldet einen Fehler beim Öffnen – DIREKT-USB benutzen"
+        }
     }
 
     private fun closeDevice(info: MidiDeviceInfo) {
