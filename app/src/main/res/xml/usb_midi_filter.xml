@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- USB-MIDI-Geräte (Audio-Klasse 1, Unterklasse 3 = MIDI-Streaming): Android darf Marv PAD dafür dauerhaft freigeben -->
+<resources>
+    <usb-device class="1" subclass="3" />
+    <usb-device vendor-id="2536" />
+</resources>

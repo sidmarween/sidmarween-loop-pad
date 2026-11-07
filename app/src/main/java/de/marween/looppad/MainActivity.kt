@@ -613,6 +613,10 @@ class MainActivity : Activity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
+        if (intent.action == android.hardware.usb.UsbManager.ACTION_USB_DEVICE_ATTACHED) {
+            window.decorView.postDelayed({ try { if (Midi.usbDirect) UsbMidiDirect.start(this) else Midi.reopen() } catch (e: Throwable) { } }, 600L)
+            return
+        }
         window.decorView.postDelayed({ handleSharedAudio(intent) }, 400L)
     }
 
@@ -756,6 +760,7 @@ class MainActivity : Activity() {
         TouchVelocity.update(this)
         window.decorView.postDelayed({ captureOnResume() }, 400L)
         window.decorView.postDelayed(deckAutosave, 5_000L)
+        window.decorView.postDelayed({ try { UsbMidiDirect.ensure(this) } catch (e: Throwable) { } }, 900L)
     }
 
     override fun onPause() {

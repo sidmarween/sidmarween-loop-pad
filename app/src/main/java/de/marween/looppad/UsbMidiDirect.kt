@@ -33,6 +33,7 @@ object UsbMidiDirect {
     private var conn: UsbDeviceConnection? = null
     private var thread: Thread? = null
     private var receiverOn = false
+    private var askedAt = 0L
 
     /** USB-MIDI-Schnittstelle (Audio-Klasse 1, Unterklasse 3) mit Eingangs-Endpunkt suchen. */
     private fun midiIn(d: UsbDevice): Pair<UsbInterface, UsbEndpoint>? {
@@ -51,6 +52,7 @@ object UsbMidiDirect {
 
     fun start(ctx: Context): String {
         if (running) return status
+        stop = false
         val um = ctx.getSystemService(Context.USB_SERVICE) as? UsbManager ?: return "USB nicht verfügbar".also { status = it }
         val dev = um.deviceList.values.firstOrNull { midiIn(it) != null } ?: return "Kein USB-MIDI-Gerät am Anschluss".also { status = it }
         if (!um.hasPermission(dev)) {
@@ -69,7 +71,7 @@ object UsbMidiDirect {
             val flags = if (Build.VERSION.SDK_INT >= 31) PendingIntent.FLAG_MUTABLE else 0
             val pi = PendingIntent.getBroadcast(app, 0, Intent(ACTION).setPackage(app.packageName), flags)
             um.requestPermission(dev, pi)
-            status = "Warte auf USB-Freigabe …"
+            status = "Warte auf USB-Freigabe …"; askedAt = System.currentTimeMillis()
             return status
         }
         val (intf, ep) = midiIn(dev)!!
@@ -116,4 +118,27 @@ object UsbMidiDirect {
     }
 
     fun stop() { stop = true }
+
+    private var watchOn = false
+    /** Ein-/Ausstecken beobachten: im Direkt-Modus beim Einstecken sofort wieder öffnen (Android-MIDI-Meldungen
+     *  kommen auf manchen Samsung-Handys nicht zuverlässig). */
+    fun watch(ctx: Context) {
+        if (watchOn) return
+        watchOn = true
+        val app = ctx.applicationContext
+        val r = object : BroadcastReceiver() {
+            override fun onReceive(c: Context, i: Intent) {
+                when (i.action) {
+                    UsbManager.ACTION_USB_DEVICE_ATTACHED -> if (Midi.usbDirect) android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({ start(app) }, 700)
+                    UsbManager.ACTION_USB_DEVICE_DETACHED -> { stop = true; status = "Gerät abgezogen" }
+                }
+            }
+        }
+        val f = IntentFilter().apply { addAction(UsbManager.ACTION_USB_DEVICE_ATTACHED); addAction(UsbManager.ACTION_USB_DEVICE_DETACHED) }
+        if (Build.VERSION.SDK_INT >= 33) app.registerReceiver(r, f, Context.RECEIVER_EXPORTED)
+        else @Suppress("UnspecifiedRegisterReceiverFlag") app.registerReceiver(r, f)
+    }
+
+    /** Läuft Direkt-USB noch? Sonst (falls eingeschaltet und ein Gerät steckt) neu starten – z. B. beim Zurückkehren in die App. */
+    fun ensure(ctx: Context) { if (Midi.usbDirect && !running && (!status.startsWith("Warte") || System.currentTimeMillis() - askedAt > 8000)) start(ctx) }
 }

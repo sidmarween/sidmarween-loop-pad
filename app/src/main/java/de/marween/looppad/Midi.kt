@@ -241,6 +241,7 @@ object Midi {
         if (manager != null) return
         if (!ctx.packageManager.hasSystemFeature("android.software.midi")) { startProblem = "Dieses Handy meldet keine MIDI-Unterstützung (android.software.midi fehlt)."; return }
         appCtx = ctx.applicationContext
+        try { UsbMidiDirect.watch(ctx) } catch (e: Throwable) { }
         if (usbDirect) mainH.postDelayed({ UsbMidiDirect.start(ctx.applicationContext) }, 800)
         val m = ctx.getSystemService(Context.MIDI_SERVICE) as? MidiManager ?: run { startProblem = "Android-MIDI-Dienst nicht erreichbar."; return }
         startProblem = null

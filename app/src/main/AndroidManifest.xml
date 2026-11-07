@@ -40,6 +40,13 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+            <!-- USB-MIDI-Controller eingesteckt: Marv PAD anbieten, Zugriff dauerhaft merken -->
+            <intent-filter>
+                <action android:name="android.hardware.usb.action.USB_DEVICE_ATTACHED" />
+            </intent-filter>
+            <meta-data
+                android:name="android.hardware.usb.action.USB_DEVICE_ATTACHED"
+                android:resource="@xml/usb_midi_filter" />
             <!-- „Teilen → Marv PAD“ und „Öffnen mit“ für Audio-Dateien -->
             <intent-filter android:label="Auf ein Pad laden">
                 <action android:name="android.intent.action.SEND" />
