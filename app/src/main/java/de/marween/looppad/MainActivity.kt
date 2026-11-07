@@ -6888,7 +6888,17 @@ class MainActivity : Activity() {
             setBackgroundColor(Color.rgb(12, 12, 16)); setPadding(px(8f), px(6f), px(8f), px(6f))
         }
         val logScroll = android.widget.ScrollView(this).apply { addView(log) }
-        box.addView(dev); box.addView(diag); box.addView(reBtn); box.addView(ledRow); box.addView(clockTv)
+        val directBtn = Button(this).apply { textSize = 11f }
+        fun directLabel() { directBtn.text = if (Midi.usbDirect) "🔌 DIREKT-USB: AN · ${UsbMidiDirect.status}" else "🔌 KOMMT NICHTS AN? DIREKT-USB VERSUCHEN" }
+        directLabel()
+        directBtn.setOnClickListener {
+            Midi.usbDirect = !Midi.usbDirect
+            Midi.save(getSharedPreferences("marvpad", MODE_PRIVATE))
+            if (Midi.usbDirect) { Midi.reopen(); directBtn.postDelayed({ UsbMidiDirect.start(this@MainActivity) }, 400); hint("Direkt-USB: Android fragt evtl. nach Zugriff auf das Gerät – erlauben") }
+            else { UsbMidiDirect.stop(); Midi.reopen() }
+            directLabel()
+        }
+        box.addView(dev); box.addView(diag); box.addView(reBtn); box.addView(directBtn); box.addView(ledRow); box.addView(clockTv)
         box.addView(CheckBox(this).apply {
             text = "Clock & Active Sensing nicht einzeln auflisten"; isChecked = true; setTextColor(Color.WHITE); textSize = 12f
             setOnCheckedChangeListener { _, c -> hideClock = c }
@@ -6908,7 +6918,7 @@ class MainActivity : Activity() {
             override fun run() {
                 val now = System.currentTimeMillis()
                 dev.text = if (Midi.deviceNames.isEmpty()) "Kein MIDI-Gerät verbunden" else "Verbunden: " + Midi.deviceNames.joinToString(", ") + (if (!Midi.enabled) "\n⚠ MIDI ist aus – Signale kommen an, werden aber nicht gespielt" else "")
-                if (now - diagAt > 1000) { diagAt = now; diag.text = midiDiagText() }
+                if (now - diagAt > 1000) { diagAt = now; diag.text = midiDiagText(); directLabel() }
                 val age = if (mon.lastAt == 0L) Long.MAX_VALUE else now - mon.lastAt
                 ledBg.setColor(when { age < 120 -> Color.rgb(60, 255, 120); age < 600 -> Color.rgb(30, 140, 70); else -> Color.rgb(40, 40, 48) })
                 stat.text = if (mon.total == 0L && mon.clocks == 0L) "Warte auf Signal …" else

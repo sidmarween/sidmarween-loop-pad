@@ -173,6 +173,7 @@ object Midi {
             o.optInt("acidCh", 0).let { if (it in 1..16 && chOf(T_ACID) == 0) setCh(it, T_ACID) }
             o.optInt("drumCh", 0).let { if (it in 1..16 && chOf(T_DRUM) == 0) setCh(it, T_DRUM) }
             drumMap = o.optInt("drumMap", 0).coerceIn(0, 1)
+            usbDirect = o.optBoolean("usbDirect", false)
             clockIn = o.optBoolean("clockIn", false)
             clockOut = o.optBoolean("clockOut", false)
             transportIn = o.optBoolean("transport", true)
@@ -192,7 +193,7 @@ object Midi {
     fun save(p: SharedPreferences) {
         val o = JSONObject()
         o.put("on", enabled); o.put("ch", channel); o.put("base", padBase); o.put("vel", velocity)
-        o.put("chInst", JSONArray().apply { chInst.forEach { put(it) } }); o.put("drumMap", drumMap)
+        o.put("chInst", JSONArray().apply { chInst.forEach { put(it) } }); o.put("drumMap", drumMap); o.put("usbDirect", usbDirect)
         o.put("keysCh", keysChannel); o.put("keysPad", keysPad); o.put("keysTarget", keysTarget); o.put("clockIn", clockIn); o.put("clockOut", clockOut)
         o.put("transport", transportIn); o.put("prog", programScenes)
         o.put("pads", JSONArray().apply { padNotes.forEach { put(it) } })
@@ -222,12 +223,15 @@ object Midi {
 
     /** Warum MIDI nicht läuft (null = alles gut) – für den Monitor. */
     @Volatile var startProblem: String? = null
+    private var appCtx: Context? = null
     /** Zustand je Gerät (Name → Text) – für den Monitor. */
     val devStatus = java.util.concurrent.ConcurrentHashMap<String, String>()
 
     fun start(ctx: Context) {
         if (manager != null) return
         if (!ctx.packageManager.hasSystemFeature("android.software.midi")) { startProblem = "Dieses Handy meldet keine MIDI-Unterstützung (android.software.midi fehlt)."; return }
+        appCtx = ctx.applicationContext
+        if (usbDirect) mainH.postDelayed({ UsbMidiDirect.start(ctx.applicationContext) }, 800)
         val m = ctx.getSystemService(Context.MIDI_SERVICE) as? MidiManager ?: run { startProblem = "Android-MIDI-Dienst nicht erreichbar."; return }
         startProblem = null
         manager = m
@@ -240,6 +244,7 @@ object Midi {
         @Suppress("DEPRECATION")
         m.registerDeviceCallback(object : MidiManager.DeviceCallback() {
             override fun onDeviceAdded(device: MidiDeviceInfo) {
+                if (usbDirect && device.type == MidiDeviceInfo.TYPE_USB) { appCtx?.let { c -> mainH.postDelayed({ UsbMidiDirect.start(c) }, 600) }; return }
                 open(device)
                 onHint?.invoke("🎹 MIDI verbunden: ${nameOf(device)}")
             }
@@ -297,6 +302,7 @@ object Midi {
         val m = manager ?: return
         val name = nameOf(info)
         if (name in disabled) { devStatus[name] = "ausgeschaltet unter „🔌 Geräte an/aus“"; return }
+        if (usbDirect && info.type == MidiDeviceInfo.TYPE_USB) { devStatus[name] = "läuft über Direkt-USB"; return }
         devStatus[name] = "wird geöffnet …"
         // eigene virtuelle Ports und reine Synthesizer überspringen wir nicht – die Auswahl macht der Nutzer
         m.openDevice(info, { dev ->
@@ -443,6 +449,14 @@ object Midi {
             }
         }
     }
+
+    /** Direkt-USB: Bytes eines Geräts in den Parser (eigener Parser je Gerät). */
+    private val directParsers = HashMap<String, Parser>()
+    fun feed(dev: String, b: ByteArray, len: Int) {
+        val p = synchronized(directParsers) { directParsers.getOrPut(dev) { Parser("$dev (direkt)") } }
+        p.onSend(b, 0, len, System.nanoTime())
+    }
+    @Volatile var usbDirect = false
 
     /** Zeitstempel des gerade verarbeiteten MIDI-Ereignisses (System.nanoTime-Basis). */
     @Volatile private var curTs = 0L

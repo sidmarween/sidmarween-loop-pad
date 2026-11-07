@@ -1,0 +1,105 @@
+package de.marween.looppad
+
+import android.app.PendingIntent
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
+import android.hardware.usb.UsbConstants
+import android.hardware.usb.UsbDevice
+import android.hardware.usb.UsbDeviceConnection
+import android.hardware.usb.UsbEndpoint
+import android.hardware.usb.UsbInterface
+import android.hardware.usb.UsbManager
+import android.os.Build
+
+/**
+ * Direkt-USB-Modus: liest USB-MIDI-Controller selbst über die USB-Schnittstelle (an Android-MIDI vorbei).
+ * Für Handys, bei denen Android das Gerät zwar erkennt, aber keine Daten weiterreicht.
+ * USB-MIDI kommt in 4-Byte-Paketen (Kabelnummer/CIN + bis zu 3 MIDI-Bytes), die hier in den normalen Parser gehen.
+ */
+object UsbMidiDirect {
+    private const val ACTION = "de.marween.looppad.USB_MIDI_PERMISSION"
+    @Volatile var running = false; private set
+    @Volatile var status = "aus"; private set
+    @Volatile private var stop = false
+    private var conn: UsbDeviceConnection? = null
+    private var thread: Thread? = null
+    private var receiverOn = false
+
+    /** USB-MIDI-Schnittstelle (Audio-Klasse 1, Unterklasse 3) mit Eingangs-Endpunkt suchen. */
+    private fun midiIn(d: UsbDevice): Pair<UsbInterface, UsbEndpoint>? {
+        for (i in 0 until d.interfaceCount) {
+            val f = d.getInterface(i)
+            val isMidi = f.interfaceClass == UsbConstants.USB_CLASS_AUDIO && f.interfaceSubclass == 3
+            if (!isMidi && f.interfaceClass != UsbConstants.USB_CLASS_VENDOR_SPEC) continue
+            for (e in 0 until f.endpointCount) {
+                val ep = f.getEndpoint(e)
+                if (ep.direction == UsbConstants.USB_DIR_IN &&
+                    (ep.type == UsbConstants.USB_ENDPOINT_XFER_BULK || ep.type == UsbConstants.USB_ENDPOINT_XFER_INT)) return f to ep
+            }
+        }
+        return null
+    }
+
+    fun start(ctx: Context): String {
+        if (running) return status
+        val um = ctx.getSystemService(Context.USB_SERVICE) as? UsbManager ?: return "USB nicht verfügbar".also { status = it }
+        val dev = um.deviceList.values.firstOrNull { midiIn(it) != null } ?: return "Kein USB-MIDI-Gerät am Anschluss".also { status = it }
+        if (!um.hasPermission(dev)) {
+            val app = ctx.applicationContext
+            if (!receiverOn) {
+                receiverOn = true
+                val r = object : BroadcastReceiver() {
+                    override fun onReceive(c: Context, i: Intent) {
+                        if (i.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false)) start(app)
+                        else { status = "USB-Zugriff abgelehnt"; Midi.onHint?.invoke("USB-Zugriff abgelehnt – Direkt-USB geht so nicht") }
+                    }
+                }
+                if (Build.VERSION.SDK_INT >= 33) app.registerReceiver(r, IntentFilter(ACTION), Context.RECEIVER_NOT_EXPORTED)
+                else @Suppress("UnspecifiedRegisterReceiverFlag") app.registerReceiver(r, IntentFilter(ACTION))
+            }
+            val flags = if (Build.VERSION.SDK_INT >= 31) PendingIntent.FLAG_MUTABLE else 0
+            val pi = PendingIntent.getBroadcast(app, 0, Intent(ACTION).setPackage(app.packageName), flags)
+            um.requestPermission(dev, pi)
+            status = "Warte auf USB-Freigabe …"
+            return status
+        }
+        val (intf, ep) = midiIn(dev)!!
+        val c = um.openDevice(dev) ?: return "USB-Gerät ließ sich nicht öffnen".also { status = it }
+        if (!c.claimInterface(intf, true)) { c.close(); return "USB-Schnittstelle belegt".also { status = it } }
+        conn = c
+        stop = false
+        running = true
+        val name = try { listOfNotNull(dev.manufacturerName, dev.productName).joinToString(" ").ifBlank { null } } catch (e: Throwable) { null } ?: "USB-MIDI"
+        status = "✓ Direkt-USB läuft: $name"
+        Midi.onHint?.invoke("🔌 Direkt-USB: $name")
+        thread = Thread({
+            val buf = ByteArray(maxOf(64, ep.maxPacketSize))
+            val m = ByteArray(3)
+            while (!stop) {
+                val n = try { c.bulkTransfer(ep, buf, buf.size, 250) } catch (e: Throwable) { -2 }
+                if (n == -2 || (n < 0 && um.deviceList.values.none { it.deviceId == dev.deviceId })) break   // abgezogen
+                var i = 0
+                while (i + 4 <= n) {
+                    val len = when (buf[i].toInt() and 0x0F) {
+                        0x5, 0xF -> 1
+                        0x2, 0x6, 0xC, 0xD -> 2
+                        0x3, 0x4, 0x7, 0x8, 0x9, 0xA, 0xB, 0xE -> 3
+                        else -> 0
+                    }
+                    if (len > 0) { m[0] = buf[i + 1]; m[1] = buf[i + 2]; m[2] = buf[i + 3]; Midi.feed(name, m, len) }
+                    i += 4
+                }
+            }
+            try { c.releaseInterface(intf) } catch (e: Throwable) { }
+            try { c.close() } catch (e: Throwable) { }
+            conn = null
+            running = false
+            status = if (stop) "aus" else "Gerät getrennt"
+        }, "MarvPAD-USB-MIDI").also { it.priority = Thread.MAX_PRIORITY; it.start() }
+        return status
+    }
+
+    fun stop() { stop = true }
+}
