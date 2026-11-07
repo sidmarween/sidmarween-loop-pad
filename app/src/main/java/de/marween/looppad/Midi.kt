@@ -195,10 +195,16 @@ object Midi {
 
     // ---------------------------------------------------------------- Geräte
 
+    /** Warum MIDI nicht läuft (null = alles gut) – für den Monitor. */
+    @Volatile var startProblem: String? = null
+    /** Zustand je Gerät (Name → Text) – für den Monitor. */
+    val devStatus = java.util.concurrent.ConcurrentHashMap<String, String>()
+
     fun start(ctx: Context) {
         if (manager != null) return
-        if (!ctx.packageManager.hasSystemFeature("android.software.midi")) return
-        val m = ctx.getSystemService(Context.MIDI_SERVICE) as? MidiManager ?: return
+        if (!ctx.packageManager.hasSystemFeature("android.software.midi")) { startProblem = "Dieses Handy meldet keine MIDI-Unterstützung (android.software.midi fehlt)."; return }
+        val m = ctx.getSystemService(Context.MIDI_SERVICE) as? MidiManager ?: run { startProblem = "Android-MIDI-Dienst nicht erreichbar."; return }
+        startProblem = null
         manager = m
         val t = HandlerThread("MarvPAD-MIDI", Process.THREAD_PRIORITY_URGENT_AUDIO)
         t.start()
@@ -236,6 +242,7 @@ object Midi {
                 for (d in devices) try { d.close() } catch (ignored: Exception) {}
                 outPorts.clear(); inPorts.clear(); devices.clear()
                 deviceNames = emptyList()
+                devStatus.clear()
             }
             @Suppress("DEPRECATION")
             for (info in m.devices) open(info)
@@ -249,32 +256,50 @@ object Midi {
         return m.devices.map { nameOf(it) }.distinct()
     }
 
+    /** Diagnose: jedes Gerät, das Android als MIDI meldet, mit Anschlüssen und Zustand. */
+    fun diagnose(): List<String> {
+        val m = manager ?: return emptyList()
+        @Suppress("DEPRECATION")
+        return m.devices.map { info ->
+            val n = nameOf(info)
+            val outs = info.outputPortCount; val ins = info.inputPortCount
+            val kind = when (info.type) { MidiDeviceInfo.TYPE_USB -> "USB"; MidiDeviceInfo.TYPE_BLUETOOTH -> "Bluetooth"; else -> "virtuell" }
+            "$n ($kind · sendet über $outs, empfängt über $ins Anschluss/Anschlüsse) – " + (devStatus[n] ?: if (n in disabled) "ausgeschaltet" else "wird geöffnet …")
+        }
+    }
+
     private fun open(info: MidiDeviceInfo) {
         val m = manager ?: return
         val name = nameOf(info)
-        if (name in disabled) return
+        if (name in disabled) { devStatus[name] = "ausgeschaltet unter „🔌 Geräte an/aus“"; return }
+        devStatus[name] = "wird geöffnet …"
         // eigene virtuelle Ports und reine Synthesizer überspringen wir nicht – die Auswahl macht der Nutzer
         m.openDevice(info, { dev ->
-            if (dev == null) return@openDevice
+            if (dev == null) { devStatus[name] = "⚠ Android konnte das Gerät nicht öffnen (von anderer App belegt?)"; return@openDevice }
+            var opened = 0; var failed = 0
             synchronized(devices) {
                 devices.add(dev)
                 // Ausgänge des Geräts = was der Controller sendet
                 for (pi in info.ports) {
                     if (pi.type == android.media.midi.MidiDeviceInfo.PortInfo.TYPE_OUTPUT) {
-                        dev.openOutputPort(pi.portNumber)?.let { op ->
-                            op.connect(Parser(name))
-                            outPorts.add(op)
-                        }
+                        val op = try { dev.openOutputPort(pi.portNumber) } catch (e: Exception) { null }
+                        if (op != null) { op.connect(Parser(name)); outPorts.add(op); opened++ } else failed++
                     } else if (pi.type == android.media.midi.MidiDeviceInfo.PortInfo.TYPE_INPUT) {
                         dev.openInputPort(pi.portNumber)?.let { inPorts.add(it) }
                     }
                 }
                 deviceNames = (deviceNames + name).distinct()
             }
+            devStatus[name] = when {
+                opened > 0 -> "✓ offen, Marv PAD hört auf $opened Anschluss/Anschlüsse" + (if (failed > 0) " ($failed belegt)" else "")
+                failed > 0 -> "⚠ Sende-Anschluss belegt – eine andere MIDI-App schließen und NEU VERBINDEN"
+                else -> "⚠ Gerät sendet kein MIDI (kein Ausgang)"
+            }
         }, handler)
     }
 
     private fun closeDevice(info: MidiDeviceInfo) {
+        devStatus.remove(nameOf(info))
         synchronized(devices) {
             val it = devices.iterator()
             while (it.hasNext()) {

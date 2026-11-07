@@ -6835,12 +6835,39 @@ class MainActivity : Activity() {
             .setNegativeButton("Schließen", null).show()
     }
 
+    /** Was Android über angeschlossene USB-/MIDI-Geräte weiß – zeigt, wo die Kette reißt. */
+    private fun midiDiagText(): String {
+        val sb = StringBuilder()
+        Midi.startProblem?.let { return "⚠ $it" }
+        val usb = try {
+            (getSystemService(USB_SERVICE) as android.hardware.usb.UsbManager).deviceList.values.toList()
+        } catch (e: Throwable) { emptyList() }
+        if (usb.isEmpty()) sb.append("USB: kein Gerät am OTG-Anschluss erkannt. → OTG im Handy einschalten (Einstellungen, Suche „OTG“ – bei manchen Handys geht es nach 10 Min. wieder aus), Adapter/Kabel prüfen. Ein Ladekabel ohne Datenleitung reicht nicht.")
+        else for (u in usb) {
+            val nm = try { listOfNotNull(u.manufacturerName, u.productName).joinToString(" ").ifBlank { null } } catch (e: Throwable) { null }
+                ?: String.format("USB %04X:%04X", u.vendorId, u.productId)
+            var midiIf = false
+            for (i in 0 until u.interfaceCount) { val f = u.getInterface(i); if (f.interfaceClass == 1 && f.interfaceSubclass == 3) midiIf = true }
+            sb.append("USB: ").append(nm).append(if (midiIf) " · hat MIDI-Schnittstelle ✓" else " · meldet KEINE MIDI-Schnittstelle").append('\n')
+        }
+        val d = Midi.diagnose()
+        if (d.isEmpty()) {
+            if (usb.isNotEmpty()) sb.append("MIDI: Android meldet kein MIDI-Gerät. → Controller aus- und wieder einstecken, dann NEU VERBINDEN. Hilft das nicht: Handy neu starten, Controller erst danach einstecken.")
+        } else for (x in d) sb.append("MIDI: ").append(x).append('\n')
+        return sb.toString().trimEnd()
+    }
+
     private fun showMidiMonitor() {
         val d = resources.displayMetrics.density
         fun px(v: Float) = (v * d).toInt()
         val mon = Midi.Mon
         val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(px(14f), px(6f), px(14f), px(4f)) }
         val dev = TextView(this).apply { textSize = 12f; setTextColor(Color.rgb(200, 200, 210)) }
+        val diag = TextView(this).apply { textSize = 11.5f; setTextColor(Color.rgb(170, 175, 185)); setPadding(0, px(4f), 0, 0) }
+        val reBtn = Button(this).apply {
+            text = "🔄 NEU VERBINDEN"; textSize = 11f
+            setOnClickListener { try { Midi.start(this@MainActivity) } catch (e: Throwable) { }; Midi.reopen(); hint("MIDI-Geräte werden neu geöffnet …") }
+        }
         val ledRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = android.view.Gravity.CENTER_VERTICAL; setPadding(0, px(6f), 0, px(6f)) }
         val led = View(this)
         val ledBg = android.graphics.drawable.GradientDrawable().apply { shape = android.graphics.drawable.GradientDrawable.OVAL; setColor(Color.rgb(40, 40, 48)) }
@@ -6861,7 +6888,7 @@ class MainActivity : Activity() {
             setBackgroundColor(Color.rgb(12, 12, 16)); setPadding(px(8f), px(6f), px(8f), px(6f))
         }
         val logScroll = android.widget.ScrollView(this).apply { addView(log) }
-        box.addView(dev); box.addView(ledRow); box.addView(clockTv)
+        box.addView(dev); box.addView(diag); box.addView(reBtn); box.addView(ledRow); box.addView(clockTv)
         box.addView(CheckBox(this).apply {
             text = "Clock & Active Sensing nicht einzeln auflisten"; isChecked = true; setTextColor(Color.WHITE); textSize = 12f
             setOnCheckedChangeListener { _, c -> hideClock = c }
@@ -6876,11 +6903,12 @@ class MainActivity : Activity() {
         hexBtn.setOnClickListener { showHex = !showHex; hexBtn.text = if (showHex) "TEXT" else "HEX" }
         clrBtn.setOnClickListener { mon.clear() }
         val tf = SimpleDateFormat("HH:mm:ss.SSS", Locale.GERMANY)
-        var lastTotal = -1L; var lastClocks = -1L; var lastHex = false
+        var lastTotal = -1L; var lastClocks = -1L; var lastHex = false; var diagAt = 0L
         val ticker = object : Runnable {
             override fun run() {
                 val now = System.currentTimeMillis()
                 dev.text = if (Midi.deviceNames.isEmpty()) "Kein MIDI-Gerät verbunden" else "Verbunden: " + Midi.deviceNames.joinToString(", ") + (if (!Midi.enabled) "\n⚠ MIDI ist aus – Signale kommen an, werden aber nicht gespielt" else "")
+                if (now - diagAt > 1000) { diagAt = now; diag.text = midiDiagText() }
                 val age = if (mon.lastAt == 0L) Long.MAX_VALUE else now - mon.lastAt
                 ledBg.setColor(when { age < 120 -> Color.rgb(60, 255, 120); age < 600 -> Color.rgb(30, 140, 70); else -> Color.rgb(40, 40, 48) })
                 stat.text = if (mon.total == 0L && mon.clocks == 0L) "Warte auf Signal …" else
